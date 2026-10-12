@@ -39,6 +39,8 @@ pub enum Effect {
     Scan(usize),
     /// Show the context menu for this node.
     Menu(NodeId),
+    /// Relaunch elevated.
+    Elevate,
 }
 
 pub struct App {
@@ -51,6 +53,8 @@ pub struct App {
     pub scan: Scan,
     /// One line about the last finished scan (scanner, time, counts); empty before any.
     pub summary: String,
+    /// Show the "Run as administrator" button (the process is not elevated).
+    pub can_elevate: bool,
     pub adapter: String,
     sort: (SortKey, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
@@ -61,7 +65,7 @@ impl App {
     pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
         Self {
             layout, drives, adapter, active: None, tree: None, model: None, scroll: 0,
-            scan: Scan::Idle, summary: String::new(), sort: (SortKey::Size, true), grab: None,
+            can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (SortKey::Size, true), grab: None,
         }
     }
 
@@ -159,6 +163,9 @@ impl App {
     }
 
     fn click(&mut self, x: f32, y: f32) -> Effect {
+        if self.can_elevate && self.layout.admin_button().contains(x, y) {
+            return Effect::Elevate;
+        }
         match self.layout.hit(x, y, self.drives.len()) {
             Hit::Chip(i) if !matches!(self.scan, Scan::Running { .. }) => return Effect::Scan(i),
             Hit::Header(c) => {
@@ -230,6 +237,7 @@ impl App {
             theme: Theme::new(dark),
             chips: &chips,
             active_chip: self.active,
+            admin: self.can_elevate.then(|| self.layout.admin_button()),
             view,
             message: &message,
             status: &status,
@@ -268,6 +276,16 @@ mod tests {
         assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0)), Effect::Scan(1));
         a.begin_scan(1);
         assert_eq!(a.handle(Input::Click(10.0, 10.0)), Effect::None);
+    }
+
+    #[test]
+    fn admin_button_only_works_when_shown() {
+        let mut a = app();
+        let b = a.layout.admin_button();
+        let (x, y) = (b.x + 5.0, b.y + 5.0);
+        assert_eq!(a.handle(Input::Click(x, y)), Effect::None);
+        a.can_elevate = true;
+        assert_eq!(a.handle(Input::Click(x, y)), Effect::Elevate);
     }
 
     #[test]

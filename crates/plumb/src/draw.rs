@@ -70,6 +70,8 @@ pub struct Scene<'a> {
     pub theme: Theme,
     pub chips: &'a [Chip],
     pub active_chip: Option<usize>,
+    /// Where to draw the "Run as administrator" button, if shown.
+    pub admin: Option<Rect>,
     /// `None` while no tree exists; `message` is shown instead.
     pub view: Option<View<'a>>,
     pub message: &'a str,
@@ -144,6 +146,10 @@ impl Pen<'_> {
         let l = &s.layout;
         unsafe { self.gfx.d2d.Clear(Some(&t.bg)) };
         self.picker(s);
+        if let Some(r) = s.admin {
+            self.fill(r, t.panel);
+            self.text("Run as administrator", Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
+        }
         let h = l.header();
         self.fill(h, t.panel);
         for (c, name) in ["Name", "Size", "% of parent", "Items"].iter().enumerate() {

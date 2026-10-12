@@ -143,7 +143,8 @@ impl Win {
         let dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
         let (pw, ph) = client_px(hwnd);
         let layout = Layout::new(pw as f32 * 96.0 / dpi, ph as f32 * 96.0 / dpi);
-        let app = App::new(layout, drives, gfx.adapter.clone());
+        let mut app = App::new(layout, drives, gfx.adapter.clone());
+        app.can_elevate = !plumb_scan::volume::is_elevated();
         let dark = dark_mode();
         let win = Self { hwnd, app, gfx, painter, swap, target: None, dpi, dark, progress: Arc::default(), rx: None };
         win.apply_title_theme();
@@ -350,6 +351,35 @@ fn properties(path: &str) {
     let _ = unsafe { ShellExecuteExW(&mut info) };
 }
 
+/// Arguments for the elevated copy: `--scan C` restarts the scan the user was looking at.
+pub fn relaunch_args(drive: Option<char>) -> String {
+    drive.map(|d| format!("--scan {d}")).unwrap_or_default()
+}
+
+/// The drive letter after `--scan`, if any.
+pub fn parse_scan_arg(mut args: impl Iterator<Item = String>) -> Option<char> {
+    args.find(|a| a == "--scan")?;
+    let d = args.next()?;
+    let mut c = d.chars();
+    c.next().filter(|l| l.is_ascii_alphabetic() && c.next().is_none()).map(|l| l.to_ascii_uppercase())
+}
+
+/// Starts this exe again with the `runas` verb. False if the user declined the UAC prompt.
+fn relaunch_elevated(drive: Option<char>) -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let file = wide(&exe.to_string_lossy());
+    let args = wide(&relaunch_args(drive));
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        lpVerb: w!("runas"),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: PCWSTR(args.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info) }.is_ok()
+}
+
 /// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
 /// because `TrackPopupMenu` runs its own message loop.
 fn context_menu(hwnd: HWND, path: String, at: (i32, i32)) {
@@ -376,6 +406,12 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         Effect::None => {}
         Effect::Scan(i) => {
             with(|w| w.start_scan(i));
+        }
+        Effect::Elevate => {
+            let letter = with(|w| w.app.active.map(|i| w.app.drives[i].letter)).flatten();
+            if relaunch_elevated(letter) {
+                let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+            }
         }
         Effect::Menu(id) => {
             let path = with(|w| w.app.tree.as_ref().map(|t| display_path(&t.path(id)))).flatten();
@@ -550,6 +586,13 @@ pub fn run() -> Result<()> {
     let win = Win::new(hwnd, crate::drives::list())?;
     eprintln!("plumb: {}", win.gfx.adapter);
     STATE.with(|s| *s.borrow_mut() = Some(win));
+    if let Some(letter) = parse_scan_arg(std::env::args()) {
+        with(|w| {
+            if let Some(i) = w.app.drives.iter().position(|d| d.letter == letter) {
+                w.start_scan(i);
+            }
+        });
+    }
     with(|w| w.invalidate());
     let mut msg = MSG::default();
     unsafe {
@@ -602,6 +645,16 @@ pub fn selftest() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_argument_round_trips() {
+        let args = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>().into_iter();
+        assert_eq!(parse_scan_arg(args(&format!("plumb.exe {}", relaunch_args(Some('d'))))), Some('D'));
+        assert_eq!(parse_scan_arg(args("plumb.exe")), None);
+        assert_eq!(parse_scan_arg(args("plumb.exe --scan")), None);
+        assert_eq!(parse_scan_arg(args("plumb.exe --scan CD")), None);
+        assert_eq!(relaunch_args(None), "");
+    }
 
     #[test]
     fn drive_root_gets_a_trailing_backslash() {

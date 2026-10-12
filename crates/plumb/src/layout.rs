@@ -21,6 +21,7 @@ pub const ROW_H: f32 = 22.0;
 pub const SCROLLBAR_W: f32 = 12.0;
 pub const CHIP_W: f32 = 104.0;
 pub const CHIP_GAP: f32 = 8.0;
+pub const ADMIN_W: f32 = 168.0;
 pub const INDENT: f32 = 16.0;
 /// Widths of the Size, % of parent and Items columns; Name takes the rest.
 pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
@@ -49,6 +50,11 @@ impl Layout {
 
     pub fn chip(&self, i: usize) -> Rect {
         Rect { x: 8.0 + i as f32 * (CHIP_W + CHIP_GAP), y: 6.0, w: CHIP_W, h: PICKER_H - 12.0 }
+    }
+
+    /// "Run as administrator", right-aligned in the picker bar.
+    pub fn admin_button(&self) -> Rect {
+        Rect { x: (self.w - 8.0 - ADMIN_W).max(0.0), y: 6.0, w: ADMIN_W, h: PICKER_H - 12.0 }
     }
 
     pub fn header(&self) -> Rect {
