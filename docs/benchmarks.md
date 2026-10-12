@@ -49,3 +49,5 @@ Parity: `scan-compare` reports 0 differences between the walker and the MFT scan
 ## UI
 
 Manual checklist (plan 3b, Task 3) passed on 2026-10-11 with nothing to note: scan progress, responsiveness while scanning, tree navigation and sorting, context menu, light/dark, DPI, exit, and the Run as administrator relaunch. No frame times or idle CPU were measured; the "scan threads starve the UI" question was answered by feel only. Hidden-window `plumb --selftest` picked the Radeon 780M (the laptop display's adapter).
+
+Idle check, 2026-10-11 (release build, launched minimized on the 780M, no scan; machine CPU 66% from other work, Defender state not checked): 0.00% of a core over 10 s; working set 38.6 MB, private bytes 29.0 MB (spec target: under 30 MB, so private meets it and working set does not); main window existed 220 ms after launch (not a first-frame time). Script: a throwaway PowerShell snippet, not kept. Repeat on a quiet machine before trusting the memory figure.
