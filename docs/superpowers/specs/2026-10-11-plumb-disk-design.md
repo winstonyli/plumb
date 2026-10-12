@@ -55,7 +55,7 @@ Size accounting:
 Both implement `Scanner::scan(root, &mut TreeBuilder, &Progress)`, where `root` is a drive root or any directory, and produce equivalent trees; they live in the `plumb-scan` crate. Default worker count is `min(cores - 4, 8)`, at BelowNormal priority.
 
 ### `MftScanner` (elevated, NTFS only)
-- Open `\.X:`; read `FSCTL_GET_NTFS_VOLUME_DATA`, then read file record 0 at `MftStartLcn` and decode its `$DATA` data runs (no `FSCTL_GET_RETRIEVAL_POINTERS`). If the runs do not cover `MftValidDataLength` (an `$ATTRIBUTE_LIST`), fail and fall back to the walker; only 1024-byte records on volumes whose cluster size is a multiple of 1024 are supported. Stream `$MFT` in 4 MB cluster-aligned chunks (volume reads must be sector-aligned). One sequential pass, no per-file I/O.
+- Open `\\.\X:`; read `FSCTL_GET_NTFS_VOLUME_DATA`, then read file record 0 at `MftStartLcn` and decode its `$DATA` data runs (no `FSCTL_GET_RETRIEVAL_POINTERS`). If the runs do not cover `MftValidDataLength` (an `$ATTRIBUTE_LIST`), fail and fall back to the walker; only 1024-byte records on volumes whose cluster size is a multiple of 1024 are supported. Stream `$MFT` in 4 MB cluster-aligned chunks (volume reads must be sector-aligned). One sequential pass, no per-file I/O.
 - A reader thread feeds a pool of parsers. Per 1 KiB record: apply update-sequence fixups, then read:
   - `$FILE_NAME`: parent reference, name, namespace. DOS-only (8.3) names are skipped so each file appears once.
   - `$DATA`: allocated size of the unnamed stream. Alternate data streams are ignored in v1.
