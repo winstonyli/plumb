@@ -1,16 +1,21 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
-//! All state lives on the UI thread in `STATE`; the scan thread only reports through a channel.
-use crate::app::{App, DriveInfo, Effect, Input};
+//! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
+use crate::app::{App, DriveInfo, Effect, Input, LiveStatus};
 use crate::draw::Painter;
 use crate::gfx::Gfx;
 use crate::layout::Layout;
+use crate::live::{needs_compaction, Live, Pacer, RescanPolicy, REPAINT};
 use plumb_core::rows::Key;
 use plumb_core::{NodeId, Tree, TreeBuilder};
+use plumb_scan::journal::{Delta, Event, JournalConfig, JournalInfo, JournalReader, JournalSource, Stop};
 use plumb_scan::select::{scan_auto, ScanReport, Used};
+use plumb_scan::volume::{drive_letter, is_elevated, is_ntfs, Volume};
 use plumb_scan::{Progress, ScanError};
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HANDLE, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -32,6 +37,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::HiDpi::{
@@ -46,12 +52,53 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{w, Interface, Result, BOOL, PCWSTR};
 
 const WM_SCAN_DONE: u32 = WM_APP + 1;
+const WM_JOURNAL: u32 = WM_APP + 2;
 const TIMER_PROGRESS: usize = 1;
+const TIMER_LIVE: usize = 2;
+/// Longest a batch of journal deltas may hold the UI thread.
+const APPLY_BUDGET: Duration = Duration::from_millis(5);
 const CMD_REVEAL: usize = 1;
 const CMD_COPY: usize = 2;
 const CMD_PROPS: usize = 3;
 
-type ScanResult = std::result::Result<(Tree, ScanReport, Duration), String>;
+struct Scanned {
+    tree: Tree,
+    report: ScanReport,
+    elapsed: Duration,
+    /// The volume and journal position to follow, read before the scan began so changes made
+    /// during it are replayed. Present only for elevated NTFS drives.
+    journal: Option<(Volume, JournalInfo)>,
+}
+
+type ScanResult = std::result::Result<Scanned, String>;
+
+/// Everything live updates need for the drive on screen.
+struct Watch {
+    reader: JournalReader,
+    live: Live,
+    queue: VecDeque<Delta>,
+    pacer: Pacer,
+    /// The tree changed since the rows were last refreshed.
+    dirty: bool,
+    /// `TIMER_LIVE` is running.
+    armed: bool,
+}
+
+fn open_journal(root: &str) -> Option<(Volume, JournalInfo)> {
+    let root = Path::new(root);
+    let letter = drive_letter(root)?;
+    if !is_elevated() || !is_ntfs(root) {
+        return None;
+    }
+    let vol = Volume::open(letter).ok()?;
+    let info = vol.query().ok()?;
+    Some((vol, info))
+}
+
+fn local_time() -> String {
+    let t = unsafe { GetLocalTime() };
+    format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
+}
 
 struct Win {
     hwnd: HWND,
@@ -64,6 +111,14 @@ struct Win {
     dark: bool,
     progress: Arc<Progress>,
     rx: Option<Receiver<ScanResult>>,
+    /// The scan in flight is a rescan: the old tree stays on screen until it finishes.
+    background: bool,
+    watch: Option<Watch>,
+    policy: RescanPolicy,
+    /// When the user last clicked, scrolled or pressed a key.
+    last_input: Instant,
+    /// A `WM_JOURNAL` is already queued, so the reader need not post another.
+    posted: Arc<AtomicBool>,
 }
 
 thread_local! {
@@ -146,7 +201,11 @@ impl Win {
         let mut app = App::new(layout, drives, gfx.adapter.clone());
         app.can_elevate = !plumb_scan::volume::is_elevated();
         let dark = dark_mode();
-        let win = Self { hwnd, app, gfx, painter, swap, target: None, dpi, dark, progress: Arc::default(), rx: None };
+        let win = Self {
+            hwnd, app, gfx, painter, swap, target: None, dpi, dark, progress: Arc::default(), rx: None,
+            background: false, watch: None, policy: RescanPolicy::default(), last_input: Instant::now(),
+            posted: Arc::default(),
+        };
         win.apply_title_theme();
         Ok(win)
     }
@@ -233,11 +292,25 @@ impl Win {
 
     fn start_scan(&mut self, drive: usize) {
         let root = format!("{}:\\", self.app.drives[drive].letter);
-        self.spawn_scan(drive, root);
+        self.spawn_scan(drive, root, false);
     }
 
-    fn spawn_scan(&mut self, drive: usize, root: String) {
-        self.app.begin_scan(drive);
+    /// Rescans in the background, keeping the old tree on screen until the new one is ready.
+    fn start_rescan(&mut self, drive: usize) {
+        if self.rx.is_none() {
+            let root = format!("{}:\\", self.app.drives[drive].letter);
+            self.spawn_scan(drive, root, true);
+        }
+    }
+
+    fn spawn_scan(&mut self, drive: usize, root: String, background: bool) {
+        self.background = background;
+        if background {
+            self.app.refreshing = true;
+        } else {
+            self.drop_watch();
+            self.app.begin_scan(drive);
+        }
         self.progress = Arc::default();
         let progress = self.progress.clone();
         let (tx, rx) = channel();
@@ -245,6 +318,7 @@ impl Win {
         let hwnd = self.hwnd.0 as isize;
         std::thread::spawn(move || {
             let t0 = Instant::now();
+            let journal = open_journal(&root);
             let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut b = TreeBuilder::new();
                 let report = scan_auto(Path::new(&root), &mut b, &progress).map_err(|e| match e {
@@ -252,13 +326,15 @@ impl Win {
                     ScanError::Mft(m) => m,
                 })?;
                 let tree = b.finish().map_err(|e| format!("{e:?}"))?;
-                Ok((tree, report, t0.elapsed()))
+                Ok(Scanned { tree, report, elapsed: t0.elapsed(), journal })
             }));
             let msg = run.unwrap_or_else(|_| Err("the scanner panicked".to_string()));
             let _ = tx.send(msg);
             let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_SCAN_DONE, WPARAM(0), LPARAM(0)) };
         });
-        unsafe { SetTimer(Some(self.hwnd), TIMER_PROGRESS, 100, None) };
+        if !background {
+            unsafe { SetTimer(Some(self.hwnd), TIMER_PROGRESS, 100, None) };
+        }
         self.invalidate();
     }
 
@@ -273,15 +349,152 @@ impl Win {
         let Ok(msg) = rx.try_recv() else { return };
         self.rx = None;
         let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PROGRESS) };
+        let background = std::mem::take(&mut self.background);
         match msg {
-            Ok((tree, report, elapsed)) => {
-                let files = tree.subtree_files[NodeId(0)] as u64;
-                let s = summary(report.used, files, elapsed, report.mft.as_ref().map(|m| m.stats.corrupt), report.note.as_deref());
-                self.app.finish_scan(tree, s);
+            Ok(sc) => {
+                let files = sc.tree.subtree_files[NodeId(0)] as u64;
+                let corrupt = sc.report.mft.as_ref().map(|m| m.stats.corrupt);
+                let s = summary(sc.report.used, files, sc.elapsed, corrupt, sc.report.note.as_deref());
+                if background {
+                    self.app.swap_tree(sc.tree, s);
+                    self.drop_watch();
+                } else {
+                    self.app.finish_scan(sc.tree, s);
+                }
+                if let (Some((vol, info)), Some(mft)) = (sc.journal, sc.report.mft) {
+                    self.start_watch(vol, info, mft.records);
+                }
+            }
+            Err(e) if background => {
+                self.app.refreshing = false;
+                self.app.set_live(LiveStatus::Stale(format!("the rescan failed: {e}")));
             }
             Err(e) => self.app.fail_scan(e),
         }
         self.invalidate();
+    }
+
+    fn start_watch(&mut self, vol: Volume, info: JournalInfo, records: Vec<NodeId>) {
+        let hwnd = self.hwnd.0 as isize;
+        let posted = self.posted.clone();
+        let reader = JournalReader::start(vol, info, JournalConfig::default(), move || {
+            if !posted.swap(true, Ordering::AcqRel) {
+                let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
+            }
+        });
+        self.watch = Some(Watch {
+            reader, live: Live::new(records), queue: VecDeque::new(), pacer: Pacer::new(Instant::now()),
+            dirty: false, armed: false,
+        });
+        self.app.set_live(LiveStatus::On { last: None });
+    }
+
+    /// Stops following the journal. The reader may be mid-wait, so it is joined off the UI thread.
+    fn drop_watch(&mut self) {
+        if let Some(w) = self.watch.take() {
+            if w.armed {
+                let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_LIVE) };
+            }
+            let reader = w.reader;
+            std::thread::spawn(move || reader.stop());
+        }
+    }
+
+    /// `WM_JOURNAL`: moves what the reader has queued into the delta queue and applies some of it.
+    fn journal_event(&mut self) {
+        self.posted.store(false, Ordering::Release);
+        let mut stop = None;
+        if let Some(w) = &mut self.watch {
+            while let Some(ev) = w.reader.try_recv() {
+                match ev {
+                    Event::Deltas(d) => w.queue.extend(d),
+                    Event::Stopped(s) => {
+                        stop = Some(s);
+                        break;
+                    }
+                }
+            }
+        }
+        self.apply_live();
+        if let Some(s) = stop {
+            self.journal_stopped(s);
+        }
+    }
+
+    /// Applies queued deltas for at most `APPLY_BUDGET`; leftovers continue on the next message.
+    fn apply_live(&mut self) {
+        let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) else { return };
+        let n = w.live.apply(tree, &mut w.queue, Instant::now() + APPLY_BUDGET);
+        w.dirty |= n > 0;
+        if !w.queue.is_empty() {
+            let _ = unsafe { PostMessageW(Some(self.hwnd), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
+        }
+        if !w.armed && (w.dirty || !w.queue.is_empty() || w.live.pending()) {
+            unsafe { SetTimer(Some(self.hwnd), TIMER_LIVE, REPAINT.as_millis() as u32, None) };
+            w.armed = true;
+        }
+    }
+
+    /// `TIMER_LIVE`: at most every `REPAINT`, refreshes the rows once if the tree changed.
+    fn live_tick(&mut self) {
+        self.apply_live();
+        let due = self.watch.as_ref().is_some_and(|w| w.dirty && w.pacer.due(Instant::now()));
+        if due {
+            let t0 = Instant::now();
+            self.app.refresh_rows();
+            self.app.live_changed(local_time());
+            self.invalidate();
+            if let Some(w) = &mut self.watch {
+                w.pacer.done(Instant::now(), t0.elapsed());
+                w.dirty = false;
+            }
+            if self.app.tree.as_ref().is_some_and(needs_compaction) {
+                self.auto_rescan();
+            }
+        }
+        if let Some(w) = &mut self.watch
+            && w.armed
+            && !w.dirty
+            && w.queue.is_empty()
+            && !w.live.pending()
+        {
+            let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_LIVE) };
+            w.armed = false;
+        }
+    }
+
+    /// The reader ended: bring the tree up to date, then rescan or say why updates stopped.
+    fn journal_stopped(&mut self, stop: Stop) {
+        if let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) {
+            w.live.apply(tree, &mut w.queue, Instant::now() + Duration::from_millis(50));
+        }
+        self.app.refresh_rows();
+        self.drop_watch();
+        self.app.set_live(LiveStatus::Off);
+        let wrapped = stop == Stop::Wrapped;
+        let why = match stop {
+            Stop::Requested => return,
+            Stop::Wrapped => "the change journal wrapped, so changes were missed".to_string(),
+            Stop::Disabled => "the change journal is not active".to_string(),
+            Stop::Failed(m) => m,
+        };
+        if !(wrapped && self.auto_rescan()) {
+            self.app.set_live(LiveStatus::Stale(why));
+        }
+        self.invalidate();
+    }
+
+    /// Starts a background rescan if the policy allows (or one is already running).
+    fn auto_rescan(&mut self) -> bool {
+        if self.rx.is_some() {
+            return true;
+        }
+        let Some(i) = self.app.active else { return false };
+        if !self.policy.allow(self.app.drives[i].letter, Instant::now(), self.last_input) {
+            return false;
+        }
+        self.start_rescan(i);
+        true
     }
 
     fn selected_path(&self) -> Option<String> {
@@ -407,6 +620,9 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         Effect::Scan(i) => {
             with(|w| w.start_scan(i));
         }
+        Effect::Rescan(i) => {
+            with(|w| w.start_rescan(i));
+        }
         Effect::Elevate => {
             let letter = with(|w| w.app.active.map(|i| w.app.drives[i].letter)).flatten();
             if relaunch_elevated(letter) {
@@ -430,6 +646,7 @@ fn pos(l: LPARAM) -> (i32, i32) {
 fn dispatch(hwnd: HWND, l: LPARAM, make: impl FnOnce(f32, f32) -> Input) {
     let Some((e, _)) = with(|w| {
         let (x, y) = w.dip(l);
+        w.last_input = Instant::now();
         let e = w.app.handle(make(x, y));
         w.invalidate();
         (e, ())
@@ -505,6 +722,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_MOUSEWHEEL => {
             let delta = (wp.0 >> 16) as i16 as i32;
             with(|w| {
+                w.last_input = Instant::now();
                 w.app.handle(Input::Wheel(-delta / 120 * 3));
                 w.invalidate();
             });
@@ -518,6 +736,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
             } else if let Some(k) = key_of(wp.0 as u16) {
                 with(|w| {
+                    w.last_input = Instant::now();
                     w.app.handle(Input::Key(k));
                     w.invalidate();
                 });
@@ -526,6 +745,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_TIMER if wp.0 == TIMER_PROGRESS => {
             with(|w| w.poll_progress());
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_LIVE => {
+            with(|w| w.live_tick());
+            LRESULT(0)
+        }
+        WM_JOURNAL => {
+            with(|w| w.journal_event());
             LRESULT(0)
         }
         WM_SCAN_DONE => {
@@ -615,7 +842,7 @@ pub fn selftest() -> Result<String> {
     let hwnd = create_window(false)?;
     let win = Win::new(hwnd, crate::drives::list())?;
     STATE.with(|s| *s.borrow_mut() = Some(win));
-    with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned()));
+    with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned(), false));
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut msg = MSG::default();
     while with(|w| w.app.tree.is_none() && !matches!(w.app.scan, crate::app::Scan::Failed(_))) == Some(true) {
@@ -640,6 +867,75 @@ pub fn selftest() -> Result<String> {
     unsafe { DestroyWindow(hwnd)? };
     STATE.with(|s| *s.borrow_mut() = None);
     out.expect("state present")
+}
+
+/// Elevated only. Scans the temp directory's drive in a hidden window, then creates, grows,
+/// renames and deletes a file there and checks the tree follows each change within 20 s.
+/// Returns a one-line summary. Run it from an administrator prompt: `plumb --selftest-live`.
+pub fn selftest_live() -> Result<String> {
+    use windows::Win32::Foundation::E_FAIL;
+    let fail = |m: String| windows::core::Error::new(E_FAIL, m);
+    if !is_elevated() {
+        return Err(fail("live updates need an elevated process".into()));
+    }
+    let dir = std::fs::canonicalize(std::env::temp_dir()).map_err(|e| fail(e.to_string()))?;
+    let dir = dir.join(format!("plumb-live-{}", std::process::id()));
+    let shown = dir.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+    let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
+    let hwnd = create_window(false)?;
+    let win = Win::new(hwnd, crate::drives::list())?;
+    STATE.with(|s| *s.borrow_mut() = Some(win));
+    unsafe { SetTimer(Some(hwnd), 99, 50, None) }; // wakes the message wait so deadlines are checked
+
+    // Blocks in GetMessageW until `cond` holds; every message goes through the real window procedure.
+    let wait = |what: &str, secs: u64, cond: &dyn Fn(&mut Win) -> bool| -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        let mut msg = MSG::default();
+        while with(|w| !cond(w)) == Some(true) {
+            if Instant::now() > deadline {
+                return Err(fail(format!("timed out waiting for: {what}")));
+            }
+            unsafe {
+                if GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+        Ok(())
+    };
+    let size_at = |w: &mut Win, rel: &str| -> Option<u64> {
+        let t = w.app.tree.as_ref()?;
+        let id = crate::restore::resolve(t, &format!("{shown}\\{rel}"))?;
+        Some(t.subtree_size[id])
+    };
+    let dir_gone = |w: &mut Win| w.app.tree.as_ref().is_some_and(|t| crate::restore::resolve(t, &shown).is_none());
+    let run = || -> Result<String> {
+        let i = with(|w| w.app.drives.iter().position(|d| d.letter == letter)).flatten();
+        let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;
+        with(|w| w.spawn_scan(i, format!("{letter}:\\"), false));
+        wait("the scan and the journal reader", 180, &|w| w.watch.is_some())?;
+        std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
+        std::fs::write(dir.join("f.bin"), vec![1u8; 1 << 20]).map_err(|e| fail(e.to_string()))?;
+        wait("the new file", 20, &|w| size_at(w, "f.bin") == Some(1 << 20))?;
+        wait("the live marker", 20, &|w| matches!(&w.app.live, LiveStatus::On { last: Some(_) }))?;
+        std::fs::write(dir.join("f.bin"), vec![1u8; 3 << 20]).map_err(|e| fail(e.to_string()))?;
+        wait("the grown file", 20, &|w| size_at(w, "f.bin") == Some(3 << 20))?;
+        std::fs::rename(dir.join("f.bin"), dir.join("g.bin")).map_err(|e| fail(e.to_string()))?;
+        wait("the rename", 20, &|w| size_at(w, "g.bin") == Some(3 << 20) && size_at(w, "f.bin").is_none())?;
+        std::fs::remove_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
+        wait("the delete", 20, &|w| size_at(w, "g.bin").is_none() && dir_gone(w))?;
+        let stale = with(|w| matches!(w.app.live, LiveStatus::Stale(_))).unwrap_or(false);
+        if stale {
+            return Err(fail("live updates reported stale".into()));
+        }
+        Ok(format!("{letter}: create, grow, rename and delete followed"))
+    };
+    let out = run();
+    let _ = std::fs::remove_dir_all(&dir);
+    unsafe { DestroyWindow(hwnd)? };
+    STATE.with(|s| *s.borrow_mut() = None);
+    out
 }
 
 #[cfg(test)]

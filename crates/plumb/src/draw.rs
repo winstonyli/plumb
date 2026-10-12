@@ -1,7 +1,7 @@
 //! Draws the whole window with Direct2D onto a target bitmap. Reads state, owns none.
 use crate::fmt;
 use crate::gfx::Gfx;
-use crate::layout::{Layout, Rect, INDENT, ROW_H};
+use crate::layout::{Layout, Rect, INDENT, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use plumb_core::{NodeFlags, Tree};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
@@ -13,6 +13,9 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::core::{w, Result};
+
+/// Banner text stops this far from the right edge, short of the Rescan button.
+const RESCAN_RESERVED: f32 = RESCAN_W + 24.0;
 
 fn rgb(hex: u32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -79,6 +82,8 @@ pub struct Scene<'a> {
     pub view: Option<View<'a>>,
     pub message: &'a str,
     pub status: &'a str,
+    /// Text of the stale banner; its strip and Rescan button come from `layout`.
+    pub banner: Option<&'a str>,
 }
 
 pub struct Painter {
@@ -156,6 +161,14 @@ impl Pen<'_> {
         if let Some(r) = s.admin {
             self.fill(r, t.panel);
             self.text("Run as administrator", Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
+        }
+        if let Some(text) = s.banner {
+            let b = l.banner_strip();
+            self.fill(b, t.panel);
+            self.text(text, Rect { x: b.x + 8.0, y: b.y, w: b.w - RESCAN_RESERVED, h: b.h }, t.fg, false);
+            let r = l.rescan_button();
+            self.fill(r, t.select);
+            self.text("Rescan", Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
         }
         let h = l.header();
         self.fill(h, t.panel);

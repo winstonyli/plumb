@@ -46,6 +46,7 @@ fn render(dark: bool) -> Vec<u8> {
         view: Some(View { tree: &tree, model: &model, scroll: 0 }),
         message: "",
         status: "MFT scan: 200 files",
+        banner: None,
     };
     let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
     Painter::new(&gfx).unwrap().paint(&gfx, &target, 96.0, &scene).expect("EndDraw");

@@ -22,6 +22,8 @@ pub const SCROLLBAR_W: f32 = 12.0;
 pub const CHIP_W: f32 = 104.0;
 pub const CHIP_GAP: f32 = 8.0;
 pub const ADMIN_W: f32 = 168.0;
+pub const BANNER_H: f32 = 28.0;
+pub const RESCAN_W: f32 = 80.0;
 pub const INDENT: f32 = 16.0;
 /// Widths of the Size, % of parent and Items columns; Name takes the rest.
 pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
@@ -34,6 +36,8 @@ pub enum Hit {
     /// Index into the visible window (0 is the first drawn row).
     Row(usize),
     Scrollbar,
+    /// The Rescan button on the stale banner.
+    Rescan,
     None,
 }
 
@@ -41,11 +45,31 @@ pub enum Hit {
 pub struct Layout {
     pub w: f32,
     pub h: f32,
+    /// A banner strip sits between the picker and the header.
+    pub banner: bool,
 }
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h }
+        Self { w, h, banner: false }
+    }
+
+    pub fn with_banner(self, banner: bool) -> Self {
+        Self { banner, ..self }
+    }
+
+    /// Top edge of the header: below the picker, and below the banner when there is one.
+    fn top(&self) -> f32 {
+        PICKER_H + if self.banner { BANNER_H } else { 0.0 }
+    }
+
+    pub fn banner_strip(&self) -> Rect {
+        Rect { x: 0.0, y: PICKER_H, w: self.w, h: BANNER_H }
+    }
+
+    /// "Rescan", right-aligned in the banner.
+    pub fn rescan_button(&self) -> Rect {
+        Rect { x: (self.w - 8.0 - RESCAN_W).max(0.0), y: PICKER_H + 3.0, w: RESCAN_W, h: BANNER_H - 6.0 }
     }
 
     pub fn chip(&self, i: usize) -> Rect {
@@ -58,12 +82,12 @@ impl Layout {
     }
 
     pub fn header(&self) -> Rect {
-        Rect { x: 0.0, y: PICKER_H, w: self.w, h: HEADER_H }
+        Rect { x: 0.0, y: self.top(), w: self.w, h: HEADER_H }
     }
 
     /// Row area, excluding the header and scrollbar.
     pub fn rows_area(&self) -> Rect {
-        let y = PICKER_H + HEADER_H;
+        let y = self.top() + HEADER_H;
         Rect { x: 0.0, y, w: (self.w - SCROLLBAR_W).max(0.0), h: (self.h - y - STATUS_H).max(0.0) }
     }
 
@@ -122,6 +146,9 @@ impl Layout {
                 return Hit::Chip(i);
             }
         }
+        if self.banner && self.rescan_button().contains(x, y) {
+            return Hit::Rescan;
+        }
         if self.header().contains(x, y) {
             return (0..4).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
         }
@@ -171,6 +198,18 @@ mod tests {
         assert_eq!(l.hit(5.0, PICKER_H + HEADER_H + 3.0 * ROW_H + 1.0, 3), Hit::Row(3));
         assert_eq!(l.hit(795.0, 200.0, 3), Hit::Scrollbar);
         assert_eq!(l.hit(5.0, 595.0, 3), Hit::None);
+    }
+
+    #[test]
+    fn a_banner_pushes_the_table_down_and_has_a_button() {
+        let l = Layout::new(800.0, 600.0);
+        let b = l.with_banner(true);
+        assert_eq!(b.header().y, l.header().y + BANNER_H);
+        assert_eq!(b.rows_area().y + b.rows_area().h + STATUS_H, 600.0);
+        assert_eq!(b.hit(b.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
+        assert_eq!(l.hit(l.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Header(3));
+        assert_eq!(b.hit(5.0, PICKER_H + BANNER_H + 5.0, 3), Hit::Header(0));
+        assert!(b.rows_visible() < l.rows_visible());
     }
 
     #[test]
