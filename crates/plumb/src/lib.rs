@@ -1,6 +1,7 @@
 pub mod app;
 pub mod fmt;
 pub mod layout;
+pub mod live;
 #[cfg(windows)]
 pub mod draw;
 #[cfg(windows)]
