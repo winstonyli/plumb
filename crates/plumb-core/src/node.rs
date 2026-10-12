@@ -40,6 +40,8 @@ bitflags! {
         const REPARSE = 2;
         const HARDLINK = 4;
         const DENIED = 8;
+        /// Removed after the scan; the slot stays so `NodeId`s never change.
+        const DEAD = 16;
     }
 }
 

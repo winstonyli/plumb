@@ -24,6 +24,11 @@ pub struct Tree {
     name_off: Vec<u32>,
     name_len: Vec<u16>,
     pool: Vec<u16>,
+    /// Nodes marked [`NodeFlags::DEAD`] so far.
+    dead: usize,
+    /// Nodes whose size, name, parent or existence changed (and old parents) since the last
+    /// [`Tree::take_touched`].
+    touched: Vec<NodeId>,
 }
 
 impl Tree {
@@ -45,10 +50,16 @@ impl Tree {
         String::from_utf16_lossy(self.name(id))
     }
 
+    /// Live children of `id`, in list order.
     pub fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         std::iter::successors(Some(self.first_child[id]).filter(|c| !c.is_none()), |&c| {
             Some(self.next_sibling[c]).filter(|n| !n.is_none())
         })
+        .filter(|&c| !self.flags[c].contains(NodeFlags::DEAD))
+    }
+
+    pub fn has_children(&self, id: NodeId) -> bool {
+        self.children(id).next().is_some()
     }
 
     /// Full path, built by walking parent links (no per-node path storage).
@@ -61,6 +72,129 @@ impl Tree {
         }
         parts.reverse();
         parts.join("\\")
+    }
+
+    /// Nodes marked dead so far (slots not yet reclaimed).
+    pub fn dead(&self) -> usize {
+        self.dead
+    }
+
+    /// Ids changed since the last call; pass them to `RowModel::refresh`.
+    pub fn take_touched(&mut self) -> Vec<NodeId> {
+        std::mem::take(&mut self.touched)
+    }
+
+    /// Adds (or subtracts) `size` bytes and `files` files to `from` and every ancestor.
+    fn bump(&mut self, mut from: NodeId, size: u64, files: u32, add: bool) {
+        while !from.is_none() {
+            if add {
+                self.subtree_size[from] += size;
+                self.subtree_files[from] += files;
+            } else {
+                self.subtree_size[from] -= size;
+                self.subtree_files[from] -= files;
+            }
+            from = self.parent[from];
+        }
+    }
+
+    /// Appends a new node under `parent` (at the head of its child list) and returns its id.
+    pub fn add_child(&mut self, parent: NodeId, name: &[u16], size: u64, flags: NodeFlags) -> NodeId {
+        let id = NodeId(self.parent.len() as u32);
+        let files = u32::from(!flags.contains(NodeFlags::DIR));
+        self.parent.push(parent);
+        self.first_child.push(NodeId::NONE);
+        self.next_sibling.push(self.first_child[parent]);
+        self.first_child[parent] = id;
+        self.size.push(size);
+        self.subtree_size.push(size);
+        self.subtree_files.push(files);
+        self.flags.push(flags);
+        self.name_off.push(self.pool.len() as u32);
+        self.name_len.push(name.len() as u16);
+        self.pool.extend_from_slice(name);
+        self.bump(parent, size, files, true);
+        self.touched.push(id);
+        id
+    }
+
+    /// Changes a node's own size and fixes the sums above it. Ignored for dead nodes.
+    pub fn set_size(&mut self, id: NodeId, new: u64) {
+        if self.flags[id].contains(NodeFlags::DEAD) {
+            return;
+        }
+        let old = std::mem::replace(&mut self.size[id], new);
+        if new >= old {
+            self.bump(id, new - old, 0, true);
+        } else {
+            self.bump(id, old - new, 0, false);
+        }
+        self.touched.push(id);
+    }
+
+    /// Gives a node a new name (the old bytes stay in the pool as waste).
+    pub fn rename(&mut self, id: NodeId, name: &[u16]) {
+        self.name_off[id] = self.pool.len() as u32;
+        self.name_len[id] = name.len() as u16;
+        self.pool.extend_from_slice(name);
+        self.touched.push(id);
+    }
+
+    /// Marks `id` and everything under it dead and takes its sizes out of its ancestors.
+    /// False (and no change) for a root or an already dead node.
+    pub fn remove(&mut self, id: NodeId) -> bool {
+        let parent = self.parent[id];
+        if parent.is_none() || self.flags[id].contains(NodeFlags::DEAD) {
+            return false;
+        }
+        let (size, files) = (self.subtree_size[id], self.subtree_files[id]);
+        self.bump(parent, size, files, false);
+        let mut stack = vec![id];
+        while let Some(n) = stack.pop() {
+            stack.extend(self.children(n));
+            self.flags[n] |= NodeFlags::DEAD;
+            self.dead += 1;
+        }
+        self.touched.push(id);
+        true
+    }
+
+    /// Moves `id` (with its whole subtree) under `new_parent`. False (and no change) if `id` is a
+    /// root or dead, `new_parent` is dead, or `new_parent` is `id` or inside it.
+    pub fn reparent(&mut self, id: NodeId, new_parent: NodeId) -> bool {
+        let old = self.parent[id];
+        let dead = |t: &Self, n: NodeId| t.flags[n].contains(NodeFlags::DEAD);
+        if old.is_none() || dead(self, id) || dead(self, new_parent) {
+            return false;
+        }
+        let mut up = new_parent;
+        while !up.is_none() {
+            if up == id {
+                return false;
+            }
+            up = self.parent[up];
+        }
+        if old == new_parent {
+            return true;
+        }
+        if self.first_child[old] == id {
+            self.first_child[old] = self.next_sibling[id];
+        } else {
+            let mut prev = self.first_child[old];
+            while self.next_sibling[prev] != id {
+                prev = self.next_sibling[prev];
+            }
+            self.next_sibling[prev] = self.next_sibling[id];
+        }
+        let (size, files) = (self.subtree_size[id], self.subtree_files[id]);
+        self.bump(old, size, files, false);
+        self.parent[id] = new_parent;
+        self.next_sibling[id] = self.first_child[new_parent];
+        self.first_child[new_parent] = id;
+        self.bump(new_parent, size, files, true);
+        self.touched.push(old);
+        self.touched.push(id);
+        true
     }
 }
 
@@ -180,6 +314,8 @@ impl TreeBuilder {
             name_off: self.name_off,
             name_len: self.name_len,
             pool: self.pool,
+            dead: 0,
+            touched: Vec::new(),
         })
     }
 }
@@ -264,3 +400,6 @@ pub(crate) mod tests {
         assert_eq!(b.finish().err(), Some(TreeError::Cycle));
     }
 }
+
+#[cfg(test)]
+mod mutation_tests;
