@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bitflags = "2"
+bitflags.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+criterion.workspace = true
 
 [[bench]]
 name = "core"

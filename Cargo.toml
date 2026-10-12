@@ -1,3 +1,14 @@
 [workspace]
 resolver = "3"
 members = ["crates/plumb-core", "crates/plumb-scan", "crates/plumb"]
+
+[workspace.dependencies]
+plumb-core = { path = "crates/plumb-core" }
+plumb-scan = { path = "crates/plumb-scan" }
+bitflags = "2"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+windows = "0.62"
+
+# Dependencies are optimized even in dev builds; workspace crates stay at opt-level 0.
+[profile.dev.package."*"]
+opt-level = 3
