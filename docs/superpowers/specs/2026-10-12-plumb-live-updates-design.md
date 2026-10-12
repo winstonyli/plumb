@@ -89,7 +89,7 @@ New module, elevated NTFS only. It sits behind a small trait for the volume call
 
 1. **Done** (plan `2026-10-12-plumb-live-updates-a.md`): `plumb-core` mutation (`DEAD`, `add_child`, `set_size`, `remove`, `rename`, `reparent`) and `RowModel::refresh` with anchoring; tests and benchmarks; no Win32 needed.
 2. **Done** (plan `2026-10-12-plumb-live-updates-b.md`): journal reader in `plumb-scan` with the fake volume; the spike and an elevated end-to-end check ran on 2026-10-12 (results below). Plan 3 consumes `JournalReader`, `Delta`, `FileState` and `MftReport::records`.
-3. **Written, not yet executed** (plan `2026-10-12-plumb-live-updates-c.md`): UI wiring: record table, delta application with budget, live marker, rescan with state restoration, stale banner and Rescan button. Its code was built and tested in a scratch worktree and the plan replays to the same tree.
+3. **Done** (plan `2026-10-12-plumb-live-updates-c.md`, 2026-10-12): UI wiring: record table, delta application with budget, live marker, rescan with state restoration, stale banner and Rescan button.
 
 ## Journal reader as built, and spike results (2026-10-12)
 
@@ -107,3 +107,12 @@ Answers to "To verify in the first spike" (elevated, `C:`, Ryzen 7840U laptop, n
 - **Directory moves:** `journal-check` moved a file between folders and got one `Upsert` with the new parent; the end-to-end check (create, grow to 3 MiB, rename, move, delete file and folder) passes, with each delta arriving about 260 ms after the change. Not separately checked: whether moving a directory with descendants emits events for them (harmless if it does: same state).
 - **Stale journal ID** returns `ERROR_INVALID_PARAMETER`, mapped to `Wrapped`. `ERROR_JOURNAL_ENTRY_DELETED` for an overwritten start is mapped to `Wrapped` as well; reading from USN 0 on this drive returned entries (the journal has not wrapped past its first entry here).
 - **`Timeout` / `BytesToWaitFor` units: still unverified.** Both runs happened on a busy `C:`, so the blocking read always returned early (2 to 93 ms) because new records arrived. The code passes 1 for each; if that is not about a second, the reader's spin guard slows an idle loop to one read per 100 ms instead of spinning. A quiet-volume run (for example a second NTFS drive with nothing happening) would settle it; parked.
+
+## Plan 3 as built (2026-10-12)
+
+- **Applying:** `live::Live` applies deltas in 5 ms slices (`WM_JOURNAL` re-posts itself while the queue is not empty); one on-demand 250 ms timer refreshes the rows once if the tree changed, and backs off to `max(250 ms, 5 x refresh time)` after a slow refresh. The timer is off when idle.
+- **Parking:** `settle` retries parked upserts to a fixpoint, then a second failed pass puts them under `<orphans>`. A move that `reparent` refuses (two folders swapping places) is parked, not dropped.
+- **Compaction:** the 25% rule also needs at least 10 000 dead nodes.
+- **Rescan:** `RescanPolicy` (10 min per drive, 30 s after input); the journal is opened in the scan thread before the scan; `swap_tree` restores sort, on-screen expanded folders, selection and screen row by path.
+- **Banner:** `LiveStatus::Stale(reason)` shows "live updates stopped: <reason>; the tree may be out of date" with a Rescan button; a refused automatic rescan after a wrapped journal falls back to it.
+- **Checks:** `plumb --selftest-live` (administrator; output needs a pipe because the release build is a GUI-subsystem exe) passed on `C:`: create, grow, rename and delete followed. A manual look in the real window (elevated, `--scan C`) worked. Not exercised: the journal-deleted banner path and a wrapped-journal rescan on a real volume.
