@@ -1,0 +1,74 @@
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use plumb_core::NodeId;
+use plumb_core::mft::{ParsedRecord, parse_record};
+use plumb_core::rows::RowModel;
+use plumb_core::synth::{RECORD_SIZE, RecordBuilder, flat_tree, kary_builder};
+use std::hint::black_box;
+
+/// 1024 records, each with two names and a data stream, back to back (1 MiB).
+fn record_chunk() -> Vec<u8> {
+    let one = RecordBuilder::file()
+        .file_name(5, "document-with-a-typical-name.txt", 1)
+        .file_name(5, "DOCUME~1.TXT", 2)
+        .data_nonresident(1 << 20, 1 << 20)
+        .build();
+    one.repeat(1024)
+}
+
+fn bench_parse(c: &mut Criterion) {
+    let chunk = record_chunk();
+    let mut g = c.benchmark_group("mft");
+    g.throughput(Throughput::Bytes(chunk.len() as u64));
+    g.bench_function("parse_1024_records", |b| {
+        let mut out = ParsedRecord::default();
+        b.iter_batched_ref(
+            || chunk.clone(),
+            |buf| {
+                for rec in buf.chunks_exact_mut(RECORD_SIZE) {
+                    parse_record(rec, &mut out).unwrap();
+                    black_box(&out);
+                }
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    g.finish();
+}
+
+fn bench_sums(c: &mut Criterion) {
+    let mut g = c.benchmark_group("tree");
+    g.sample_size(10);
+    g.bench_function("finish_5m_nodes", |b| {
+        b.iter_batched(
+            || kary_builder(5_000_000, 8),
+            |builder| black_box(builder.finish().unwrap()),
+            BatchSize::LargeInput,
+        );
+    });
+    g.finish();
+}
+
+fn bench_rows(c: &mut Criterion) {
+    let tree = flat_tree(1_000_000);
+    let mut g = c.benchmark_group("rows");
+    g.sample_size(10);
+    g.bench_function("expand_1m_children_sort_by_size", |b| {
+        b.iter_batched_ref(
+            || RowModel::new(&tree),
+            |m| {
+                m.expand(&tree, NodeId(0));
+                black_box(m.rows().len());
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    let mut expanded = RowModel::new(&tree);
+    expanded.expand(&tree, NodeId(0));
+    g.bench_function("visible_window_of_50", |b| {
+        b.iter(|| black_box(expanded.visible_window(black_box(500_000), 50).len()));
+    });
+    g.finish();
+}
+
+criterion_group!(benches, bench_parse, bench_sums, bench_rows);
+criterion_main!(benches);
