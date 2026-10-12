@@ -41,6 +41,7 @@ fn render(dark: bool) -> Vec<u8> {
         theme: Theme::new(dark),
         chips: &chips,
         active_chip: Some(0),
+        sort: (1, true),
         admin: Some(plumb::layout::Layout::new(W as f32, H as f32).admin_button()),
         view: Some(View { tree: &tree, model: &model, scroll: 0 }),
         message: "",

@@ -9,7 +9,8 @@ use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap1, ID2D1SolidColorBrush, D2D
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
-    DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::core::{w, Result};
 
@@ -72,6 +73,8 @@ pub struct Scene<'a> {
     pub active_chip: Option<usize>,
     /// Where to draw the "Run as administrator" button, if shown.
     pub admin: Option<Rect>,
+    /// Header column the rows are sorted by, and whether descending.
+    pub sort: (usize, bool),
     /// `None` while no tree exists; `message` is shown instead.
     pub view: Option<View<'a>>,
     pub message: &'a str,
@@ -97,6 +100,10 @@ impl Painter {
             )?;
             f.SetTextAlignment(align)?;
             f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            f.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+            let sign = gfx.dw.CreateEllipsisTrimmingSign(&f)?;
+            let trim = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, ..Default::default() };
+            f.SetTrimming(&trim, &sign)?;
             Ok::<_, windows::core::Error>(f)
         };
         Ok(Self { left: make(DWRITE_TEXT_ALIGNMENT_LEADING)?, right: make(DWRITE_TEXT_ALIGNMENT_TRAILING)? })
@@ -154,7 +161,9 @@ impl Pen<'_> {
         self.fill(h, t.panel);
         for (c, name) in ["Name", "Size", "% of parent", "Items"].iter().enumerate() {
             let (x, w) = l.column(c);
-            self.text(name, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, t.dim, c == 1 || c == 3);
+            let arrow = if s.sort.0 == c { if s.sort.1 { " {25BC}" } else { " {25B2}" } } else { "" };
+            let (label, color) = (format!("{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
+            self.text(&label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, c == 1 || c == 3);
         }
         match &s.view {
             Some(v) => self.rows(s, v),

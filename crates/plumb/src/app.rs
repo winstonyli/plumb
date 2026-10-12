@@ -43,6 +43,11 @@ pub enum Effect {
     Elevate,
 }
 
+/// The sort each header column stands for; "% of parent" orders by size.
+fn sort_key(col: usize) -> SortKey {
+    [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items][col]
+}
+
 pub struct App {
     pub layout: Layout,
     pub drives: Vec<DriveInfo>,
@@ -56,7 +61,8 @@ pub struct App {
     /// Show the "Run as administrator" button (the process is not elevated).
     pub can_elevate: bool,
     pub adapter: String,
-    sort: (SortKey, bool),
+    /// Header column last clicked (0 Name, 1 Size, 2 % of parent, 3 Items) and direction.
+    sort: (usize, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
     grab: Option<f32>,
 }
@@ -65,8 +71,13 @@ impl App {
     pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
         Self {
             layout, drives, adapter, active: None, tree: None, model: None, scroll: 0,
-            can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (SortKey::Size, true), grab: None,
+            can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None,
         }
+    }
+
+    /// The header column the rows are sorted by, and whether descending.
+    pub fn sort(&self) -> (usize, bool) {
+        self.sort
     }
 
     pub fn begin_scan(&mut self, drive: usize) {
@@ -87,7 +98,7 @@ impl App {
     /// Installs a finished tree. The root is expanded and selected so there is something to see.
     pub fn finish_scan(&mut self, tree: Tree, summary: String) {
         let mut model = RowModel::new(&tree);
-        model.set_sort(&tree, self.sort.0, self.sort.1);
+        model.set_sort(&tree, sort_key(self.sort.0), self.sort.1);
         if let Some(r) = model.rows().first().map(|r| r.id) {
             model.expand(&tree, r);
             model.select(r);
@@ -169,11 +180,10 @@ impl App {
         match self.layout.hit(x, y, self.drives.len()) {
             Hit::Chip(i) if !matches!(self.scan, Scan::Running { .. }) => return Effect::Scan(i),
             Hit::Header(c) => {
-                let key = [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items][c];
-                let desc = if self.sort.0 == key { !self.sort.1 } else { key != SortKey::Name };
-                self.sort = (key, desc);
+                let desc = if self.sort.0 == c { !self.sort.1 } else { c != 0 };
+                self.sort = (c, desc);
                 if let (Some(t), Some(m)) = (&self.tree, &mut self.model) {
-                    m.set_sort(t, key, desc);
+                    m.set_sort(t, sort_key(c), desc);
                     self.scroll = 0;
                 }
             }
@@ -237,6 +247,7 @@ impl App {
             theme: Theme::new(dark),
             chips: &chips,
             active_chip: self.active,
+            sort: self.sort,
             admin: self.can_elevate.then(|| self.layout.admin_button()),
             view,
             message: &message,
@@ -352,9 +363,12 @@ mod tests {
         let mut a = scanned();
         let name = |a: &App, i: usize| a.tree.as_ref().unwrap().name_string(a.model.as_ref().unwrap().rows()[i].id);
         let hy = PICKER_H + 2.0;
-        a.handle(Input::Click(5.0, hy)); // Name ascending
+        assert_eq!(a.sort(), (1, true)); // default: Size descending
+        a.handle(Input::Click(5.0, hy));
+        assert_eq!(a.sort(), (0, false)); // Name ascending
         let first = name(&a, 1);
-        a.handle(Input::Click(5.0, hy)); // Name descending
+        a.handle(Input::Click(5.0, hy));
+        assert_eq!(a.sort(), (0, true)); // Name descending
         assert_ne!(name(&a, 1), first);
     }
 
