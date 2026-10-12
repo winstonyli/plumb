@@ -44,13 +44,15 @@ struct NonResident<'a> {
     alloc: u64,
     real: u64,
     compressed: Option<u64>,
+    /// Encoded mapping pairs (without the terminating zero byte).
+    runs: Vec<u8>,
 }
 
 fn nonresident_data_attr(s: NonResident) -> Vec<u8> {
     let units: Vec<u16> = s.name.encode_utf16().collect();
     let header = if s.compressed.is_some() { 0x48 } else { 0x40 };
     let runlist_off = align8(header + 2 * units.len());
-    let len = align8(runlist_off + 8);
+    let len = align8(runlist_off + s.runs.len() + 1);
     let mut a = vec![0u8; len];
     put32(&mut a, 0, 0x80);
     put32(&mut a, 4, len as u32);
@@ -70,7 +72,25 @@ fn nonresident_data_attr(s: NonResident) -> Vec<u8> {
     for (i, u) in units.iter().enumerate() {
         put16(&mut a, header + 2 * i, *u);
     }
+    a[runlist_off..runlist_off + s.runs.len()].copy_from_slice(&s.runs);
     a
+}
+
+/// Encodes `(start lcn, cluster count)` runs as NTFS mapping pairs.
+fn encode_runs(runs: &[(u64, u64)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut prev = 0i64;
+    for &(lcn, clusters) in runs {
+        let delta = lcn as i64 - prev;
+        prev = lcn as i64;
+        let len_bytes = (8 - clusters.leading_zeros() as usize / 8).max(1);
+        // Smallest signed width that holds `delta`.
+        let off_bytes = (1..=8usize).find(|&n| n == 8 || (-(1i64 << (8 * n - 1))..(1i64 << (8 * n - 1))).contains(&delta)).unwrap();
+        out.push(((off_bytes as u8) << 4) | len_bytes as u8);
+        out.extend_from_slice(&clusters.to_le_bytes()[..len_bytes]);
+        out.extend_from_slice(&delta.to_le_bytes()[..off_bytes]);
+    }
+    out
 }
 
 /// Builds a valid 1024-byte NTFS file record, update-sequence fixups included.
@@ -126,6 +146,22 @@ impl RecordBuilder {
             alloc,
             real,
             compressed: None,
+            runs: Vec::new(),
+        }));
+        self
+    }
+
+    /// The unnamed `$DATA` of `$MFT` itself: non-resident with the given `(start lcn, clusters)` runs.
+    pub fn mft_data(mut self, runs: &[(u64, u64)], real: u64) -> Self {
+        self.attrs.push(nonresident_data_attr(NonResident {
+            name: "",
+            flags: 0,
+            start_vcn: 0,
+            compression_unit: 0,
+            alloc: real,
+            real,
+            compressed: None,
+            runs: encode_runs(runs),
         }));
         self
     }
@@ -139,6 +175,7 @@ impl RecordBuilder {
             alloc,
             real,
             compressed: Some(compressed),
+            runs: Vec::new(),
         }));
         self
     }
@@ -152,6 +189,7 @@ impl RecordBuilder {
             alloc,
             real,
             compressed: None,
+            runs: Vec::new(),
         }));
         self
     }

@@ -96,6 +96,12 @@ fn resident_value(a: &[u8]) -> Result<&[u8], ParseError> {
 /// update-sequence fixups are undone in place, so a buffer can be parsed only once.
 pub fn parse_record(buf: &mut [u8], out: &mut ParsedRecord) -> Result<(), ParseError> {
     out.clear();
+    apply_fixups(buf)?;
+    parse_attributes(buf, out)
+}
+
+/// Checks the `FILE` magic and undoes the update-sequence fixups in place. Do this once per record.
+pub fn apply_fixups(buf: &mut [u8]) -> Result<(), ParseError> {
     if buf.get(0..4) != Some(b"FILE") {
         return Err(ParseError::BadMagic);
     }
@@ -113,7 +119,11 @@ pub fn parse_record(buf: &mut [u8], out: &mut ParsedRecord) -> Result<(), ParseE
         buf[end] = buf[usa_off + 2 * i];
         buf[end + 1] = buf[usa_off + 2 * i + 1];
     }
+    Ok(())
+}
 
+/// Reads the header and attributes of a record whose fixups are already applied.
+fn parse_attributes(buf: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError> {
     let flags = u16_at(buf, 0x16)?;
     out.in_use = flags & 1 != 0;
     out.is_dir = flags & 2 != 0;
@@ -141,6 +151,72 @@ pub fn parse_record(buf: &mut [u8], out: &mut ParsedRecord) -> Result<(), ParseE
         off += len;
     }
     Ok(())
+}
+
+/// A contiguous run of clusters on the volume.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Extent {
+    pub lcn: u64,
+    pub clusters: u64,
+}
+
+/// The data runs of the unnamed `$DATA` stream of `$MFT` (file record 0): where the MFT lives on
+/// the volume, in order. Undoes the fixups in `buf`. Sparse runs and a missing or resident stream
+/// are errors. A fragmented MFT whose runs spill into an `$ATTRIBUTE_LIST` is not detected here:
+/// the caller must check that the extents cover the MFT's valid length.
+pub fn mft_extents(buf: &mut [u8]) -> Result<Vec<Extent>, ParseError> {
+    apply_fixups(buf)?;
+    let used = (u32_at(buf, 0x18)? as usize).min(buf.len());
+    let mut off = u16_at(buf, 0x14)? as usize;
+    while off + 8 <= used {
+        let kind = u32_at(buf, off)?;
+        if kind == ATTR_END {
+            break;
+        }
+        let len = u32_at(buf, off + 4)? as usize;
+        if len < 0x18 || len % 8 != 0 || off + len > used {
+            return Err(ParseError::BadAttribute);
+        }
+        let a = &buf[off..off + len];
+        if kind == ATTR_DATA && a[9] == 0 && a[8] != 0 && u64_at(a, 0x10)? == 0 {
+            return decode_runs(a.get(u16_at(a, 0x20)? as usize..).ok_or(ParseError::BadAttribute)?);
+        }
+        off += len;
+    }
+    Err(ParseError::BadAttribute)
+}
+
+/// Decodes NTFS mapping pairs: a header byte (low nibble: length bytes, high nibble: offset
+/// bytes), the run length, then the signed offset from the previous run's start.
+fn decode_runs(runs: &[u8]) -> Result<Vec<Extent>, ParseError> {
+    let mut out = Vec::new();
+    let (mut p, mut lcn) = (0usize, 0i64);
+    while p < runs.len() && runs[p] != 0 {
+        let (ls, os) = ((runs[p] & 0xF) as usize, (runs[p] >> 4) as usize);
+        p += 1;
+        // Offset size 0 is a sparse run, which `$MFT` never has.
+        if ls == 0 || ls > 8 || os == 0 || os > 8 || p + ls + os > runs.len() {
+            return Err(ParseError::BadAttribute);
+        }
+        let mut clusters = 0u64;
+        for (i, b) in runs[p..p + ls].iter().enumerate() {
+            clusters |= (*b as u64) << (8 * i);
+        }
+        let mut delta = 0i64;
+        for (i, b) in runs[p + ls..p + ls + os].iter().enumerate() {
+            delta |= (*b as i64) << (8 * i);
+        }
+        if runs[p + ls + os - 1] & 0x80 != 0 && os < 8 {
+            delta |= -1i64 << (8 * os); // sign-extend
+        }
+        p += ls + os;
+        lcn += delta;
+        if lcn < 0 {
+            return Err(ParseError::BadAttribute);
+        }
+        out.push(Extent { lcn: lcn as u64, clusters });
+    }
+    Ok(out)
 }
 
 fn parse_file_name(a: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError> {
@@ -324,5 +400,25 @@ mod tests {
         assert_eq!(names(&p), vec!["second"]);
         assert_eq!(p.data_alloc, None);
         assert!(p.is_dir);
+    }
+
+    #[test]
+    fn mft_extents_round_trip_including_backwards_runs() {
+        let runs = [(1000u64, 10u64), (200, 5), (70_000, 300), (69_999, 1)];
+        let mut rec = RecordBuilder::file().file_name(5, "$MFT", 1).mft_data(&runs, 0).build();
+        let got = mft_extents(&mut rec).unwrap();
+        let want: Vec<Extent> = runs.iter().map(|&(lcn, clusters)| Extent { lcn, clusters }).collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn mft_extents_rejects_missing_resident_and_corrupt_data() {
+        let mut none = RecordBuilder::file().file_name(5, "$MFT", 1).build();
+        assert_eq!(mft_extents(&mut none), Err(ParseError::BadAttribute));
+        let mut resident = RecordBuilder::file().data_resident(10).build();
+        assert_eq!(mft_extents(&mut resident), Err(ParseError::BadAttribute));
+        let mut bad = RecordBuilder::file().mft_data(&[(4, 1)], 0).build();
+        bad[0] = b'X';
+        assert_eq!(mft_extents(&mut bad), Err(ParseError::BadMagic));
     }
 }
