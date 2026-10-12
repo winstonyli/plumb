@@ -78,11 +78,14 @@ impl RowModel {
     }
 
     pub fn is_expanded(&self, id: NodeId) -> bool {
-        self.expanded[id.idx() / 64] >> (id.idx() % 64) & 1 == 1
+        self.expanded.get(id.idx() / 64).is_some_and(|w| w >> (id.idx() % 64) & 1 == 1)
     }
 
     fn set_expanded(&mut self, id: NodeId, on: bool) {
         let (w, b) = (id.idx() / 64, id.idx() % 64);
+        if w >= self.expanded.len() {
+            self.expanded.resize(w + 1, 0);
+        }
         if on {
             self.expanded[w] |= 1 << b;
         } else {
@@ -142,7 +145,7 @@ impl RowModel {
     }
 
     pub fn expand(&mut self, tree: &Tree, id: NodeId) {
-        if self.is_expanded(id) || tree.first_child[id].is_none() {
+        if self.is_expanded(id) || !tree.has_children(id) {
             return;
         }
         self.set_expanded(id, true);
@@ -196,7 +199,7 @@ impl RowModel {
             Key::PageUp => cur.saturating_sub(page.max(1)),
             Key::PageDown => (cur + page.max(1)).min(last),
             Key::Right => {
-                if tree.first_child[id].is_none() {
+                if !tree.has_children(id) {
                     cur
                 } else if !self.is_expanded(id) {
                     self.expand(tree, id);
@@ -218,6 +221,41 @@ impl RowModel {
         self.selected = Some(self.rows[target].id);
     }
 
+    /// Brings the rows up to date after tree mutations; it consumes the tree's `take_touched()` list.
+    /// Keeps the selected row at the same screen row and returns the scroll that does so (not
+    /// clamped to the window height; the caller clamps). If the selected node is gone or hidden,
+    /// its nearest visible ancestor is selected and `scroll` is returned unchanged.
+    pub fn refresh(&mut self, tree: &mut Tree, scroll: usize) -> usize {
+        let touched = tree.take_touched();
+        let tree = &*tree;
+        for t in touched {
+            self.cache.remove(&t);
+            let mut cur = t;
+            while !cur.is_none() {
+                cur = tree.parent[cur];
+                self.cache.remove(&cur);
+            }
+        }
+        let anchor = self.selected_index().map(|i| (self.rows[i].id, i as isize - scroll as isize));
+        let words = tree.len().div_ceil(64);
+        if self.expanded.len() < words {
+            self.expanded.resize(words, 0);
+        }
+        self.rebuild(tree);
+        while let Some(s) = self.selected {
+            if self.row_index(s).is_some() {
+                break;
+            }
+            let p = tree.parent[s];
+            self.selected = (!p.is_none()).then_some(p);
+        }
+        let new = match (self.selected_index(), anchor) {
+            (Some(i), Some((id, row))) if Some(id) == self.selected => (i as isize - row).max(0) as usize,
+            _ => scroll,
+        };
+        new.min(self.rows.len().saturating_sub(1))
+    }
+
     /// The rows to draw for a view `height` rows tall, scrolled to row `scroll`.
     pub fn visible_window(&self, scroll: usize, height: usize) -> &[Row] {
         let start = scroll.min(self.rows.len());
@@ -235,7 +273,7 @@ impl RowModel {
 
     /// True if `id` is a directory with at least one child (something Right can expand).
     pub fn is_expandable(&self, tree: &Tree, id: NodeId) -> bool {
-        tree.flags[id].contains(NodeFlags::DIR) && !tree.first_child[id].is_none()
+        tree.flags[id].contains(NodeFlags::DIR) && tree.has_children(id)
     }
 }
 
@@ -372,3 +410,6 @@ mod tests {
         assert!(!m.is_expandable(&t, NodeId(6)));
     }
 }
+
+#[cfg(test)]
+mod refresh_tests;
