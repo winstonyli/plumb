@@ -52,7 +52,7 @@ Size accounting:
 
 ## Scanners (`plumb`)
 
-Both implement `Scanner::scan(volume, &mut TreeBuilder, &Progress)` and produce equivalent trees. Worker threads append to thread-local chunks that are merged at the end. Default worker count is `min(cores - 4, 8)`, at BelowNormal priority.
+Both implement `Scanner::scan(root, &mut TreeBuilder, &Progress)`, where `root` is a drive root or any directory, and produce equivalent trees; they live in the `plumb-scan` crate. Default worker count is `min(cores - 4, 8)`, at BelowNormal priority.
 
 ### `MftScanner` (elevated, NTFS only)
 - Open `\\.\X:`; get the `$MFT` extents (`FSCTL_GET_NTFS_VOLUME_DATA`, retrieval pointers on `X:\$MFT`) and stream `$MFT` in large sector-aligned chunks (1-4 MB; unbuffered volume reads need aligned offsets and sizes). One sequential pass, no per-file I/O.
@@ -66,7 +66,7 @@ Both implement `Scanner::scan(volume, &mut TreeBuilder, &Progress)` and produce 
 
 ### `WalkScanner` (any volume, no admin)
 - `GetFileInformationByHandleEx` with `FileFullDirectoryInfo` / `FileFullDirectoryRestartInfo`, 256 KB buffers. Each entry already contains name, attributes, `EndOfFile` and `AllocationSize`; no file is opened. (A documented API, so no ntdll linking.)
-- Work-stealing queue of directories.
+- A coordinator thread owns the `TreeBuilder` and queues directories on a shared job queue; workers only list directories. Directories count as 0 allocated bytes (the MFT scanner does not count index allocation either).
 - Known limitation: hard links cannot be detected without opening each file, so the walker may double-count them (WinDirStat does the same). Documented, not worked around.
 
 ### Choosing and failing
@@ -143,5 +143,6 @@ These are my estimates, to be measured, not claims:
 Work is split into three plans, each producing tested software on its own:
 
 1. `plumb-core`: tree, row model, MFT record parser, synthetic inputs, benchmarks (`docs/superpowers/plans/2026-10-11-plumb-core.md`).
-2. Scanners: `MftScanner` and `WalkScanner`, merge pass (hard links, parent resolution), `scan-compare`.
+2a. `plumb-scan`: `Scanner`, `MftMerger`, `WalkScanner` (`docs/superpowers/plans/2026-10-11-plumb-scan-a.md`).
+2b. `MftScanner` volume reader, scanner selection and fallback, `scan-compare` (needs an elevated run to verify).
 3. UI: Win32 window, D3D11 + Direct2D + DirectWrite, tree view.
