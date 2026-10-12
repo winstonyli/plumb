@@ -99,6 +99,11 @@ impl TreeBuilder {
         self.parent.is_empty()
     }
 
+    /// Adds `flags` to an already pushed node (e.g. DENIED, learned after the node was created).
+    pub fn add_flags(&mut self, id: NodeId, flags: NodeFlags) {
+        self.flags[id] |= flags;
+    }
+
     pub fn push(&mut self, parent: NodeId, name: &[u16], size: u64, flags: NodeFlags) -> NodeId {
         let id = NodeId(u32::try_from(self.parent.len()).expect("too many nodes"));
         self.name_off.push(u32::try_from(self.pool.len()).expect("name pool too large"));
@@ -230,6 +235,15 @@ pub(crate) mod tests {
         let t = b.finish().unwrap();
         assert_eq!(t.subtree_size[NodeId(1)], 7);
         assert_eq!(t.path(NodeId(0)), "root\\child");
+    }
+
+    #[test]
+    fn add_flags_after_push() {
+        let mut b = TreeBuilder::new();
+        let r = b.push_str(NodeId::NONE, "r", 0, NodeFlags::DIR);
+        b.add_flags(r, NodeFlags::DENIED);
+        let t = b.finish().unwrap();
+        assert!(t.flags[r].contains(NodeFlags::DIR | NodeFlags::DENIED));
     }
 
     #[test]
