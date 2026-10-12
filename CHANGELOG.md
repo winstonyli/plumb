@@ -1,0 +1,24 @@
+# Changelog
+
+All notable changes to plumb. Format follows [Keep a Changelog](https://keepachangelog.com/); all crates share one version and are bumped together at each tag.
+
+## [Unreleased]
+
+## [0.1.0] - 2026-10-12
+
+First usable disk pane (milestone M1). Design: `docs/superpowers/specs/2026-10-11-plumb-disk-design.md`.
+
+### Added
+- `plumb-core`: struct-of-arrays file tree with bottom-up size and file-count sums, the virtualized row model (expand/collapse, sort by name/size/items, keyboard navigation, scroll to selection), and an NTFS MFT record parser (fixups, data runs, extension records, resident data, reparse tags). Criterion benchmarks for parsing, tree finishing and the row model.
+- `plumb-scan`: `MftScanner` (streams `$MFT` from the raw volume, elevated NTFS only), `WalkScanner` (parallel directory walker, any volume, no admin), and `scan_auto`, which picks the MFT scanner when elevated on NTFS and otherwise the walker, falling back with a note if the MFT scan fails. `scan-compare` example checks the two agree (0 differences on the fixture).
+- `plumb`: Win32 window drawn with Direct3D 11, Direct2D and DirectWrite on the adapter that drives the window's monitor; per-monitor DPI; light and dark to match the system; drive picker with free space; tree view with Name, Size, % of parent bar and Items columns; sort by header with direction arrows; mouse and keyboard navigation; scrollbar drag; context menu (Reveal in Explorer, Copy path, Properties); status bar with scanner, time, file count, skipped records and adapter; device-loss recovery; "Run as administrator" button that relaunches elevated and restarts the scan.
+- Tests: WARP render smoke test, hidden-window `plumb --selftest` (opt-in: `cargo test -p plumb -- --ignored`).
+
+### Known limitations
+- The walker cannot detect hard links and may double-count them.
+- An MFT with an `$ATTRIBUTE_LIST` is unsupported (falls back to the walker); only 1024-byte records on volumes whose cluster size is a multiple of 1024.
+- No partial tree while a scan runs; the tree appears when the scan finishes.
+- The tree is static after a scan (live updates are planned for 0.2.0).
+- Alternate data streams count as 0; folder mount points are not offered in the picker.
+- Idle memory is about 29 MB private (38.6 MB working set), of which about 27 MB is the GPU driver.
+- Unverified: cloud-placeholder size parity between the scanners; UI frame time during a scan (checked by feel only).
