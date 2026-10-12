@@ -5,6 +5,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 ## [Unreleased]
 
 ### Added
+- `plumb-scan`: NTFS change-journal reader (`journal` module: USN buffer parser, per-file state from the MFT record, a reader thread with a 250 ms coalescing window, `JournalSource` trait with a Windows implementation for `Volume`), elevated `journal-check` and `journal-spike` examples, and the MFT scan now also returns the record-number-to-node table (`MftReport`). Not yet used by the UI.
 - `plumb-core`: in-place tree mutation (`add_child`, `set_size`, `rename`, `remove`, `reparent`, `NodeFlags::DEAD`) and `RowModel::refresh`, which keeps the selected row at the same screen row. Foundation for live updates (M2); not yet wired into the UI.
 
 ## [0.1.0] - 2026-10-12

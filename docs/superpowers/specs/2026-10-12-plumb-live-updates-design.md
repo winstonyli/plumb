@@ -88,5 +88,22 @@ New module, elevated NTFS only. It sits behind a small trait for the volume call
 ## Plans
 
 1. **Done** (plan `2026-10-12-plumb-live-updates-a.md`): `plumb-core` mutation (`DEAD`, `add_child`, `set_size`, `remove`, `rename`, `reparent`) and `RowModel::refresh` with anchoring; tests and benchmarks; no Win32 needed.
-2. Journal reader in `plumb-scan` with the fake volume; the first spike answers the questions above; an elevated check.
+2. **Done** (plan `2026-10-12-plumb-live-updates-b.md`): journal reader in `plumb-scan` with the fake volume; the spike and an elevated end-to-end check ran on 2026-10-12 (results below). Plan 3 consumes `JournalReader`, `Delta`, `FileState` and `MftReport::records`.
 3. UI wiring: record table, delta application with budget, live marker, rescan with state restoration, stale banner and Rescan button.
+
+## Journal reader as built, and spike results (2026-10-12)
+
+Where the built reader differs from the "Journal reader" section above:
+- **State-based.** The journal only says "record N changed"; each changed record is re-read and reported as it is now (`Upsert(FileState)` or `Remove`). A reused record number is just an `Upsert` with the new state, so there is no sequence-number tracking and no separate delete-plus-create case. Directory moves and repeated renames need no special handling either.
+- **Reason mask** is data extend/overwrite/truncation, file create/delete, rename-new-name, reparse change and hard-link change. `CLOSE` and `BASIC_INFO_CHANGE` are not asked for: neither changes a name, place, size or kind. The 60 s spike saw only reasons inside the mask's useful set.
+- **Record table** comes from the MFT scan (`MftReport::records`: record number to the node of that record's first name). Other hard links are not tracked.
+- **Source trait:** `read(from, journal_id, wait)` either waits up to about a second or returns at once. The reader waits out the 250 ms window itself, flushes early at 50 000 pending files, and does not busy-loop if a blocking read returns at once with nothing.
+- **Unreadable or unparseable MFT records** are counted and skipped; only a failed journal read ends the reader, with `Wrapped`, `Disabled` or `Failed`.
+
+Answers to "To verify in the first spike" (elevated, `C:`, Ryzen 7840U laptop, normal desktop use):
+- **`FSCTL_GET_NTFS_FILE_RECORD`** returns the record with the update-sequence fixups already undone (the first run failed every record with `BadFixup` until the parser skipped them). After the fix: 563 live, 1 extension, 0 unparseable out of 872 distinct files seen. A record number beyond the MFT returns record 0 (the nearest in-use record below), which the reader treats as "not this record", i.e. a `Remove`.
+- **Extension records:** 4 of 563 live files (0.7%) had their data stream outside the base record and were sized by `OpenFileById`; 1 record was an extension record. Cheap enough not to cache.
+- **Journal rates:** 22 to 96 entries/s over two 60 s runs, 152 to 872 distinct files per minute, busiest 250 ms window 245 files. The 250 ms window and the 50 000 cap are comfortable. In the second run 308 of the changed records were no longer in use by the time they were read (short-lived files), which become `Remove` for nodes plan 3 does not know, and are ignored.
+- **Directory moves:** `journal-check` moved a file between folders and got one `Upsert` with the new parent; the end-to-end check (create, grow to 3 MiB, rename, move, delete file and folder) passes, with each delta arriving about 260 ms after the change. Not separately checked: whether moving a directory with descendants emits events for them (harmless if it does: same state).
+- **Stale journal ID** returns `ERROR_INVALID_PARAMETER`, mapped to `Wrapped`. `ERROR_JOURNAL_ENTRY_DELETED` for an overwritten start is mapped to `Wrapped` as well; reading from USN 0 on this drive returned entries (the journal has not wrapped past its first entry here).
+- **`Timeout` / `BytesToWaitFor` units: still unverified.** Both runs happened on a busy `C:`, so the blocking read always returned early (2 to 93 ms) because new records arrived. The code passes 1 for each; if that is not about a second, the reader's spin guard slows an idle loop to one read per 100 ms instead of spinning. A quiet-volume run (for example a second NTFS drive with nothing happening) would settle it; parked.
