@@ -276,7 +276,7 @@ impl Win {
         match msg {
             Ok((tree, report, elapsed)) => {
                 let files = tree.subtree_files[NodeId(0)] as u64;
-                let s = summary(report.used, files, elapsed, report.mft.as_ref().map(|m| m.0.corrupt), report.note.as_deref());
+                let s = summary(report.used, files, elapsed, report.mft.as_ref().map(|m| m.stats.corrupt), report.note.as_deref());
                 self.app.finish_scan(tree, s);
             }
             Err(e) => self.app.fail_scan(e),

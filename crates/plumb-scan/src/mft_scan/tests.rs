@@ -64,7 +64,7 @@ fn layout() -> MftLayout {
 fn run(img: &Image, l: &MftLayout, threads: usize, chunk_bytes: usize) -> Result<(Tree, MergeStats, Progress), MftError> {
     let mut b = TreeBuilder::new();
     let p = Progress::default();
-    let (stats, _) = scan_mft(img, l, "X:", &MftOptions { threads, chunk_bytes }, &mut b, &p)?;
+    let stats = scan_mft(img, l, "X:", &MftOptions { threads, chunk_bytes }, &mut b, &p)?.stats;
     Ok((b.finish().unwrap(), stats, p))
 }
 

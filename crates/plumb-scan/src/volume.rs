@@ -1,8 +1,7 @@
 //! The Windows side of the MFT scanner: elevation check, file-system check, the raw volume handle
 //! and `MftScanner`. Opening a volume needs administrator rights.
 
-use crate::mft_scan::{MftLayout, MftOptions, MftTimings, VolumeRead, scan_mft};
-use crate::merge::MergeStats;
+use crate::mft_scan::{MftLayout, MftOptions, MftReport, VolumeRead, scan_mft};
 use crate::{Progress, ScanError, Scanner};
 use plumb_core::TreeBuilder;
 use std::ffi::c_void;
@@ -63,7 +62,7 @@ pub fn is_ntfs(root: &Path) -> bool {
 }
 
 /// An open raw volume (`\\.\C:`), read-only.
-pub struct Volume(HANDLE);
+pub struct Volume(pub(crate) HANDLE);
 
 // A volume handle is only read through `ReadFile` with explicit offsets.
 unsafe impl Send for Volume {}
@@ -155,7 +154,7 @@ impl MftScanner {
         root: &Path,
         out: &mut TreeBuilder,
         progress: &Progress,
-    ) -> Result<(MergeStats, MftTimings), ScanError> {
+    ) -> Result<MftReport, ScanError> {
         let letter = drive_letter(root).ok_or_else(|| ScanError::Mft("not a drive root".into()))?;
         let vol = Volume::open(letter).map_err(|e| ScanError::Mft(format!("cannot open volume {letter}: {e}")))?;
         let layout = vol.layout().map_err(|e| ScanError::Mft(format!("cannot query volume {letter}: {e}")))?;

@@ -11,6 +11,11 @@ const NONE: u32 = u32::MAX;
 const REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
 const REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;
 
+/// True for the reparse tags the scanners treat as links to follow elsewhere (symlink, junction).
+pub fn is_name_surrogate(tag: Option<u32>) -> bool {
+    matches!(tag, Some(REPARSE_TAG_MOUNT_POINT | REPARSE_TAG_SYMLINK))
+}
+
 const F_SEEN: u8 = 1; // the base record was added
 const F_IN_USE: u8 = 2;
 const F_DIR: u8 = 4;
@@ -97,7 +102,7 @@ impl MftMerger {
                 self.alloc[o] = a;
             }
         }
-        if matches!(rec.reparse_tag, Some(REPARSE_TAG_MOUNT_POINT | REPARSE_TAG_SYMLINK)) {
+        if is_name_surrogate(rec.reparse_tag) {
             self.flags[o] |= F_REPARSE;
         }
     }
@@ -107,7 +112,9 @@ impl MftMerger {
     }
 
     /// Builds the nodes into `out`: the root (named `root_name`) first, then everything else.
-    pub fn finish(self, root_name: &str, out: &mut TreeBuilder) -> MergeStats {
+    /// Also returns, for every record number, the node of its first name (`NodeId::NONE` if it has
+    /// none); live updates use it to find the node a changed record belongs to.
+    pub fn finish(self, root_name: &str, out: &mut TreeBuilder) -> (MergeStats, Vec<NodeId>) {
         let n = self.flags.len();
         let base = out.len() as u32;
 
@@ -237,7 +244,8 @@ impl MftMerger {
             stats.nodes += 1;
         }
         stats.nodes += 1; // the root
-        stats
+        let records = first.into_iter().map(|f| if f == NONE { NodeId::NONE } else { NodeId(base + f) }).collect();
+        (stats, records)
     }
 }
 
@@ -261,7 +269,7 @@ mod tests {
 
     fn build(m: MftMerger) -> (Tree, MergeStats) {
         let mut b = TreeBuilder::new();
-        let stats = m.finish("X:", &mut b);
+        let (stats, _) = m.finish("X:", &mut b);
         (b.finish().unwrap(), stats)
     }
 
@@ -289,6 +297,19 @@ mod tests {
             feed(&mut m, n, r);
         }
         m
+    }
+
+    #[test]
+    fn the_record_table_maps_record_numbers_to_nodes() {
+        let mut b = TreeBuilder::new();
+        let (_, records) = sample(&[0, 1, 2, 3]).finish("X:", &mut b);
+        let t = b.finish().unwrap();
+        assert_eq!(records.len(), 100);
+        assert_eq!(t.path(records[5]), "X:");
+        assert_eq!(t.path(records[30]), "X:\\docs");
+        assert_eq!(t.path(records[31]), "X:\\docs\\a.txt");
+        assert_eq!(t.path(records[32]), "X:\\b");
+        assert!(records[6].is_none() && records[99].is_none(), "unused records have no node");
     }
 
     #[test]

@@ -112,7 +112,8 @@ fn main() {
     let deadline = Instant::now() + Duration::from_secs(90);
     let ok = loop {
         let (progress, mut b) = (Progress::default(), TreeBuilder::new());
-        let (stats, timings) = MftScanner::default().scan_with_stats(&drive, &mut b, &progress).expect("mft scan");
+        let r = MftScanner::default().scan_with_stats(&drive, &mut b, &progress).expect("mft scan");
+        let (stats, timings) = (r.stats, r.timings);
         let t = b.finish().unwrap();
         let mut mft_entries = Entries::new();
         if let Some(node) = descend(&t, NodeId(0), &comps) {

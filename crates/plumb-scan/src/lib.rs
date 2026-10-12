@@ -1,5 +1,8 @@
 //! Volume scanners for plumb: they turn a directory tree or an NTFS `$MFT` into a `plumb_core::Tree`.
 
+pub mod journal;
+#[cfg(windows)]
+pub mod journal_win;
 pub mod merge;
 pub mod mft_scan;
 #[cfg(windows)]

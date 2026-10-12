@@ -31,6 +31,8 @@ pub struct NameEntry {
 #[derive(Default, Debug)]
 pub struct ParsedRecord {
     pub in_use: bool,
+    /// The record's sequence number; with the record number it forms the 64-bit file reference.
+    pub sequence: u16,
     pub is_dir: bool,
     /// Record number of the base record if this is an extension record.
     pub base: Option<u64>,
@@ -46,6 +48,7 @@ pub struct ParsedRecord {
 impl ParsedRecord {
     pub fn clear(&mut self) {
         self.in_use = false;
+        self.sequence = 0;
         self.is_dir = false;
         self.base = None;
         self.names.clear();
@@ -124,6 +127,7 @@ pub fn apply_fixups(buf: &mut [u8]) -> Result<(), ParseError> {
 
 /// Reads the header and attributes of a record whose fixups are already applied.
 fn parse_attributes(buf: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError> {
+    out.sequence = u16_at(buf, 0x10)?;
     let flags = u16_at(buf, 0x16)?;
     out.in_use = flags & 1 != 0;
     out.is_dir = flags & 2 != 0;
@@ -292,6 +296,7 @@ mod tests {
         assert_eq!(p.names[0].parent, 5);
         assert_eq!(p.data_alloc, Some(4096));
         assert_eq!(p.base, None);
+        assert_eq!(p.sequence, 1, "the record builder stamps sequence 1");
     }
 
     #[test]

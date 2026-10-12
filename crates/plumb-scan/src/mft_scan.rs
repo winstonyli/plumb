@@ -3,7 +3,7 @@
 
 use crate::Progress;
 use crate::merge::{MergeStats, MftMerger};
-use plumb_core::TreeBuilder;
+use plumb_core::{NodeId, TreeBuilder};
 use plumb_core::mft::{ParseError, ParsedRecord, mft_extents, parse_record};
 use std::io;
 use std::sync::atomic::Ordering;
@@ -69,6 +69,15 @@ pub struct MftTimings {
     pub link: Duration,
 }
 
+/// What a finished MFT scan reports besides the tree.
+#[derive(Debug)]
+pub struct MftReport {
+    pub stats: MergeStats,
+    pub timings: MftTimings,
+    /// Record number -> node of that record's first name, or `NodeId::NONE`.
+    pub records: Vec<NodeId>,
+}
+
 struct Chunk {
     first_record: u64,
     data: Vec<u8>,
@@ -83,7 +92,7 @@ pub fn scan_mft<V: VolumeRead>(
     opts: &MftOptions,
     out: &mut TreeBuilder,
     progress: &Progress,
-) -> Result<(MergeStats, MftTimings), MftError> {
+) -> Result<MftReport, MftError> {
     let t0 = Instant::now();
     let (sector, bpc) = (layout.bytes_per_sector as u64, layout.bytes_per_cluster as u64);
     if layout.bytes_per_record as usize != RECORD {
@@ -153,8 +162,8 @@ pub fn scan_mft<V: VolumeRead>(
         return Err(MftError::Read(e));
     }
     let t1 = Instant::now();
-    let stats = merger.into_inner().unwrap().finish(root_name, out);
-    Ok((stats, MftTimings { stream: t1 - t0, link: t1.elapsed() }))
+    let (stats, records) = merger.into_inner().unwrap().finish(root_name, out);
+    Ok(MftReport { stats, timings: MftTimings { stream: t1 - t0, link: t1.elapsed() }, records })
 }
 
 /// A parser thread: takes chunks until the reader is done, parses every record outside the lock,

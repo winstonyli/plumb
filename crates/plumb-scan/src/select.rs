@@ -1,8 +1,7 @@
 //! Picks the scanner for a volume: the MFT reader when the volume is NTFS and the process is
 //! elevated, the directory walker otherwise, and the walker again if the MFT scan fails.
 
-use crate::merge::MergeStats;
-use crate::mft_scan::MftTimings;
+use crate::mft_scan::MftReport;
 use crate::volume::{MftScanner, drive_letter, is_elevated, is_ntfs};
 use crate::walk::WalkScanner;
 use crate::{Progress, ScanError, Scanner};
@@ -22,7 +21,7 @@ pub struct ScanReport {
     /// Something the user should be told (a fallback, or that elevation would be faster).
     pub note: Option<String>,
     /// Present when the MFT scanner ran.
-    pub mft: Option<(MergeStats, MftTimings)>,
+    pub mft: Option<MftReport>,
 }
 
 /// Scans `root` with the best available scanner.
