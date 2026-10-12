@@ -133,7 +133,7 @@ These are my estimates, to be measured, not claims:
 
 ## Open questions to verify during M1
 
-- Whether the thread count and BelowNormal priority starve the UI thread during a scan (measure UI frame time while scanning).
+- ~~Whether the thread count and BelowNormal priority starve the UI thread during a scan.~~ Checked by hand 2026-10-11: no stutter noticed while dragging the window during scans. Not measured as frame times; revisit if it shows up.
 - The memory cost per node for real drives versus the ~39 bytes plus name estimate.
 - That cloud-placeholder files report the same allocated size from both scanners. (Compressed and sparse files were verified equal by `scan-compare` on 2026-10-11.)
 
@@ -145,4 +145,4 @@ Work is split into three plans, each producing tested software on its own:
 2a. `plumb-scan`: `Scanner`, `MftMerger`, `WalkScanner` (`docs/superpowers/plans/2026-10-11-plumb-scan-a.md`).
 2b. `MftScanner` volume reader, scanner selection and fallback, `scan-compare` (`docs/superpowers/plans/2026-10-11-plumb-scan-b.md`; done, verified elevated).
 3a. UI rendering and layout: `plumb` crate with layout, formatting, device stack and Direct2D painter, WARP smoke test (`docs/superpowers/plans/2026-10-11-plumb-ui-a.md`; done).
-3b. UI window: Win32 window and loop, swapchain, input, drive picker, scan wiring, context menu (not yet written).
+3b. UI window: Win32 window and loop, swapchain, input, drive picker, scan wiring, context menu, Run as administrator button (`docs/superpowers/plans/2026-10-11-plumb-ui-b.md`; done, manual checklist passed 2026-10-11).

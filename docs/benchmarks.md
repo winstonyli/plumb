@@ -45,3 +45,7 @@ Observations:
 Compare the walker over the user profile (3.37M files, 40-125 s). The MFT scan covers the whole volume in a few seconds, so the walker is the fallback only. Orphans: 0. Corrupt records: 0.
 
 Parity: `scan-compare` reports 0 differences between the walker and the MFT scanner on a fixture with plain, empty, 1-byte, resident-boundary, large, Unicode, 200-character-name, alternate-stream, compressed, sparse and junction entries. The first run found the walker counting resident data as its rounded length; fixed in `50d402e`.
+
+## UI
+
+Manual checklist (plan 3b, Task 3) passed on 2026-10-11 with nothing to note: scan progress, responsiveness while scanning, tree navigation and sorting, context menu, light/dark, DPI, exit, and the Run as administrator relaunch. No frame times or idle CPU were measured; the "scan threads starve the UI" question was answered by feel only. Hidden-window `plumb --selftest` picked the Radeon 780M (the laptop display's adapter).
