@@ -103,6 +103,16 @@ pub fn parse_record(buf: &mut [u8], out: &mut ParsedRecord) -> Result<(), ParseE
     parse_attributes(buf, out)
 }
 
+/// Like [`parse_record`] for a record whose fixups are already undone, which is what
+/// `FSCTL_GET_NTFS_FILE_RECORD` returns.
+pub fn parse_fixed_up_record(buf: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError> {
+    out.clear();
+    if buf.get(0..4) != Some(b"FILE") {
+        return Err(ParseError::BadMagic);
+    }
+    parse_attributes(buf, out)
+}
+
 /// Checks the `FILE` magic and undoes the update-sequence fixups in place. Do this once per record.
 pub fn apply_fixups(buf: &mut [u8]) -> Result<(), ParseError> {
     if buf.get(0..4) != Some(b"FILE") {

@@ -73,7 +73,7 @@ fn main() {
     for &r in records.iter().take(5000) {
         buf.fill(0);
         match vol.file_record(r, &mut buf) {
-            Ok(Some(n)) if n == r => match observe(r, &mut buf, &mut scratch) {
+            Ok(Some(n)) if n == r => match observe(r, &buf, &mut scratch) {
                 Ok(Seen::Gone) => gone += 1,
                 Ok(Seen::Extension(_)) => ext += 1,
                 Ok(Seen::Live { needs_size, .. }) => {
@@ -93,6 +93,6 @@ fn main() {
 
     // Odd requests.
     let mut b = vec![0u8; 1024];
-    println!("== record 5 (root): {:?}", vol.file_record(5, &mut b).map(|n| n.map(|n| observe(n, &mut b, &mut scratch).map(|s| format!("{s:?}").chars().take(60).collect::<String>()))));
+    println!("== record 5 (root): {:?}", vol.file_record(5, &mut b).map(|n| n.map(|n| observe(n, &b, &mut scratch).map(|s| format!("{s:?}").chars().take(60).collect::<String>()))));
     println!("== record 2^40 (beyond the MFT): {:?}", vol.file_record(1 << 40, &mut vec![0u8; 1024]));
 }

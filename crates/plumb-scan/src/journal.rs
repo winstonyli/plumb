@@ -272,7 +272,7 @@ fn flush<S: JournalSource>(src: &S, pending: &mut BTreeSet<u64>, stats: &Journal
             out.push(Delta::Remove { record });
             continue;
         }
-        match observe(record, &mut buf, &mut scratch) {
+        match observe(record, &buf, &mut scratch) {
             Err(_) => {
                 stats.parse_errors.fetch_add(1, Ordering::Relaxed);
             }

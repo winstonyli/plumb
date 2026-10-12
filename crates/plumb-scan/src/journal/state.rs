@@ -4,7 +4,7 @@
 
 use super::usn::REF_MASK;
 use crate::merge::is_name_surrogate;
-use plumb_core::mft::{ParseError, ParsedRecord, parse_record};
+use plumb_core::mft::{ParseError, ParsedRecord, parse_fixed_up_record};
 
 /// One file as it is now. Names follow the scanner's rule: of a hard-linked file's names, the one
 /// with the lowest (parent, name) is the one that carries the size.
@@ -41,9 +41,10 @@ pub enum Seen {
     Live { state: FileState, needs_size: bool },
 }
 
-/// Parses record number `record` (`buf` is exactly one record; it is modified by the fixups).
-pub fn observe(record: u64, buf: &mut [u8], scratch: &mut ParsedRecord) -> Result<Seen, ParseError> {
-    parse_record(buf, scratch)?;
+/// Parses record number `record`. `buf` is exactly one record as `FSCTL_GET_NTFS_FILE_RECORD`
+/// returns it: the update-sequence fixups are already undone.
+pub fn observe(record: u64, buf: &[u8], scratch: &mut ParsedRecord) -> Result<Seen, ParseError> {
+    parse_fixed_up_record(buf, scratch)?;
     if !scratch.in_use {
         return Ok(Seen::Gone);
     }
@@ -70,11 +71,18 @@ pub fn observe(record: u64, buf: &mut [u8], scratch: &mut ParsedRecord) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plumb_core::mft::apply_fixups;
     use plumb_core::synth::RecordBuilder;
 
-    fn seen(rec: RecordBuilder, number: u64) -> Seen {
+    /// A record the way the file system hands it out: fixups undone.
+    fn fixed(rec: RecordBuilder) -> Vec<u8> {
         let mut buf = rec.build();
-        observe(number, &mut buf, &mut ParsedRecord::default()).unwrap()
+        apply_fixups(&mut buf).unwrap();
+        buf
+    }
+
+    fn seen(rec: RecordBuilder, number: u64) -> Seen {
+        observe(number, &fixed(rec), &mut ParsedRecord::default()).unwrap()
     }
 
     fn live(s: Seen) -> (FileState, bool) {
@@ -131,8 +139,8 @@ mod tests {
 
     #[test]
     fn a_free_record_is_gone() {
-        let mut buf = RecordBuilder::file().file_name(5, "old", 1).data_nonresident(4096, 1).build();
+        let mut buf = fixed(RecordBuilder::file().file_name(5, "old", 1).data_nonresident(4096, 1));
         buf[0x16] &= !1; // clear the in-use flag
-        assert_eq!(observe(9, &mut buf, &mut ParsedRecord::default()), Ok(Seen::Gone));
+        assert_eq!(observe(9, &buf, &mut ParsedRecord::default()), Ok(Seen::Gone));
     }
 }

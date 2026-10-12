@@ -1,5 +1,6 @@
 use super::usn::UsnEntry;
 use super::*;
+use plumb_core::mft::apply_fixups;
 use plumb_core::synth::RecordBuilder;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Mutex;
@@ -54,8 +55,15 @@ impl Fake {
         self.reads.lock().unwrap().extend(reads);
     }
     fn put(self: &Arc<Self>, record: u64, rec: RecordBuilder) {
-        self.mft.lock().unwrap().insert(record, rec.build());
+        self.mft.lock().unwrap().insert(record, fixed(rec));
     }
+}
+
+/// A record the way `FSCTL_GET_NTFS_FILE_RECORD` returns it: fixups already undone.
+fn fixed(rec: RecordBuilder) -> Vec<u8> {
+    let mut b = rec.build();
+    apply_fixups(&mut b).unwrap();
+    b
 }
 
 fn file(parent: u64, name: &str, alloc: u64) -> RecordBuilder {
@@ -141,7 +149,7 @@ fn changes_in_separate_reads_inside_the_window_are_one_batch() {
 fn a_deleted_file_is_removed() {
     let f = Arc::new(Fake::default());
     f.put(10, file(5, "other", 4096)); // the nearest in-use record below 31
-    let mut free = file(5, "was-here", 4096).build();
+    let mut free = fixed(file(5, "was-here", 4096));
     free[0x16] &= !1; // record 41 is still in the MFT but no longer in use
     f.mft.lock().unwrap().insert(41, free);
     f.script(vec![batch(1, &[31, 41]), end()]);
