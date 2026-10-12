@@ -2,6 +2,7 @@ pub mod app;
 pub mod fmt;
 pub mod layout;
 pub mod live;
+pub mod restore;
 #[cfg(windows)]
 pub mod draw;
 #[cfg(windows)]
