@@ -89,7 +89,7 @@ New module, elevated NTFS only. It sits behind a small trait for the volume call
 
 1. **Done** (plan `2026-10-12-plumb-live-updates-a.md`): `plumb-core` mutation (`DEAD`, `add_child`, `set_size`, `remove`, `rename`, `reparent`) and `RowModel::refresh` with anchoring; tests and benchmarks; no Win32 needed.
 2. **Done** (plan `2026-10-12-plumb-live-updates-b.md`): journal reader in `plumb-scan` with the fake volume; the spike and an elevated end-to-end check ran on 2026-10-12 (results below). Plan 3 consumes `JournalReader`, `Delta`, `FileState` and `MftReport::records`.
-3. UI wiring: record table, delta application with budget, live marker, rescan with state restoration, stale banner and Rescan button.
+3. **Written, not yet executed** (plan `2026-10-12-plumb-live-updates-c.md`): UI wiring: record table, delta application with budget, live marker, rescan with state restoration, stale banner and Rescan button. Its code was built and tested in a scratch worktree and the plan replays to the same tree.
 
 ## Journal reader as built, and spike results (2026-10-12)
 
