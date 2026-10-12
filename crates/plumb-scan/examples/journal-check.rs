@@ -66,9 +66,17 @@ fn main() {
     println!("journal {:#x}, next usn {}", info.id, info.next_usn);
 
     // How long does a blocking read wait when nothing happens? (Other activity may cut it short.)
-    let t = Instant::now();
-    let b = vol.read(info.next_usn, info.id, true).expect("idle read");
-    println!("idle blocking read: {} ms, {} entries (expect about 1000 ms on a quiet drive)", t.elapsed().as_millis(), b.entries.len());
+    // Repeats from where the last read ended until one comes back empty: that wait is the timeout.
+    let mut from = info.next_usn;
+    for _ in 0..8 {
+        let t = Instant::now();
+        let b = vol.read(from, info.id, true).expect("idle read");
+        println!("idle blocking read: {} ms, {} entries (expect about 1000 ms with 0 entries on a quiet drive)", t.elapsed().as_millis(), b.entries.len());
+        from = b.next_usn;
+        if b.entries.is_empty() {
+            break;
+        }
+    }
     let t = Instant::now();
     vol.read(info.next_usn, info.id, false).expect("non-blocking read");
     println!("non-blocking read: {} ms", t.elapsed().as_millis());
