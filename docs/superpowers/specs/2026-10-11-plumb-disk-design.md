@@ -59,7 +59,7 @@ Both implement `Scanner::scan(volume, &mut TreeBuilder, &Progress)` and produce 
 - A reader thread feeds a pool of parsers. Per 1 KiB record: apply update-sequence fixups, then read:
   - `$FILE_NAME`: parent reference, name, namespace. DOS-only (8.3) names are skipped so each file appears once.
   - `$DATA`: allocated size of the unnamed stream. Alternate data streams are ignored in v1.
-  - `$STANDARD_INFORMATION` / attributes: the directory flag. `$REPARSE_POINT`: the reparse tag.
+  - Record header flags (offset 0x16, bit 0x02): the directory flag. `$REPARSE_POINT`: the reparse tag.
   - Extension records are folded into their base record through the base-reference field.
 - Data stored resident inside the MFT record counts as 0 allocated bytes (it uses no clusters).
 - Parent links use the record number of the parent reference and are resolved in a second pass, because a parent can come after its child.
@@ -137,3 +137,11 @@ These are my estimates, to be measured, not claims:
 - Whether the thread count and BelowNormal priority starve the UI thread during a scan (measure UI frame time while scanning).
 - The memory cost per node for real drives versus the ~39 bytes plus name estimate.
 - That compressed, sparse and cloud-placeholder files report the same allocated size from both scanners.
+
+## Implementation plans
+
+Work is split into three plans, each producing tested software on its own:
+
+1. `plumb-core`: tree, row model, MFT record parser, synthetic inputs, benchmarks (`docs/superpowers/plans/2026-10-11-plumb-core.md`).
+2. Scanners: `MftScanner` and `WalkScanner`, merge pass (hard links, parent resolution), `scan-compare`.
+3. UI: Win32 window, D3D11 + Direct2D + DirectWrite, tree view.
