@@ -29,7 +29,7 @@ After a scan, keep the tree current as files change, without rescanning, while t
 
 ## Row model (`plumb-core`)
 
-- `RowModel::refresh(&mut self, tree, touched: &[NodeId])` drops the cached sorted order of every touched parent (and of each touched node's parent chain only as far as its children list changed), then rebuilds the flat row list.
+- `RowModel::refresh(&mut self, tree: &mut Tree, scroll: usize) -> usize` consumes `Tree::take_touched()` (so the list cannot be forgotten), drops the cached sorted order of every touched node and of its whole parent chain (their sizes changed), then rebuilds the flat row list and returns the anchored scroll. Cost: a change in a 1M-child folder re-sorts it (~244 ms measured); see `docs/benchmarks.md` for the parked incremental alternative.
 - Anchoring: before refresh, record the selected node and its screen row (index in the row list minus scroll). After refresh, find the node's new row index and return the scroll that keeps it at the same screen row, clamped to range. If the selected node died, select its nearest live ancestor.
 - Dead nodes never appear in rows. Their ids may linger in the expansion bitset; harmless, because they are never looked up again.
 
@@ -87,6 +87,6 @@ New module, elevated NTFS only. It sits behind a small trait for the volume call
 
 ## Plans
 
-1. `plumb-core` mutation (`DEAD`, `add_child`, `set_size`, `remove`, `rename`, `reparent`) and `RowModel::refresh` with anchoring; tests and benchmarks; no Win32 needed.
+1. **Done** (plan `2026-10-12-plumb-live-updates-a.md`): `plumb-core` mutation (`DEAD`, `add_child`, `set_size`, `remove`, `rename`, `reparent`) and `RowModel::refresh` with anchoring; tests and benchmarks; no Win32 needed.
 2. Journal reader in `plumb-scan` with the fake volume; the first spike answers the questions above; an elevated check.
 3. UI wiring: record table, delta application with budget, live marker, rescan with state restoration, stale banner and Rescan button.

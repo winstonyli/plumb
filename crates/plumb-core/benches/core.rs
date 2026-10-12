@@ -1,5 +1,5 @@
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use plumb_core::NodeId;
+use plumb_core::{NodeFlags, NodeId};
 use plumb_core::mft::{ParsedRecord, parse_record};
 use plumb_core::rows::RowModel;
 use plumb_core::synth::{RECORD_SIZE, RecordBuilder, flat_tree, kary_builder};
@@ -70,5 +70,63 @@ fn bench_rows(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_parse, bench_sums, bench_rows);
+fn bench_mutation(c: &mut Criterion) {
+    let mut g = c.benchmark_group("mutation");
+    g.sample_size(10);
+    g.throughput(Throughput::Elements(100_000));
+    // Leaves of the 8-ary tree start at node 625_000; directories are below that.
+    g.bench_function("apply_100k_deltas_to_5m_nodes", |b| {
+        b.iter_batched_ref(
+            || kary_builder(5_000_000, 8).finish().unwrap(),
+            |t| {
+                let name: Vec<u16> = "renamed".encode_utf16().collect();
+                for i in 0..100_000u32 {
+                    let leaf = NodeId(625_000 + i * 37);
+                    match i % 4 {
+                        0 => t.set_size(leaf, u64::from(i) * 13),
+                        1 => {
+                            t.add_child(NodeId(i % 600_000), &name, 4096, NodeFlags::empty());
+                        }
+                        2 => t.rename(leaf, &name),
+                        _ => {
+                            t.remove(leaf);
+                        }
+                    }
+                }
+                black_box(t.dead());
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    g.finish();
+}
+
+fn bench_refresh(c: &mut Criterion) {
+    let mut g = c.benchmark_group("rows");
+    g.sample_size(10);
+    g.bench_function("refresh_after_one_add_in_1m_children", |b| {
+        b.iter_batched_ref(
+            || {
+                let mut tree = flat_tree(1_000_000);
+                let mut m = RowModel::new(&tree);
+                m.expand(&tree, NodeId(0));
+                m.select(m.rows()[500_000].id);
+                tree.add_child(NodeId(0), &[0x61], 1 << 41, NodeFlags::empty());
+                (tree, m)
+            },
+            |(tree, m)| black_box(m.refresh(tree, 499_990)),
+            BatchSize::LargeInput,
+        );
+    });
+    g.bench_function("refresh_nothing_touched_in_1m_children", |b| {
+        let mut tree = flat_tree(1_000_000);
+        let mut m = RowModel::new(&tree);
+        m.expand(&tree, NodeId(0));
+        m.select(m.rows()[500_000].id);
+        b.iter(|| black_box(m.refresh(&mut tree, 499_990)));
+    });
+    g.finish();
+}
+
+criterion_group!(benches, bench_parse, bench_sums, bench_rows, bench_mutation, bench_refresh);
 criterion_main!(benches);

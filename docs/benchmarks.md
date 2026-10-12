@@ -46,6 +46,20 @@ Compare the walker over the user profile (3.37M files, 40-125 s). The MFT scan c
 
 Parity: `scan-compare` reports 0 differences between the walker and the MFT scanner on a fixture with plain, empty, 1-byte, resident-boundary, large, Unicode, 200-character-name, alternate-stream, compressed, sparse and junction entries. The first run found the walker counting resident data as its rounded length; fixed in `50d402e`.
 
+## Live updates, core mutation 2026-10-12
+
+Machine load during the run: ~49% CPU (other work; well over the 20% target, so pessimistic). Defender real-time protection: off. Criterion 10 samples.
+
+| Benchmark | Time (low / mid / high) | Throughput |
+|---|---|---|
+| mutation/apply_100k_deltas_to_5m_nodes | 48.0 / 53.1 / 58.9 ms | ~1.9 M deltas/s (mix of set_size, add_child, rename, remove) |
+| rows/refresh_after_one_add_in_1m_children | 235 / 244 / 254 ms | |
+| rows/refresh_nothing_touched_in_1m_children | 6.6 / 6.9 / 7.2 ms | |
+
+Findings for plan 3 (UI wiring):
+- One change in a very large folder re-sorts that folder (244 ms at 1M children, far over the 5 ms apply budget). Coalesce so `refresh` runs at most once per repaint tick. Parked: reposition only the changed element in the cached sorted order (remove plus binary insert, a memmove instead of a sort) for ancestors whose key changed and for added/removed children; do it if folders over ~100k children under live churn are seen to stall the UI.
+- A no-op `refresh` still rebuilds the row list (~7 ms at 1M visible rows); skip it when no delta was applied.
+
 ## UI
 
 Manual checklist (plan 3b, Task 3) passed on 2026-10-11 with nothing to note: scan progress, responsiveness while scanning, tree navigation and sorting, context menu, light/dark, DPI, exit, and the Run as administrator relaunch. No frame times or idle CPU were measured; the "scan threads starve the UI" question was answered by feel only. Hidden-window `plumb --selftest` picked the Radeon 780M (the laptop display's adapter).
