@@ -55,13 +55,13 @@ Size accounting:
 Both implement `Scanner::scan(root, &mut TreeBuilder, &Progress)`, where `root` is a drive root or any directory, and produce equivalent trees; they live in the `plumb-scan` crate. Default worker count is `min(cores - 4, 8)`, at BelowNormal priority.
 
 ### `MftScanner` (elevated, NTFS only)
-- Open `\\.\X:`; get the `$MFT` extents (`FSCTL_GET_NTFS_VOLUME_DATA`, retrieval pointers on `X:\$MFT`) and stream `$MFT` in large sector-aligned chunks (1-4 MB; unbuffered volume reads need aligned offsets and sizes). One sequential pass, no per-file I/O.
+- Open `\.X:`; read `FSCTL_GET_NTFS_VOLUME_DATA`, then read file record 0 at `MftStartLcn` and decode its `$DATA` data runs (no `FSCTL_GET_RETRIEVAL_POINTERS`). If the runs do not cover `MftValidDataLength` (an `$ATTRIBUTE_LIST`), fail and fall back to the walker; only 1024-byte records on volumes whose cluster size is a multiple of 1024 are supported. Stream `$MFT` in 4 MB cluster-aligned chunks (volume reads must be sector-aligned). One sequential pass, no per-file I/O.
 - A reader thread feeds a pool of parsers. Per 1 KiB record: apply update-sequence fixups, then read:
   - `$FILE_NAME`: parent reference, name, namespace. DOS-only (8.3) names are skipped so each file appears once.
   - `$DATA`: allocated size of the unnamed stream. Alternate data streams are ignored in v1.
   - Record header flags (offset 0x16, bit 0x02): the directory flag. `$REPARSE_POINT`: the reparse tag.
   - Extension records are folded into their base record through the base-reference field.
-- Data stored resident inside the MFT record counts as 0 allocated bytes (it uses no clusters).
+- Data stored resident inside the MFT record counts as 0 allocated bytes (it uses no clusters). The walker applies the same rule: an allocation that is not a whole number of clusters is resident data and counts as 0.
 - Parent links use the record number of the parent reference and are resolved in a second pass, because a parent can come after its child.
 
 ### `WalkScanner` (any volume, no admin)
@@ -133,10 +133,9 @@ These are my estimates, to be measured, not claims:
 
 ## Open questions to verify during M1
 
-- Whether `FSCTL_GET_RETRIEVAL_POINTERS` on `X:\$MFT` works on this machine's volumes without extra privileges; if not, decode the `$DATA` run list of MFT record 0 directly.
 - Whether the thread count and BelowNormal priority starve the UI thread during a scan (measure UI frame time while scanning).
 - The memory cost per node for real drives versus the ~39 bytes plus name estimate.
-- That compressed, sparse and cloud-placeholder files report the same allocated size from both scanners.
+- That cloud-placeholder files report the same allocated size from both scanners. (Compressed and sparse files were verified equal by `scan-compare` on 2026-10-11.)
 
 ## Implementation plans
 
@@ -144,5 +143,5 @@ Work is split into three plans, each producing tested software on its own:
 
 1. `plumb-core`: tree, row model, MFT record parser, synthetic inputs, benchmarks (`docs/superpowers/plans/2026-10-11-plumb-core.md`).
 2a. `plumb-scan`: `Scanner`, `MftMerger`, `WalkScanner` (`docs/superpowers/plans/2026-10-11-plumb-scan-a.md`).
-2b. `MftScanner` volume reader, scanner selection and fallback, `scan-compare` (needs an elevated run to verify).
+2b. `MftScanner` volume reader, scanner selection and fallback, `scan-compare` (`docs/superpowers/plans/2026-10-11-plumb-scan-b.md`; done, verified elevated).
 3. UI: Win32 window, D3D11 + Direct2D + DirectWrite, tree view.

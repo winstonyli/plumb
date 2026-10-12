@@ -31,3 +31,17 @@ Counts differ slightly between runs because other processes were creating files.
 Observations:
 - More threads did not help in this warm, loaded run (about 12 µs per entry on one thread). An earlier cold run in the verification session went from 124 s on 1 thread to 51 s on 4 threads, so threads help when I/O latency dominates.
 - Open question: with warm caches, is the limit the coordinator thread (it pushes every entry) or the kernel's directory-query path? Test on a quiet machine, and profile the coordinator, before tuning.
+
+## MFT scanner, full volume 2026-10-11
+
+`C:` (NTFS), elevated, release build, `scan-compare` (which also builds a 16-entry fixture, so each pass includes that). Machine load was not measured; other sessions were active. Defender real-time protection: off.
+
+| Run | Nodes | Stream (read + parse) | Link (merge) |
+|---|---|---|---|
+| First (cold) | 4,307,176 | 8.84 s | 0.76 s |
+| Warm, typical | ~4.307M | 2.7-3.5 s | 0.6-0.9 s |
+| Final run | 4,308,122 | 4.64 s | 0.60 s |
+
+Compare the walker over the user profile (3.37M files, 40-125 s). The MFT scan covers the whole volume in a few seconds, so the walker is the fallback only. Orphans: 0. Corrupt records: 0.
+
+Parity: `scan-compare` reports 0 differences between the walker and the MFT scanner on a fixture with plain, empty, 1-byte, resident-boundary, large, Unicode, 200-character-name, alternate-stream, compressed, sparse and junction entries. The first run found the walker counting resident data as its rounded length; fixed in `50d402e`.

@@ -1,6 +1,7 @@
 # plumb-scan (a): Merge Pass and WalkScanner Implementation Plan (Plan 2a of 3)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (inline; the tasks depend on each other) to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Note (2026-10-11):** after this plan was executed, `scan-compare` (plan 2b) showed the walker reported rounded data lengths for files stored inside the MFT record. The walker now counts an allocation that is not a whole number of clusters as 0 (commit `50d402e`), so the `walk.rs` listing below is slightly out of date; the repository has the current code.
 
 **Goal:** Add the `plumb-scan` crate with the `Scanner` trait, the pure MFT merge pass (`MftMerger`) and the no-admin `WalkScanner`, all tested without elevation.
 
