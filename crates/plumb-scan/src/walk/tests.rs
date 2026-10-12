@@ -78,6 +78,7 @@ fn sizes_are_allocated_bytes() {
     let five = t.size[find(&t, "b\\c\\five.dat")];
     assert!((5000..=5000 + 65_536).contains(&five) && five % 512 == 0, "five = {five}");
     assert_eq!(t.size[find(&t, "a")], 0); // directories count as 0
+    assert_eq!(t.size[find(&t, "a\\small.txt")], 0); // resident data uses no clusters
     assert_eq!(t.subtree_size[find(&t, "a")], t.size[find(&t, "a\\small.txt")] + big);
 }
 

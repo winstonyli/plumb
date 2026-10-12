@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+    CreateFileW, FILE_ATTRIBUTE_DIRECTORY, GetDiskFreeSpaceW, GetVolumePathNameW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FULL_DIR_INFO, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     FileFullDirectoryInfo, FileFullDirectoryRestartInfo, GetFileInformationByHandleEx, OPEN_EXISTING,
 };
@@ -64,7 +64,25 @@ impl Drop for Handle {
 }
 
 /// Lists one directory. `dir` is a `\\?\`-style wide path without a trailing NUL.
-fn list_dir(dir: &[u16], buf: &mut [u64]) -> Result<Vec<Entry>, ()> {
+/// Bytes per cluster of the volume holding `path` (a wide path without NUL); 0 if unknown.
+fn cluster_size(path: &[u16]) -> u64 {
+    let mut p = path.to_vec();
+    p.push(0);
+    let mut volume = [0u16; 261];
+    let (mut sectors, mut bytes) = (0u32, 0u32);
+    unsafe {
+        if GetVolumePathNameW(PCWSTR(p.as_ptr()), &mut volume).is_err() {
+            return 0;
+        }
+        match GetDiskFreeSpaceW(PCWSTR(volume.as_ptr()), Some(&mut sectors), Some(&mut bytes), None, None) {
+            Ok(()) => sectors as u64 * bytes as u64,
+            Err(_) => 0,
+        }
+    }
+}
+
+/// `cluster` is the volume's cluster size (0 = unknown).
+fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec<Entry>, ()> {
     let mut p = dir.to_vec();
     p.push(0);
     let h = unsafe {
@@ -107,7 +125,11 @@ fn list_dir(dir: &[u16], buf: &mut [u64]) -> Result<Vec<Entry>, ()> {
                 let reparse = e.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
                     && matches!(e.EaSize, IO_REPARSE_TAG_MOUNT_POINT | IO_REPARSE_TAG_SYMLINK);
                 // Directories count as 0: the MFT scanner does not count index allocation either.
-                let alloc = if is_dir { 0 } else { e.AllocationSize as u64 };
+                // Data stored inside the MFT record reports its length rounded to 8 bytes, which is
+                // never a whole number of clusters. It uses no clusters, so count it as 0 (as the
+                // MFT scanner does). Real allocations are whole clusters.
+                let raw = e.AllocationSize as u64;
+                let alloc = if is_dir || (cluster != 0 && raw % cluster != 0) { 0 } else { raw };
                 out.push(Entry { name, alloc, is_dir, reparse });
             }
             if e.NextEntryOffset == 0 {
@@ -132,6 +154,7 @@ impl Scanner for WalkScanner {
     fn scan(&self, root: &Path, out: &mut TreeBuilder, progress: &Progress) -> Result<(), ScanError> {
         let root = std::fs::canonicalize(root).map_err(ScanError::Root)?; // verbatim `\\?\` form
         let root_wide: Vec<u16> = root.as_os_str().encode_wide().collect();
+        let cluster = cluster_size(&root_wide);
         let shown = OsString::from_wide(&root_wide).to_string_lossy().into_owned();
         let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown).trim_end_matches('\\').to_string();
 
@@ -155,7 +178,7 @@ impl Scanner for WalkScanner {
                     // The lock is held only while waiting for a job, never while listing.
                     while let Ok(job) = rx.lock().unwrap().recv() {
                         let entries = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            list_dir(&job.path, &mut buf)
+                            list_dir(&job.path, &mut buf, cluster)
                         }))
                         .unwrap_or(Err(()));
                         if tx.send(Done { id: job.id, path: job.path, entries }).is_err() {
