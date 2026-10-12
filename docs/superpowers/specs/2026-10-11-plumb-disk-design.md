@@ -144,4 +144,5 @@ Work is split into three plans, each producing tested software on its own:
 1. `plumb-core`: tree, row model, MFT record parser, synthetic inputs, benchmarks (`docs/superpowers/plans/2026-10-11-plumb-core.md`).
 2a. `plumb-scan`: `Scanner`, `MftMerger`, `WalkScanner` (`docs/superpowers/plans/2026-10-11-plumb-scan-a.md`).
 2b. `MftScanner` volume reader, scanner selection and fallback, `scan-compare` (`docs/superpowers/plans/2026-10-11-plumb-scan-b.md`; done, verified elevated).
-3. UI: Win32 window, D3D11 + Direct2D + DirectWrite, tree view.
+3a. UI rendering and layout: `plumb` crate with layout, formatting, device stack and Direct2D painter, WARP smoke test (`docs/superpowers/plans/2026-10-11-plumb-ui-a.md`; done).
+3b. UI window: Win32 window and loop, swapchain, input, drive picker, scan wiring, context menu (not yet written).

@@ -233,6 +233,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "plumb"
+version = "0.1.0"
+dependencies = [
+ "plumb-core",
+ "windows",
+]
+
+[[package]]
 name = "plumb-core"
 version = "0.1.0"
 dependencies = [
