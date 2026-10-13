@@ -192,8 +192,6 @@ fn parse_chunks(rx: &Mutex<mpsc::Receiver<Chunk>>, merger: &Mutex<MftMerger>, re
                             dirs += 1;
                         } else {
                             files += 1;
-                            // A hint only: hard links and late extension records make it approximate.
-                            bytes += slot.data_alloc.unwrap_or(0);
                         }
                     }
                     numbers.push(number);
@@ -204,7 +202,8 @@ fn parse_chunks(rx: &Mutex<mpsc::Receiver<Chunk>>, merger: &Mutex<MftMerger>, re
         {
             let mut m = merger.lock().unwrap();
             for (k, &number) in numbers.iter().enumerate() {
-                m.add(number, &pool[k]);
+                // A progress hint: a hard-linked file counts once, though only one name carries its size.
+                bytes += m.add(number, &pool[k]);
             }
             for _ in 0..corrupt {
                 m.note_corrupt();

@@ -68,18 +68,19 @@ impl MftMerger {
     }
 
     /// Adds the parsed record number `number`. Base and extension records may arrive in any order.
-    pub fn add(&mut self, number: u64, rec: &ParsedRecord) {
+    /// Returns the allocated bytes this record newly gave its file (0 if none): a running size hint.
+    pub fn add(&mut self, number: u64, rec: &ParsedRecord) -> u64 {
         let owner = rec.base.unwrap_or(number);
         let (Some(o), Ok(own32)) = (usize::try_from(owner).ok().filter(|&o| o < self.flags.len()), u32::try_from(owner))
         else {
             self.corrupt += 1;
-            return;
+            return 0;
         };
         if rec.base.is_none() {
             self.flags[o] |= F_SEEN;
         }
         if !rec.in_use {
-            return;
+            return 0;
         }
         if rec.base.is_none() {
             self.flags[o] |= F_IN_USE;
@@ -96,15 +97,18 @@ impl MftMerger {
             self.pool.extend_from_slice(rec.name(e));
             self.names.push(NameRec { owner: own32, parent, off, len: e.len });
         }
-        if let Some(a) = rec.data_alloc {
-            if self.flags[o] & F_HAS_ALLOC == 0 {
-                self.flags[o] |= F_HAS_ALLOC;
-                self.alloc[o] = a;
-            }
+        let mut gained = 0;
+        if let Some(a) = rec.data_alloc
+            && self.flags[o] & F_HAS_ALLOC == 0
+        {
+            self.flags[o] |= F_HAS_ALLOC;
+            self.alloc[o] = a;
+            gained = a;
         }
         if is_name_surrogate(rec.reparse_tag) {
             self.flags[o] |= F_REPARSE;
         }
+        gained
     }
 
     fn name(&self, n: &NameRec) -> &[u16] {
