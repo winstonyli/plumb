@@ -91,6 +91,8 @@ pub struct App {
     pub live: LiveStatus,
     /// A background rescan is running while the old tree stays on screen.
     pub refreshing: bool,
+    /// The partial tree stopped following the scan; the status line says so.
+    pub preview_paused: bool,
     /// Header column last clicked (0 Name, 1 Size, 2 % of parent, 3 Items) and direction.
     sort: (usize, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
@@ -103,7 +105,7 @@ impl App {
         Self {
             layout, drives, adapter, active: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None,
-            live: LiveStatus::Off, refreshing: false, filter: Default::default(),
+            live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
     }
 
@@ -121,6 +123,7 @@ impl App {
         self.summary.clear();
         self.set_live(LiveStatus::Off);
         self.refreshing = false;
+        self.preview_paused = false;
         self.scan = Scan::Running { drive, dirs: 0, files: 0, bytes: 0 };
     }
 
@@ -144,7 +147,26 @@ impl App {
         self.scroll = 0;
         self.summary = summary;
         self.scan = Scan::Idle;
+        self.preview_paused = false;
         self.set_live(LiveStatus::Off);
+    }
+
+    /// The preview applier just created `self.tree` or dropped it (a scanner fell back to
+    /// another): build the rows for the tree, or show nothing. The scan state is untouched, so
+    /// the progress line keeps counting.
+    pub fn preview_installed(&mut self) {
+        self.filter_reset();
+        self.scroll = 0;
+        self.model = None;
+        let Some(tree) = &mut self.tree else { return };
+        tree.take_touched(); // the model is built from the tree as it is now
+        let mut model = RowModel::new(tree);
+        model.set_sort(tree, sort_key(self.sort.0), self.sort.1);
+        if let Some(r) = model.rows().first().map(|r| r.id) {
+            model.expand(tree, r);
+            model.select(r);
+        }
+        self.model = Some(model);
     }
 
     /// Replaces the tree with a rescanned one, keeping the sort, the expanded folders and the
@@ -164,6 +186,8 @@ impl App {
         self.scroll = scroll;
         self.summary = summary;
         self.refreshing = false;
+        self.scan = Scan::Idle;
+        self.preview_paused = false;
         self.filter_reset();
         self.set_live(LiveStatus::Off);
     }
@@ -191,6 +215,9 @@ impl App {
     }
 
     pub fn fail_scan(&mut self, msg: String) {
+        self.tree = None;
+        self.model = None;
+        self.preview_paused = false;
         self.scan = Scan::Failed(msg);
     }
 
@@ -347,7 +374,15 @@ impl App {
     }
 
     fn status(&self) -> String {
-        let mut parts = vec![if self.summary.is_empty() { "plumb".to_string() } else { self.summary.clone() }];
+        let head = match &self.scan {
+            Scan::Running { .. } => {
+                let paused = if self.preview_paused { "   (preview paused)" } else { "" };
+                format!("{}{paused}", self.message())
+            }
+            _ if self.summary.is_empty() => "plumb".to_string(),
+            _ => self.summary.clone(),
+        };
+        let mut parts = vec![head];
         match &self.live {
             LiveStatus::Off => {}
             LiveStatus::On { last: None } => parts.push("live".into()),
@@ -441,6 +476,48 @@ mod tests {
         let c = app().chips();
         assert_eq!(c[0].label, "C:  250 B free");
         assert!((c[0].used - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_preview_tree_is_browsable_and_the_final_tree_keeps_the_view() {
+        let mut a = app();
+        a.begin_scan(0);
+        a.tree = Some(kary_builder(60, 3).finish().unwrap());
+        a.preview_installed();
+        assert!(matches!(a.scan, Scan::Running { .. }), "the scan is still running");
+        assert!(a.model.as_ref().unwrap().rows().len() > 1, "the root is expanded");
+        assert!(a.status().starts_with("Scanning"));
+        // The user selects another row, then the exact tree (the same shape) arrives.
+        let second = a.model.as_ref().unwrap().rows()[1].id;
+        a.model.as_mut().unwrap().select(second);
+        let name = a.tree.as_ref().unwrap().path(second);
+        a.swap_tree(kary_builder(60, 3).finish().unwrap(), "done".into());
+        assert!(matches!(a.scan, Scan::Idle));
+        let sel = a.model.as_ref().unwrap().selected().unwrap();
+        assert_eq!(a.tree.as_ref().unwrap().path(sel), name, "the selection survives by path");
+        assert!(a.status().starts_with("done"));
+    }
+
+    #[test]
+    fn a_failed_scan_drops_the_preview() {
+        let mut a = app();
+        a.begin_scan(0);
+        a.tree = Some(kary_builder(10, 2).finish().unwrap());
+        a.preview_installed();
+        a.fail_scan("boom".into());
+        assert!(a.tree.is_none() && a.model.is_none());
+    }
+
+    #[test]
+    fn a_dropped_preview_tree_clears_the_view_but_not_the_scan() {
+        let mut a = app();
+        a.begin_scan(0);
+        a.tree = Some(kary_builder(10, 2).finish().unwrap());
+        a.preview_installed();
+        a.tree = None; // what the applier does on a Reset
+        a.preview_installed();
+        assert!(a.model.is_none());
+        assert!(matches!(a.scan, Scan::Running { .. }));
     }
 
     #[test]
