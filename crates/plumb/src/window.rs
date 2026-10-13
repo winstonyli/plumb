@@ -280,7 +280,7 @@ struct Win {
     borrowed: bool,
     /// The tooltip control, the icon button it last described, and the text it reads from (`tip_text`).
     tooltip: HWND,
-    tip: Option<&'static str>,
+    tip: Option<String>,
     tip_buf: Vec<u16>,
 }
 
@@ -424,7 +424,7 @@ impl Win {
         let tip = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(self.hwnd, &mut p).as_bool() }
             .then(|| self.app.tip_at(p.x as f32 * 96.0 / self.dpi, p.y as f32 * 96.0 / self.dpi - self.inset))
             .flatten();
-        self.tip_buf = tip.unwrap_or("").encode_utf16().chain([0]).collect();
+        self.tip_buf = tip.unwrap_or_default().encode_utf16().chain([0]).collect();
         self.tip_buf.as_ptr()
     }
 

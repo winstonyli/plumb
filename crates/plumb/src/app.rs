@@ -361,8 +361,14 @@ impl App {
         }
     }
 
-    pub fn tip_at(&self, x: f32, y: f32) -> Option<&'static str> {
-        self.button_at(x, y).map(|b| b.1)
+    /// The tooltip at (x, y): an icon button's name, or a drive chip's full free space (its label shows
+    /// only the free size, to fit).
+    pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
+        if let Hit::Chip(i) = self.layout.hit(x, y, self.drives.len()) {
+            let d = self.drives.get(i)?;
+            return Some(format!("{}: {} free of {}", d.letter, fmt::size(d.free), fmt::size(d.total)));
+        }
+        self.button_at(x, y).map(|b| b.1.to_string())
     }
 
     /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
@@ -532,7 +538,7 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, d)| Chip {
-                label: format!("{}:  {} free", d.letter, fmt::size(d.free)),
+                label: format!("{}:  {}", d.letter, fmt::size(d.free)),
                 used: 1.0 - fmt::fraction(d.free, d.total),
                 mark: if self.active == Some(i) { Mark::None } else { self.marks.get(i).copied().unwrap_or_default() },
             })
@@ -735,7 +741,7 @@ mod tests {
     #[test]
     fn chips_show_free_space_and_used_fraction() {
         let c = app().chips();
-        assert_eq!(c[0].label, "C:  250 B free");
+        assert_eq!(c[0].label, "C:  250 B");
         assert!((c[0].used - 0.75).abs() < 1e-6);
     }
 
@@ -852,9 +858,10 @@ mod tests {
         let mut a = app();
         a.can_elevate = true;
         let (admin, regex) = (a.layout.admin_button(), a.layout.filter_regex());
-        assert_eq!(a.tip_at(admin.x + 5.0, admin.y + 5.0), Some("Run as administrator"));
-        assert_eq!(a.tip_at(regex.x + 5.0, regex.y + 5.0), Some("Regular expression"));
-        assert_eq!(a.tip_at(a.layout.chip(0).x + 5.0, 10.0), None, "a labelled chip needs none");
+        assert_eq!(a.tip_at(admin.x + 5.0, admin.y + 5.0).as_deref(), Some("Run as administrator"));
+        assert_eq!(a.tip_at(regex.x + 5.0, regex.y + 5.0).as_deref(), Some("Regular expression"));
+        assert_eq!(a.tip_at(a.layout.chip(0).x + 5.0, 10.0).as_deref(), Some("C: 250 B free of 1000 B"), "a chip gives its free space in full");
+        assert_eq!(a.tip_at(a.layout.header().x + 5.0, a.layout.header().y + 5.0), None);
         a.can_elevate = false;
         assert_eq!(a.tip_at(admin.x + 5.0, admin.y + 5.0), None, "a hidden button has none");
     }
