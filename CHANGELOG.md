@@ -17,7 +17,7 @@ Live updates (milestone M2). Design: `docs/superpowers/specs/2026-10-12-plumb-li
 - Live updates need an elevated process on an NTFS drive scanned with the MFT scanner; the walker path stays static after a scan.
 - Only the first hard link of a file is tracked.
 - Re-sorting a very large folder on each refresh is not incremental (about 244 ms for 1M children).
-- Unverified: the journal `Timeout`/`BytesToWaitFor` units (no volume tried was quiet enough to see a timeout; the reader's spin guard bounds the cost); an automatic rescan after a wrapped journal on a real volume.
+- Unverified: the journal `Timeout`/`BytesToWaitFor` units (no volume tried was quiet enough to see a timeout; the reader's spin guard bounds the cost); an automatic rescan after a wrapped journal on a real volume (only the fake-source tests cover it; deleting and recreating the journal gives the stale banner instead).
 
 ## [0.1.0] - 2026-10-12
 
