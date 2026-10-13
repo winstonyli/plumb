@@ -1,6 +1,6 @@
 # plumb: partial tree while a scan runs (milestone M3, part 2)
 
-Status: approved, 2026-10-12. Builds on `2026-10-11-plumb-disk-design.md` ("no partial tree while a scan runs" was a v0.1 limitation), on the live-updates design (`Live`, `Tree` mutation, `swap_tree`, `Pacer`) and on the filter design (the filter follows tree changes through the touched-id log).
+Status: implemented, 2026-10-12 (plan: `docs/superpowers/plans/2026-10-12-plumb-partial-tree.md`). Builds on `2026-10-11-plumb-disk-design.md` ("no partial tree while a scan runs" was a v0.1 limitation), on the live-updates design (`Live`, `Tree` mutation, `swap_tree`, `Pacer`) and on the filter design (the filter follows tree changes through the touched-id log).
 
 ## Goal
 
@@ -94,6 +94,15 @@ After a dropped message the preview stops following (see Slow consumer); the pre
 - **Parked memory.** A `FileState` with a name is about 100 bytes. With the parent index, worst case is the whole volume parked (reverse order); the queue cap does not bound `parked`. Cap parked entries (for example 1M) and freeze the preview past it, like `lagged`.
 - **`Tree::touched` growth.** The log grows until `refresh` consumes it; a tick that applies without refreshing would grow it. The tick always refreshes.
 - **Two scanners, two feeders.** The walker replays pushes and the MFT scanner sends records, so there are two feeders, not one. This is accepted: they are small, and the apply side is shared (`Tree`, `Live`).
+
+## Amendments made while implementing
+
+1. **The MFT preview does not modify `Live`.** In a scan every record is seen once, so none of `Live`'s rename, move, remove or orphan machinery applies. `plumb::preview` has its own small applier (directory-only parents, parked children indexed by parent record, no `<orphans>`, extension-record sizes remembered until the file arrives, a 1M parked cap that freezes the preview). The "Changes to `Live`" list above is superseded.
+2. `Begin { root, nodes }` creates the MFT preview's root and reserves capacity; the walker's first `Add` (parent `NONE`) is its root. `Tree::reserve` removes the realloc outlier the spike saw.
+3. The preview timer is 15 ms with the 5 ms `APPLY_BUDGET`; row refreshes are paced by `Pacer`.
+4. `RowModel::refresh` clears its sort cache when more than 4096 nodes were touched.
+5. `swap_tree` ends the scan (`Scan::Idle`); `fail_scan` clears any preview tree; `preview_installed` serves both creation and a `Reset`. A `Reset` also unfreezes the applier.
+6. While `Scan::Running` the status line shows the scanning counts (the message line is drawn only without a tree).
 
 ## Out of scope
 

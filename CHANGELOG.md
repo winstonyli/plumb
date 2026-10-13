@@ -8,7 +8,12 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 - `plumb-core`: `filter` module (case-insensitive substring or regex name matching with the `regex` crate, a name snapshot for worker threads, hits and the keep set) and `RowModel::set_filter`, which shows matches and their ancestors and dims rows under a leaf match.
 - `plumb`: name filter. Ctrl+F (or a click) focuses a strip above the column headers; typing shows only the files and folders whose name contains the text (case-insensitive), with the folders on the way to them open. The Regex toggle reads the text as a regular expression; an invalid pattern keeps the previous result and tints the box. A matching folder with no matching content is shown collapsed and opens to dimmed rows. Esc clears the filter and restores the previous expansion and scroll. The scan runs on a worker thread 100 ms after the last keystroke, and the filter follows live updates and rescans.
 
+- `plumb`: partial tree while a scan runs. The tree appears within a second and folders fill in as they are found; sorting, expanding, selecting and the filter all work during the scan. When the scan ends the exact tree replaces the preview and your expansion, selection and scroll are kept. Works for both scanners. If the window falls too far behind the scan the status line says "preview paused" and the view stops changing until the exact tree arrives; the scan is not slowed. Design: `docs/superpowers/specs/2026-10-12-plumb-partial-tree-design.md`.
+- `plumb-scan`: `Progress` can carry a preview channel (`preview` module); `journal::state::file_state` shares the record-to-file rule with the journal reader.
+- `plumb-core`: `Tree::reserve`; `RowModel::refresh` drops its sort cache outright when more than 4096 nodes changed.
+
 ### Known limitations
+- The partial tree is approximate: only the first name of a hard-linked file appears, and records whose parent never arrives are not shown. The exact tree replaces it at the end. It needs about 200 MB more memory at 5M nodes until then.
 - The filter box takes direct keyboard input only: no IME composition, no mouse text selection or undo, and a click puts the caret at the end of the text. Text wider than the box is clipped.
 - A query matching most of a very large tree opens most folders; the first install on a 2M-node tree takes about 0.3 s on the UI thread.
 
