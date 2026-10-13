@@ -282,7 +282,7 @@ impl Pen<'_> {
         let r = l.filter_regex();
         self.fill(r, if f.regex { t.select } else { t.panel });
         self.frame(r, if f.regex { t.accent } else { t.select });
-        self.text("Regex", Rect { x: r.x + 16.0, w: r.w - 16.0, ..r }, if f.regex { t.accent } else { t.dim }, false);
+        self.centered("Regex", r, if f.regex { t.accent } else { t.dim });
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
 
@@ -349,7 +349,13 @@ impl Pen<'_> {
     fn button(&self, r: Rect, label: &str, t: &Theme) {
         self.fill(r, t.select);
         self.frame(r, t.accent);
-        self.text(label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
+        self.centered(label, r, t.accent);
+    }
+
+    /// `s` centred horizontally in `r` (and vertically, as `text` always is).
+    fn centered(&self, s: &str, r: Rect, c: D2D1_COLOR_F) {
+        let x = r.x + ((r.w - self.text_width(s)) / 2.0).max(0.0);
+        self.text(s, Rect { x, w: r.x + r.w - x, ..r }, c, false);
     }
 
     /// The shell's icon for `name` (or for a folder) in a 16-DIP square at `x`, `y`; a small drawn
