@@ -271,12 +271,18 @@ impl RowModel {
     pub fn refresh(&mut self, tree: &mut Tree, scroll: usize) -> usize {
         let touched = tree.take_touched();
         let tree = &*tree;
-        for t in touched {
-            self.cache.remove(&t);
-            let mut cur = t;
-            while !cur.is_none() {
-                cur = tree.parent[cur];
-                self.cache.remove(&cur);
+        // A long list (a scan being previewed) costs more to walk, ancestor by ancestor, than the
+        // sorted children lists cost to rebuild, so drop them all.
+        if touched.len() > 4096 {
+            self.cache.clear();
+        } else {
+            for t in touched {
+                self.cache.remove(&t);
+                let mut cur = t;
+                while !cur.is_none() {
+                    cur = tree.parent[cur];
+                    self.cache.remove(&cur);
+                }
             }
         }
         let anchor = self.selected_index().map(|i| (self.rows[i].id, i as isize - scroll as isize));

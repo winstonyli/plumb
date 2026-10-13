@@ -147,3 +147,24 @@ fn refresh_matches_a_fresh_model_after_random_mutations() {
         }
     }
 }
+
+/// A long touched list (a scan being previewed) takes the clear-everything path in `refresh`; the
+/// rows still match a model built from scratch.
+#[test]
+fn a_long_touched_list_refreshes_to_the_same_rows_as_a_fresh_model() {
+    let mut t = kary_builder(300, 3).finish().unwrap();
+    let mut m = RowModel::new(&t);
+    m.set_sort(&t, SortKey::Size, true);
+    expand_all(&mut m, &t);
+    let dirs: Vec<NodeId> = (0..t.len() as u32).map(NodeId).filter(|&n| t.flags[n].contains(NodeFlags::DIR)).collect();
+    for i in 0..5000usize {
+        t.add_child(dirs[i % dirs.len()], &u(&format!("p{i}")), (i as u64 * 7919) % 5000, NodeFlags::empty());
+    }
+    assert!(t.touched().len() > 4096);
+    m.refresh(&mut t, 0);
+    expand_all(&mut m, &t);
+    let mut fresh = RowModel::new(&t);
+    fresh.set_sort(&t, SortKey::Size, true);
+    expand_all(&mut fresh, &t);
+    assert_eq!(ids(&m), ids(&fresh));
+}
