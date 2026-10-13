@@ -90,8 +90,10 @@ fn scans_a_fragmented_mft() {
     .collect();
     assert_eq!(sorted(&t), want);
     assert_eq!(stats.corrupt, 0);
-    let (dirs, files, _) = p.snapshot();
+    let (dirs, files, bytes) = p.snapshot();
     assert_eq!((dirs, files), (2, 5)); // root and docs; $MFT, a, b, big, link
+    // The hint counts every in-use base file once; the tree total drops the second hard link.
+    assert!(bytes >= t.subtree_size[NodeId(0)] && bytes > 0, "bytes {bytes}");
 }
 
 #[test]

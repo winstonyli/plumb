@@ -178,7 +178,7 @@ fn parse_chunks(rx: &Mutex<mpsc::Receiver<Chunk>>, merger: &Mutex<MftMerger>, re
             pool.resize_with(n, ParsedRecord::default);
         }
         numbers.clear();
-        let (mut corrupt, mut files, mut dirs) = (0u64, 0u64, 0u64);
+        let (mut corrupt, mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64, 0u64);
         for (i, rec) in chunk.data.chunks_exact_mut(RECORD).enumerate() {
             let number = chunk.first_record + i as u64;
             if number >= record_count || rec[..4] == [0; 4] {
@@ -188,7 +188,13 @@ fn parse_chunks(rx: &Mutex<mpsc::Receiver<Chunk>>, merger: &Mutex<MftMerger>, re
             match parse_record(rec, slot) {
                 Ok(()) => {
                     if slot.in_use && slot.base.is_none() {
-                        if slot.is_dir { dirs += 1 } else { files += 1 }
+                        if slot.is_dir {
+                            dirs += 1;
+                        } else {
+                            files += 1;
+                            // A hint only: hard links and late extension records make it approximate.
+                            bytes += slot.data_alloc.unwrap_or(0);
+                        }
                     }
                     numbers.push(number);
                 }
@@ -206,6 +212,7 @@ fn parse_chunks(rx: &Mutex<mpsc::Receiver<Chunk>>, merger: &Mutex<MftMerger>, re
         }
         progress.dirs.fetch_add(dirs, Ordering::Relaxed);
         progress.files.fetch_add(files, Ordering::Relaxed);
+        progress.bytes.fetch_add(bytes, Ordering::Relaxed);
     }
 }
 
