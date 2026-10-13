@@ -1,4 +1,5 @@
 pub mod app;
+pub mod dirsync;
 pub mod filter_ui;
 pub mod fmt;
 pub mod layout;
