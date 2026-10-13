@@ -1,6 +1,7 @@
 //! `WalkScanner`: lists directories with `GetFileInformationByHandleEx`; works on any volume
 //! without admin rights. It cannot see hard links, so linked files are counted once per link.
 
+use crate::preview::PreviewMsg;
 use crate::{Progress, ScanError, Scanner};
 use plumb_core::{NodeFlags, NodeId, TreeBuilder};
 use std::ffi::{OsString, c_void};
@@ -163,6 +164,9 @@ impl Scanner for WalkScanner {
         let (done_tx, done_rx) = mpsc::channel::<Done>();
 
         let root_id = out.push_str(NodeId::NONE, &shown, 0, NodeFlags::DIR);
+        progress.emit(|| {
+            Some(PreviewMsg::Add { parent: NodeId::NONE, name: shown.encode_utf16().collect(), size: 0, flags: NodeFlags::DIR })
+        });
         progress.dirs.fetch_add(1, Ordering::Relaxed);
         job_tx.send(Job { id: root_id, path: root_wide }).unwrap();
         let mut outstanding = 1usize;
@@ -195,6 +199,7 @@ impl Scanner for WalkScanner {
                 outstanding -= 1;
                 let Ok(entries) = done.entries else {
                     out.add_flags(done.id, NodeFlags::DENIED);
+                    progress.emit(|| Some(PreviewMsg::Denied(done.id)));
                     continue;
                 };
                 for e in entries {
@@ -206,6 +211,7 @@ impl Scanner for WalkScanner {
                         flags |= NodeFlags::REPARSE;
                     }
                     let id = out.push(done.id, &e.name, e.alloc, flags);
+                    progress.emit(|| Some(PreviewMsg::Add { parent: done.id, name: e.name.to_vec(), size: e.alloc, flags }));
                     if e.is_dir {
                         progress.dirs.fetch_add(1, Ordering::Relaxed);
                     } else {

@@ -36,6 +36,9 @@ pub fn scan_auto(root: &Path, out: &mut TreeBuilder, progress: &Progress) -> Res
                     for c in [&progress.dirs, &progress.files, &progress.bytes] {
                         c.store(0, Ordering::Relaxed);
                     }
+                    if let Some(p) = &progress.preview {
+                        p.reset();
+                    }
                     let ScanError::Mft(msg) = &e else { return Err(e) };
                     note = Some(format!("MFT scan failed ({msg}); used the directory walker instead"));
                 }

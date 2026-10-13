@@ -117,3 +117,25 @@ fn missing_root_is_an_error() {
     let r = WalkScanner::default().scan(Path::new("C:\\definitely\\not\\here\\plumb"), &mut b, &p);
     assert!(matches!(r, Err(ScanError::Root(_))));
 }
+
+#[test]
+fn the_walker_sends_one_add_per_node_in_builder_order() {
+    use crate::preview::{PreviewMsg, channel};
+    let f = fixture("preview");
+    let (tx, rx) = channel(1 << 16);
+    let p = Progress::with_preview(tx);
+    let mut b = TreeBuilder::new();
+    WalkScanner { threads: 2 }.scan(&f.0, &mut b, &p).unwrap();
+    let t = b.finish().unwrap();
+    let mut adds = Vec::new();
+    while let Some(m) = rx.try_recv() {
+        if let PreviewMsg::Add { parent, name, size, flags } = m {
+            adds.push((parent, name, size, flags));
+        }
+    }
+    assert_eq!(adds.len(), t.len());
+    for (i, (parent, name, size, flags)) in adds.iter().enumerate() {
+        let id = NodeId(i as u32);
+        assert_eq!((*parent, name.as_slice(), *size, *flags), (t.parent[id], t.name(id), t.size[id], t.flags[id]), "node {i}");
+    }
+}
