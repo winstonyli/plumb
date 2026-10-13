@@ -19,11 +19,10 @@ impl VolumeRead for Image {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
         assert_eq!(offset % SECTOR as u64, 0, "unaligned offset");
         assert_eq!(buf.len() % SECTOR, 0, "unaligned length");
-        if let Some(f) = self.fail_at {
-            if (offset..offset + buf.len() as u64).contains(&f) {
+        if let Some(f) = self.fail_at
+            && (offset..offset + buf.len() as u64).contains(&f) {
                 return Err(io::Error::other("injected read failure"));
             }
-        }
         buf.copy_from_slice(&self.data[offset as usize..offset as usize + buf.len()]);
         Ok(())
     }

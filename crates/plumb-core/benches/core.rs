@@ -26,7 +26,7 @@ fn bench_parse(c: &mut Criterion) {
         b.iter_batched_ref(
             || chunk.clone(),
             |buf| {
-                for rec in buf.chunks_exact_mut(RECORD_SIZE) {
+                for rec in buf.as_chunks_mut::<RECORD_SIZE>().0 {
                     parse_record(rec, &mut out).unwrap();
                     black_box(&out);
                 }

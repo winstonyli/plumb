@@ -266,21 +266,19 @@ impl App {
             Input::Tab => self.filter.ui.focus = !self.filter.ui.focus,
             Input::Click(x, y) => return self.click(x, y),
             Input::DoubleClick(x, y) => {
-                if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len()) {
-                    if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
+                if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len())
+                    && let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
                         m.select(id);
                         m.toggle(t, id);
                         self.set_scroll(self.scroll);
                     }
-                }
             }
             Input::RightClick(x, y) => {
-                if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len()) {
-                    if let (Some(id), Some(m)) = (self.row_at(i), &mut self.model) {
+                if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len())
+                    && let (Some(id), Some(m)) = (self.row_at(i), &mut self.model) {
                         m.select(id);
                         return Effect::Menu(id);
                     }
-                }
             }
             Input::Drag(y) => {
                 if let Some(g) = self.grab {

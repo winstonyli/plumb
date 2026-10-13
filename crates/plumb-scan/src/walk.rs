@@ -123,7 +123,7 @@ pub(crate) fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec
                 // never a whole number of clusters. It uses no clusters, so count it as 0 (as the
                 // MFT scanner does). Real allocations are whole clusters.
                 let raw = e.AllocationSize as u64;
-                let alloc = if is_dir || (cluster != 0 && raw % cluster != 0) { 0 } else { raw };
+                let alloc = if is_dir || (cluster != 0 && !raw.is_multiple_of(cluster)) { 0 } else { raw };
                 out.push(Entry { name, alloc, is_dir, reparse });
             }
             if e.NextEntryOffset == 0 {

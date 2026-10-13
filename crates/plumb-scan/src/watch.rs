@@ -105,7 +105,7 @@ fn parse_notify(buf: &[u8]) -> Vec<(u32, Vec<u16>)> {
         if off + 12 + len > buf.len() {
             break;
         }
-        let name = buf[off + 12..off + 12 + len].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let name = buf[off + 12..off + 12 + len].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         out.push((action, name));
         if next == 0 {
             break;

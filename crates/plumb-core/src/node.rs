@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn vec_indexes_by_node_id() {
-        let mut v = vec![10u64, 20, 30];
+        let mut v = [10u64, 20, 30];
         assert_eq!(v[NodeId(1)], 20);
         v[NodeId(2)] = 99;
         assert_eq!(v[2], 99);

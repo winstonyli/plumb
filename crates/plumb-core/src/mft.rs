@@ -152,7 +152,7 @@ fn parse_attributes(buf: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError
             break;
         }
         let len = u32_at(buf, off + 4)? as usize;
-        if len < 0x18 || len % 8 != 0 || off + len > used {
+        if len < 0x18 || !len.is_multiple_of(8) || off + len > used {
             return Err(ParseError::BadAttribute);
         }
         let a = &buf[off..off + len];
@@ -188,7 +188,7 @@ pub fn mft_extents(buf: &mut [u8]) -> Result<Vec<Extent>, ParseError> {
             break;
         }
         let len = u32_at(buf, off + 4)? as usize;
-        if len < 0x18 || len % 8 != 0 || off + len > used {
+        if len < 0x18 || !len.is_multiple_of(8) || off + len > used {
             return Err(ParseError::BadAttribute);
         }
         let a = &buf[off..off + len];
@@ -248,7 +248,7 @@ fn parse_file_name(a: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError> {
     let n = v[0x40] as usize;
     let chars = v.get(0x42..0x42 + 2 * n).ok_or(ParseError::BadAttribute)?;
     let off = out.name_pool.len() as u32;
-    out.name_pool.extend(chars.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])));
+    out.name_pool.extend(chars.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])));
     out.names.push(NameEntry { parent: u64_at(v, 0)? & REF_MASK, off, len: n as u8, namespace });
     Ok(())
 }

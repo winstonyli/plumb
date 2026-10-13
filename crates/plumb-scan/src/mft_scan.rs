@@ -182,7 +182,7 @@ fn parse_chunks(rx: &Mutex<mpsc::Receiver<Chunk>>, merger: &Mutex<MftMerger>, re
         }
         numbers.clear();
         let (mut corrupt, mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64, 0u64);
-        for (i, rec) in chunk.data.chunks_exact_mut(RECORD).enumerate() {
+        for (i, rec) in chunk.data.as_chunks_mut::<RECORD>().0.iter_mut().enumerate() {
             let number = chunk.first_record + i as u64;
             if number >= record_count || rec[..4] == [0; 4] {
                 continue; // beyond the valid length, or an unallocated slot

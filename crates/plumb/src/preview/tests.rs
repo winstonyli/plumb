@@ -44,7 +44,7 @@ fn the_walker_replay_equals_the_builder_tree() {
     let mut dirs = vec![root];
     for i in 0..500u32 {
         let parent = dirs[lcg(&mut seed) as usize % dirs.len()];
-        if lcg(&mut seed) % 4 == 0 {
+        if lcg(&mut seed).is_multiple_of(4) {
             dirs.push(push(&mut b, parent, &format!("d{i}"), 0, NodeFlags::DIR));
         } else {
             push(&mut b, parent, &format!("f{i}"), lcg(&mut seed) % 5000, NodeFlags::empty());
