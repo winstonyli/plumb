@@ -53,11 +53,11 @@ Machine load during the run: ~49% CPU (other work; well over the 20% target, so 
 | Benchmark | Time (low / mid / high) | Throughput |
 |---|---|---|
 | mutation/apply_100k_deltas_to_5m_nodes | 48.0 / 53.1 / 58.9 ms | ~1.9 M deltas/s (mix of set_size, add_child, rename, remove) |
-| rows/refresh_after_one_add_in_1m_children | 235 / 244 / 254 ms | |
+| rows/refresh_after_one_add_in_1m_children | 8.3 / 8.9 / 9.6 ms | was 244 ms before `reposition` (2026-10-12, ~49% machine load) |
 | rows/refresh_nothing_touched_in_1m_children | 6.6 / 6.9 / 7.2 ms | |
 
 Findings for plan 3 (UI wiring):
-- One change in a very large folder re-sorts that folder (244 ms at 1M children, far over the 5 ms apply budget). Coalesce so `refresh` runs at most once per repaint tick. Parked: reposition only the changed element in the cached sorted order (remove plus binary insert, a memmove instead of a sort) for ancestors whose key changed and for added/removed children; do it if folders over ~100k children under live churn are seen to stall the UI.
+- One change in a very large folder re-sorts that folder (244 ms at 1M children, far over the 5 ms apply budget). Coalesce so `refresh` runs at most once per repaint tick. Done: `RowModel::reposition` drops the touched nodes and their ancestors from each affected cached list and merges them back in one pass (no re-sort); the remaining ~9 ms is the merge copy plus the row-list rebuild.
 - A no-op `refresh` still rebuilds the row list (~7 ms at 1M visible rows); skip it when no delta was applied.
 
 ## UI

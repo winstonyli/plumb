@@ -47,6 +47,8 @@ pub struct RowModel {
     filter: Option<Rc<Keep>>,
     /// Ancestors of matches the user collapsed while a filter is active (they are open by default).
     closed: Vec<u64>,
+    /// Scratch for `reposition`: nodes whose sort position may have changed. All false between calls.
+    mark: Vec<bool>,
 }
 
 fn cmp_names(a: &[u16], b: &[u16]) -> Ordering {
@@ -70,6 +72,7 @@ impl RowModel {
             cache: HashMap::new(),
             filter: None,
             closed: Vec::new(),
+            mark: Vec::new(),
         };
         m.rebuild(tree);
         m
@@ -149,18 +152,73 @@ impl RowModel {
         }
         let mut ids: Vec<NodeId> =
             if parent.is_none() { tree.roots.clone() } else { tree.children(parent).collect() };
-        let (key, desc) = (self.key, self.desc);
-        ids.sort_unstable_by(|&a, &b| {
-            let o = match key {
-                SortKey::Size => tree.subtree_size[a].cmp(&tree.subtree_size[b]),
-                SortKey::Items => tree.subtree_files[a].cmp(&tree.subtree_files[b]),
-                SortKey::Name => cmp_names(tree.name(a), tree.name(b)),
-            };
-            (if desc { o.reverse() } else { o }).then(a.cmp(&b))
-        });
+        ids.sort_unstable_by(|&a, &b| self.order(tree, a, b));
         let rc: Rc<[NodeId]> = ids.into();
         self.cache.insert(parent, Rc::clone(&rc));
         rc
+    }
+
+    /// The sort: by the key in the chosen direction, ties by id so the order is total.
+    fn order(&self, tree: &Tree, a: NodeId, b: NodeId) -> Ordering {
+        let o = match self.key {
+            SortKey::Size => tree.subtree_size[a].cmp(&tree.subtree_size[b]),
+            SortKey::Items => tree.subtree_files[a].cmp(&tree.subtree_files[b]),
+            SortKey::Name => cmp_names(tree.name(a), tree.name(b)),
+        };
+        (if self.desc { o.reverse() } else { o }).then(a.cmp(&b))
+    }
+
+    /// Fixes the cached sorted lists after `touched` nodes changed, without re-sorting them. A node
+    /// that changed, and every ancestor of it (their sums moved), may sit in the wrong place in its
+    /// parent's list; everything else still sorts as before. Per affected list: drop those nodes,
+    /// sort the (few) live ones, and merge them back in one pass.
+    fn reposition(&mut self, tree: &Tree, touched: &[NodeId]) {
+        if self.cache.is_empty() {
+            return;
+        }
+        if self.mark.len() < tree.len() {
+            self.mark.resize(tree.len(), false);
+        }
+        let mut dirty: Vec<NodeId> = Vec::new();
+        for &t in touched {
+            let mut cur = t;
+            while !cur.is_none() && !self.mark[cur] {
+                self.mark[cur] = true;
+                dirty.push(cur);
+                cur = tree.parent[cur];
+            }
+        }
+        let mut by_parent: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for &d in &dirty {
+            // A node's own list may hold children that moved away (the old parent of a reparent).
+            if self.cache.contains_key(&d) {
+                by_parent.entry(d).or_default();
+            }
+            let p = tree.parent[d];
+            if self.cache.contains_key(&p) {
+                let v = by_parent.entry(p).or_default();
+                if !tree.flags[d].contains(NodeFlags::DEAD) {
+                    v.push(d);
+                }
+            }
+        }
+        for (p, mut fresh) in by_parent {
+            fresh.sort_unstable_by(|&a, &b| self.order(tree, a, b));
+            let old = Rc::clone(&self.cache[&p]);
+            let mut out: Vec<NodeId> = Vec::with_capacity(old.len() + fresh.len());
+            let mut next = fresh.iter().copied().peekable();
+            for &e in old.iter().filter(|&&e| !self.mark[e]) {
+                while let Some(f) = next.next_if(|&f| self.order(tree, f, e) == Ordering::Less) {
+                    out.push(f);
+                }
+                out.push(e);
+            }
+            out.extend(next);
+            self.cache.insert(p, out.into());
+        }
+        for d in dirty {
+            self.mark[d] = false;
+        }
     }
 
     fn push_children(&mut self, tree: &Tree, parent: NodeId, depth: u16, out: &mut Vec<Row>) {
@@ -276,14 +334,7 @@ impl RowModel {
         if touched.len() > 4096 {
             self.cache.clear();
         } else {
-            for t in touched {
-                self.cache.remove(&t);
-                let mut cur = t;
-                while !cur.is_none() {
-                    cur = tree.parent[cur];
-                    self.cache.remove(&cur);
-                }
-            }
+            self.reposition(tree, &touched);
         }
         let anchor = self.selected_index().map(|i| (self.rows[i].id, i as isize - scroll as isize));
         let words = tree.len().div_ceil(64);
@@ -334,6 +385,64 @@ mod tests {
     // sample(): 0=C:, 1=big, 2=f1(100), 3=f2(300), 4=mid, 5=g(150), 6=small(50)
     fn ids(m: &RowModel) -> Vec<u32> {
         m.rows().iter().map(|r| r.id.0).collect()
+    }
+
+    /// Every cached sorted list equals a fresh sort of the same parent's live children.
+    fn assert_cache_fresh(m: &RowModel, tree: &Tree) {
+        for (&p, list) in &m.cache {
+            if !p.is_none() && tree.flags[p].contains(NodeFlags::DEAD) {
+                continue; // nothing reads the list of a removed folder
+            }
+            let mut want: Vec<NodeId> = if p.is_none() { tree.roots.clone() } else { tree.children(p).collect() };
+            want.sort_unstable_by(|&a, &b| m.order(tree, a, b));
+            assert_eq!(&list[..], &want[..], "stale sorted list for parent {p:?}");
+        }
+    }
+
+    #[test]
+    fn repositioning_keeps_every_cached_list_equal_to_a_fresh_sort() {
+        for key in [SortKey::Size, SortKey::Items, SortKey::Name] {
+            let mut tree = crate::synth::kary_builder(400, 5).finish().unwrap();
+            let mut m = RowModel::new(&tree);
+            m.set_sort(&tree, key, true);
+            for id in 0..80 {
+                m.expand(&tree, NodeId(id)); // fills the caches for the upper levels
+            }
+            let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+            let mut rnd = |n: u64| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (seed >> 33) % n
+            };
+            for step in 0..400 {
+                let live: Vec<NodeId> = (0..tree.len() as u32).map(NodeId).filter(|&n| !tree.flags[n].contains(NodeFlags::DEAD)).collect();
+                let dirs: Vec<NodeId> = live.iter().copied().filter(|&n| tree.flags[n].contains(NodeFlags::DIR)).collect();
+                let pick = |v: &[NodeId], r: u64| v[r as usize % v.len()];
+                for _ in 0..1 + rnd(3) {
+                    match rnd(5) {
+                        0 => {
+                            let name = format!("n{step}x{}", rnd(100)).encode_utf16().collect::<Vec<u16>>();
+                            let (dir, size) = (pick(&dirs, rnd(1000)), rnd(5000));
+                            tree.add_child(dir, &name, size, NodeFlags::empty());
+                        }
+                        1 => tree.set_size(pick(&live, rnd(1000)), rnd(5000)),
+                        2 => {
+                            let id = pick(&live, rnd(1000));
+                            tree.remove(id);
+                        }
+                        3 => {
+                            let name = format!("r{step}{}", rnd(100)).encode_utf16().collect::<Vec<u16>>();
+                            tree.rename(pick(&live, rnd(1000)), &name);
+                        }
+                        _ => {
+                            let (id, to) = (pick(&live, rnd(1000)), pick(&dirs, rnd(1000)));
+                            tree.reparent(id, to);
+                        }
+                    }
+                }
+                m.refresh(&mut tree, 0);
+                assert_cache_fresh(&m, &tree);
+            }
+        }
     }
 
     #[test]
