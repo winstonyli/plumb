@@ -67,3 +67,17 @@ Manual checklist (plan 3b, Task 3) passed on 2026-10-11 with nothing to note: sc
 Idle check, 2026-10-11 (release build, launched minimized on the 780M, no scan; machine CPU 66% from other work, Defender state not checked): 0.00% of a core over 10 s; working set 38.6 MB, private bytes 29.0 MB (spec target: under 30 MB, so private meets it and working set does not); main window existed 220 ms after launch (not a first-frame time). Script: a throwaway PowerShell snippet, not kept. Repeat on a quiet machine before trusting the memory figure.
 
 Where the idle memory goes (2026-10-11, throwaway example, release build; each figure is private bytes): process start 1.4 MB; creating the D3D11 + D2D + DirectWrite stack on the Radeon 780M 29.4 MB; on the WARP software device 2.7 MB. A full-window render target plus first paint adds about 4-9 MB (varied run to run) and then plateaus: 200 further paints grew nothing. So about 27 MB of the idle footprint is the AMD user-mode driver loaded by creating a hardware device; plumb's own share is a few MB. The working-set figure (38.6 MB) adds shared DLL pages on top. Meeting "under 30 MB" with a hardware device is not possible; using WARP for this mostly static text UI would, at the cost of CPU drawing and of breaking the spec's "adapter that owns the monitor" decision. Not done; parked.
+
+## Partial-tree spike, MFT records through `Live::apply` 2026-10-12
+
+Throwaway example (deleted after the run; the code replayed `scan_auto`'s MFT records in record order as `Delta::Upsert`s through `Live::apply` into a fresh tree, 4096-record chunks, 5 ms slices, timing only the applying). `C:` elevated, release build, machine load not measured, Defender state not recorded.
+
+| Measure | Value |
+|---|---|
+| MFT scan | 3.19 s wall (stream 2.46 s, link 0.56 s), 4,364,019 nodes, 4,586,496 record slots |
+| Upserts applied | 4,086,853 in 507 ms: 124 ns each, 8.06 M/s, 16% of the scan wall time |
+| Slices | 1122; worst 17.99 ms (at record 3,321,856), over the 5 ms budget; cause not found (a `Vec` regrowth or a parked retry) |
+| Parked at the end | none |
+| Preview tree | 4,086,855 nodes against 4,364,019 exact (only the first name of a hard-linked file); root subtree 832,802,152,448 B, identical to the exact tree |
+
+Conclusion: the UI thread keeps up with an MFT scan with a wide margin. The worst slice is one outlier to chase in the plan (pre-reserve capacity, then re-measure).

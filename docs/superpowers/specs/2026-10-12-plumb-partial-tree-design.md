@@ -1,6 +1,6 @@
 # plumb: partial tree while a scan runs (milestone M3, part 2)
 
-Status: draft for review, 2026-10-12. Builds on `2026-10-11-plumb-disk-design.md` ("no partial tree while a scan runs" was a v0.1 limitation), on the live-updates design (`Live`, `Tree` mutation, `swap_tree`, `Pacer`) and on the filter design (the filter follows tree changes through the touched-id log).
+Status: approved, 2026-10-12. Builds on `2026-10-11-plumb-disk-design.md` ("no partial tree while a scan runs" was a v0.1 limitation), on the live-updates design (`Live`, `Tree` mutation, `swap_tree`, `Pacer`) and on the filter design (the filter follows tree changes through the touched-id log).
 
 ## Goal
 
@@ -90,7 +90,7 @@ After a dropped message the preview stops following (see Slow consumer); the pre
 
 ## Risks and open questions
 
-- **Preview throughput on the MFT scanner.** The whole scan is 3-10 s on `C:` and the tree applies about 1.9M mixed deltas/s (measured for 100k deltas on a 5M tree; unmeasured for 4.3M `add_child` plus parking), so the preview may trail the scan and finish about when it does. Gate: a spike on `C:` (elevated, needs the user's go-ahead) before the plan is written; if the UI cannot keep within the cap, lower the per-record cost (skip files below a size threshold in the preview, send directories first) rather than raise the cap.
+- **Preview throughput on the MFT scanner.** Measured by a spike on `C:` (2026-10-12, `docs/benchmarks.md`): 4.09M upserts apply in 507 ms (124 ns each, 16% of the 3.2 s scan), the preview's root size equals the exact tree's, and nothing stays parked. The worst of 1122 slices took 18 ms against the 5 ms budget; the plan pre-reserves tree capacity and re-measures.
 - **Parked memory.** A `FileState` with a name is about 100 bytes. With the parent index, worst case is the whole volume parked (reverse order); the queue cap does not bound `parked`. Cap parked entries (for example 1M) and freeze the preview past it, like `lagged`.
 - **`Tree::touched` growth.** The log grows until `refresh` consumes it; a tick that applies without refreshing would grow it. The tick always refreshes.
 - **Two scanners, two feeders.** The walker replays pushes and the MFT scanner sends records, so there are two feeders, not one. This is accepted: they are small, and the apply side is shared (`Tree`, `Live`).
