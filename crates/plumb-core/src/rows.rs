@@ -128,6 +128,13 @@ impl RowModel {
         }
     }
 
+    /// Swaps in a rebuilt keep set for the filter that is already active, without rebuilding the
+    /// rows. Call [`RowModel::refresh`] next: it clears the stale sort caches and builds the rows.
+    pub fn update_keep(&mut self, keep: Rc<Keep>) {
+        debug_assert!(self.filter.is_some(), "update_keep needs an active filter");
+        self.filter = Some(keep);
+    }
+
     fn row_index(&self, id: NodeId) -> Option<usize> {
         self.rows.iter().position(|r| r.id == id)
     }

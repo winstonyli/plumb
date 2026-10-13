@@ -150,3 +150,19 @@ fn filtered_rows_follow_live_changes_like_a_fresh_filter() {
     assert_eq!(ids(&m), oracle(&t, "f"));
     assert_eq!(ids(&m), vec![0, 1, 3, 4, 7]); // big (300), mid (155) with ff
 }
+
+#[test]
+fn update_keep_then_refresh_equals_a_fresh_filter() {
+    let mut t = sample();
+    let mut m = RowModel::new(&t);
+    m.set_filter(&t, Some(keep(&t, "f")));
+    // a new match under `mid` (4): its folder and C: must now show it
+    let new = t.add_child(NodeId(4), &u("fresh"), 10, crate::NodeFlags::empty());
+    let k = keep(&t, "f");
+    m.update_keep(k.clone());
+    m.refresh(&mut t, 0);
+    let mut fresh = RowModel::new(&t);
+    fresh.set_filter(&t, Some(k));
+    assert_eq!(ids(&m), ids(&fresh));
+    assert!(ids(&m).contains(&new.0));
+}
