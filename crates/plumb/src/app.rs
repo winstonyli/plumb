@@ -58,6 +58,8 @@ pub enum Input {
     Escape,
     Enter,
     Tab,
+    /// The mouse moved with no button held (or left the window: any point outside the rows).
+    Hover(f32, f32),
 }
 
 #[derive(Debug, PartialEq)]
@@ -117,6 +119,8 @@ pub struct App {
     pub active: Option<usize>,
     /// What each drive off screen holds, shown on its chip; set by the window.
     pub marks: Vec<Mark>,
+    /// The visible row under the mouse.
+    pub hover: Option<usize>,
     pub tree: Option<Tree>,
     pub model: Option<RowModel>,
     pub scroll: usize,
@@ -141,7 +145,7 @@ pub struct App {
 impl App {
     pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
         Self {
-            layout, drives, adapter, active: None, marks: Vec::new(), tree: None, model: None, scroll: 0,
+            layout, drives, adapter, active: None, marks: Vec::new(), hover: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
@@ -361,6 +365,12 @@ impl App {
             }
             Input::Enter => self.filter_enter(),
             Input::Tab => self.filter.ui.focus = !self.filter.ui.focus,
+            Input::Hover(x, y) => {
+                self.hover = match self.layout.hit(x, y, self.drives.len()) {
+                    Hit::Row(i) if self.row_at(i).is_some() => Some(i),
+                    _ => None,
+                };
+            }
             Input::Click(x, y) => return self.click(x, y),
             Input::DoubleClick(x, y) => {
                 if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len())
@@ -492,7 +502,6 @@ impl App {
         if self.refreshing {
             parts.push("refreshing\u{2026}".into());
         }
-        parts.push(self.adapter.clone());
         parts.join("   |   ")
     }
 
@@ -509,7 +518,7 @@ impl App {
         let (message, status, banner) = (self.message(), self.status(), self.banner());
         let count = self.filter_count();
         let view = match (&self.tree, &self.model) {
-            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }) }),
+            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), hover: self.hover }),
             _ => None,
         };
         f(&Scene {
@@ -522,6 +531,7 @@ impl App {
             view,
             message: &message,
             status: &status,
+            adapter: &self.adapter,
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),
         })
@@ -799,12 +809,12 @@ mod tests {
     #[test]
     fn the_status_line_shows_the_live_marker_and_refreshing() {
         let mut a = scanned();
-        assert_eq!(a.status(), "done   |   test");
+        assert_eq!(a.status(), "done");
         a.set_live(LiveStatus::On { last: None });
-        assert_eq!(a.status(), "done   |   live   |   test");
+        assert_eq!(a.status(), "done   |   live");
         a.live_changed("12:03:41".into());
         a.refreshing = true;
-        assert_eq!(a.status(), "done   |   live, last change 12:03:41   |   refreshing\u{2026}   |   test");
+        assert_eq!(a.status(), "done   |   live, last change 12:03:41   |   refreshing\u{2026}");
         a.set_live(LiveStatus::Stale("x".into()));
         a.live_changed("12:04:00".into());
         assert!(a.status().contains("live updates stopped") && !a.status().contains("12:04"));

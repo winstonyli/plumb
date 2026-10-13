@@ -52,7 +52,7 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
+    GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
     VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
@@ -62,6 +62,7 @@ use windows::core::{w, Interface, Result, BOOL, PCWSTR};
 const WM_SCAN_DONE: u32 = WM_APP + 1;
 const WM_JOURNAL: u32 = WM_APP + 2;
 const WM_FILTER: u32 = WM_APP + 3;
+const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_PROGRESS: usize = 1;
 const TIMER_LIVE: usize = 2;
 const TIMER_FILTER: usize = 3;
@@ -1198,7 +1199,26 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_MOUSEMOVE => {
             if wp.0 & 1 != 0 {
                 dispatch(hwnd, lp, |_, y| Input::Drag(y));
+            } else {
+                let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+                let _ = unsafe { TrackMouseEvent(&mut t) }; // asks for WM_MOUSELEAVE
+                with(|w| {
+                    let (x, y) = w.dip(lp);
+                    let before = w.app.hover;
+                    w.app.handle(Input::Hover(x, y));
+                    if w.app.hover != before {
+                        w.invalidate();
+                    }
+                });
             }
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with(|w| {
+                if w.app.hover.take().is_some() {
+                    w.invalidate();
+                }
+            });
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {

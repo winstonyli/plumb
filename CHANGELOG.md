@@ -13,6 +13,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 ### Changed
 - `plumb`: picking another drive no longer cancels the scan or discards the finished tree. Each drive keeps its tree, selection, live watch and any scan in flight (up to three trees at once); coming back is instant. A strip along the top of a drive's chip marks it: gray for a kept tree, blue for a scan running in the background.
 - `plumb`: the Items column is dimmed, and the administrator, Rescan and Cancel buttons have a frame.
+- `plumb`: folders and files have icons, the row under the mouse is highlighted, and the status bar has a divider with the graphics adapter at its right.
 - `plumb`: while a scan runs, sizes and file counts carry a leading ≥ (they are what has been found so far).
 - `plumb-core`: a live change in a huge folder repairs its cached sort order by merge instead of re-sorting (one add among 1M children: 244 ms to 9 ms).
 

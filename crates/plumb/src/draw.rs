@@ -39,6 +39,10 @@ pub struct Theme {
     pub accent: D2D1_COLOR_F,
     pub bar: D2D1_COLOR_F,
     pub select: D2D1_COLOR_F,
+    /// The row under the mouse: fainter than `select`.
+    pub hover: D2D1_COLOR_F,
+    /// Folder icons.
+    pub folder: D2D1_COLOR_F,
     /// Box tint for a pattern that does not compile.
     pub error: D2D1_COLOR_F,
 }
@@ -49,11 +53,13 @@ impl Theme {
             Self {
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
                 accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), select: rgb(0x37373d), error: rgb(0x5c2b2e),
+                hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
             }
         } else {
             Self {
                 bg: rgb(0xffffff), panel: rgb(0xf0f0f0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
                 accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
+                hover: rgb(0xedf3fc), folder: rgb(0xd09a2a),
             }
         }
     }
@@ -99,6 +105,8 @@ pub struct View<'a> {
     pub scroll: usize,
     /// The scan is still running, so sizes and counts are what has been found so far.
     pub partial: bool,
+    /// The visible row under the mouse.
+    pub hover: Option<usize>,
 }
 
 pub struct Scene<'a> {
@@ -114,6 +122,8 @@ pub struct Scene<'a> {
     pub view: Option<View<'a>>,
     pub message: &'a str,
     pub status: &'a str,
+    /// Shown at the right of the status bar.
+    pub adapter: &'a str,
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
     pub banner: Option<&'a str>,
     pub filter: FilterBar<'a>,
@@ -276,7 +286,11 @@ impl Pen<'_> {
         let st = l.status();
         self.fill(st, t.panel);
         let reserved = if l.cancel { CANCEL_W + 8.0 } else { 0.0 };
-        self.text(s.status, Rect { x: st.x + 8.0, y: st.y, w: (st.w - 16.0 - reserved).max(0.0), h: st.h }, t.dim, false);
+        let right = Rect { x: st.x + 8.0, y: st.y, w: (st.w - 16.0 - reserved).max(0.0), h: st.h };
+        let left_w = (right.w - self.text_width(s.adapter) - 24.0).max(0.0);
+        self.fill(Rect { h: 1.0, ..st }, t.select);
+        self.text(s.status, Rect { w: left_w, ..right }, t.dim, false);
+        self.text(s.adapter, right, t.dim, true);
         if l.cancel {
             let r = l.cancel_button();
             self.button(r, "Cancel", t);
@@ -288,6 +302,16 @@ impl Pen<'_> {
         self.fill(r, t.select);
         self.frame(r, t.accent);
         self.text(label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
+    }
+
+    /// A 12-pixel folder (a filled body with a tab) or file (an outlined page) at `x`, `y`.
+    fn icon(&self, x: f32, y: f32, dir: bool, t: &Theme) {
+        if dir {
+            self.fill(Rect { x, y: y + 1.0, w: 5.0, h: 3.0 }, t.folder);
+            self.fill(Rect { x, y: y + 3.0, w: 12.0, h: 8.0 }, t.folder);
+        } else {
+            self.frame(Rect { x: x + 1.0, y, w: 10.0, h: 12.0 }, t.dim);
+        }
     }
 
     fn picker(&self, s: &Scene) {
@@ -317,6 +341,8 @@ impl Pen<'_> {
             let id = row.id;
             if v.model.selected() == Some(id) {
                 self.fill(r, t.select);
+            } else if v.hover == Some(i) {
+                self.fill(r, t.hover);
             }
             let parent = v.tree.parent[id];
             let denom = if parent.is_none() { v.tree.subtree_size[id] } else { v.tree.subtree_size[parent] };
@@ -324,14 +350,17 @@ impl Pen<'_> {
             let fg = if row.dim { t.dim } else { t.fg };
             let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
-            let mark = if !dir { "  " } else if v.model.is_expanded(id) { "\u{25BE} " } else { "\u{25B8} " };
-            let mut name = format!("{mark}{}", v.tree.name_string(id));
+            let arrow = if !dir { "" } else if v.model.is_expanded(id) { "\u{25BE}" } else { "\u{25B8}" };
+            let mut name = v.tree.name_string(id).to_string();
             if v.tree.flags[id].contains(NodeFlags::DENIED) {
                 name.push_str("  (access denied)");
             }
             let (nx, nw) = l.column(0);
             let indent = row.depth as f32 * INDENT;
-            self.text(&name, Rect { x: nx + 8.0 + indent, y: r.y, w: (nw - 16.0 - indent).max(0.0), h: r.h }, fg, false);
+            let ax = nx + 8.0 + indent;
+            self.text(arrow, Rect { x: ax, y: r.y, w: 14.0, h: r.h }, fg, false);
+            self.icon(ax + 16.0, r.y + (r.h - 12.0) / 2.0, dir, t);
+            self.text(&name, Rect { x: ax + 34.0, y: r.y, w: (nw - 16.0 - indent - 34.0).max(0.0), h: r.h }, fg, false);
             let (sx, sw) = l.column(1);
             let lower = if v.partial { "\u{2265} " } else { "" };
             self.text(&format!("{lower}{}", fmt::size(v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
