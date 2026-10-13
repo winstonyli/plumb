@@ -44,6 +44,7 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
         active_chip: Some(0),
         sort: (1, true),
         admin: Some(layout.admin_button()),
+        hot: None,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2) }),
         message: "",
         status: "MFT scan: 200 files",

@@ -5,7 +5,7 @@ mod filter;
 use crate::draw::{Chip, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{Hit, Layout, INDENT, PICKER_H};
+use crate::layout::{Hit, Layout, Rect, INDENT, PICKER_H};
 use crate::restore::Snapshot;
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::{NodeId, Tree};
@@ -121,6 +121,8 @@ pub struct App {
     pub marks: Vec<Mark>,
     /// The visible row under the mouse.
     pub hover: Option<usize>,
+    /// The icon button under the mouse.
+    pub hot: Option<Rect>,
     pub tree: Option<Tree>,
     pub model: Option<RowModel>,
     pub scroll: usize,
@@ -148,7 +150,7 @@ impl App {
     pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
         let layout = Layout { chips: drives.len(), ..layout };
         Self {
-            layout, drives, adapter, active: None, marks: Vec::new(), hover: None, tree: None, model: None, scroll: 0,
+            layout, drives, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
@@ -345,17 +347,22 @@ impl App {
         self.col_drag.is_some() || matches!(self.layout.hit(x, y, self.drives.len()), Hit::Divider(_))
     }
 
-    /// The tooltip for the icon button at (x, y), if there is one there: these buttons carry no label.
-    pub fn tip_at(&self, x: f32, y: f32) -> Option<&'static str> {
-        if self.can_elevate && self.layout.admin_button().contains(x, y) {
-            return Some("Run as administrator");
+    /// The icon button at (x, y), if there is one there, with its tooltip: these buttons carry no label.
+    fn button_at(&self, x: f32, y: f32) -> Option<(Rect, &'static str)> {
+        let l = &self.layout;
+        if self.can_elevate && l.admin_button().contains(x, y) {
+            return Some((l.admin_button(), "Run as administrator"));
         }
-        match self.layout.hit(x, y, self.drives.len()) {
-            Hit::Rescan => Some("Rescan"),
-            Hit::Cancel => Some("Cancel scan"),
-            Hit::FilterRegex => Some("Regular expression"),
+        match l.hit(x, y, self.drives.len()) {
+            Hit::Rescan => Some((l.rescan_button(), "Rescan")),
+            Hit::Cancel => Some((l.cancel_button(), "Cancel scan")),
+            Hit::FilterRegex => Some((l.filter_regex(), "Regular expression")),
             _ => None,
         }
+    }
+
+    pub fn tip_at(&self, x: f32, y: f32) -> Option<&'static str> {
+        self.button_at(x, y).map(|b| b.1)
     }
 
     /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
@@ -410,6 +417,7 @@ impl App {
                     Hit::Row(i) if self.row_at(i).is_some() => Some(i),
                     _ => None,
                 };
+                self.hot = self.button_at(x, y).map(|b| b.0);
             }
             Input::Click(x, y) => return self.click(x, y),
             // Windows sends the second press of a quick pair as a double-click instead of a click, so
@@ -597,6 +605,7 @@ impl App {
             active_chip: self.active,
             sort: self.sort,
             admin: self.can_elevate.then(|| self.layout.admin_button()),
+            hot: self.hot,
             view,
             message: &message,
             status: &status,
@@ -848,6 +857,17 @@ mod tests {
         assert_eq!(a.tip_at(a.layout.chip(0).x + 5.0, 10.0), None, "a labelled chip needs none");
         a.can_elevate = false;
         assert_eq!(a.tip_at(admin.x + 5.0, admin.y + 5.0), None, "a hidden button has none");
+    }
+
+    #[test]
+    fn the_icon_button_under_the_pointer_is_hot() {
+        let mut a = app();
+        a.can_elevate = true;
+        let admin = a.layout.admin_button();
+        a.handle(Input::Hover(admin.x + 5.0, admin.y + 5.0));
+        assert_eq!(a.hot, Some(admin));
+        a.handle(Input::Hover(a.layout.chip(0).x + 5.0, 10.0));
+        assert_eq!(a.hot, None);
     }
 
     #[test]

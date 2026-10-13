@@ -1347,9 +1347,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let _ = unsafe { TrackMouseEvent(&mut t) }; // asks for WM_MOUSELEAVE
                 with(|w| {
                     let (x, y) = w.dip(lp);
-                    let before = w.app.hover;
+                    let before = (w.app.hover, w.app.hot);
                     w.app.handle(Input::Hover(x, y));
-                    if w.app.hover != before {
+                    if (w.app.hover, w.app.hot) != before {
                         w.invalidate();
                     }
                     // Moving onto another icon button (or off one) hides the old tip so the next rest asks again.
@@ -1387,7 +1387,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_MOUSELEAVE => {
             with(|w| {
-                if w.app.hover.take().is_some() {
+                if w.app.hover.take().is_some() | w.app.hot.take().is_some() {
                     w.invalidate();
                 }
             });

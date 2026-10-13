@@ -129,6 +129,8 @@ pub struct Scene<'a> {
     pub active_chip: Option<usize>,
     /// Where to draw the "Run as administrator" button, if shown.
     pub admin: Option<Rect>,
+    /// The icon button under the pointer, if any.
+    pub hot: Option<Rect>,
     /// Header column the rows are sorted by, and whether descending.
     pub sort: (usize, bool),
     /// `None` while no tree exists; `message` is shown instead.
@@ -178,7 +180,8 @@ impl Painter {
         Ok(Self {
             left: make(ui, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
             right: make(ui, 13.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-            center: make(ui, 13.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+            // Only the Regex toggle's `.*` is centred; it is small, so it is set larger.
+            center: make(ui, 16.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
             // Windows' icon font (Segoe MDL2 Assets): one glyph per button.
             glyph: make(w!("Segoe MDL2 Assets"), 14.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
             icons: RefCell::default(),
@@ -293,9 +296,10 @@ impl Pen<'_> {
             }
         }
         let r = l.filter_regex();
-        self.fill(r, if f.regex { t.select } else { t.panel });
-        self.frame(r, if f.regex { t.accent } else { t.select });
-        self.centered(".*", r, if f.regex { t.accent } else { t.dim });
+        let hot = s.hot == Some(r);
+        self.fill(r, if f.regex || hot { t.select } else { t.panel });
+        self.frame(r, if f.regex { t.accent } else if hot { t.dim } else { t.select });
+        self.centered(".*", r, if f.regex { t.accent } else if hot { t.fg } else { t.dim });
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
 
@@ -312,14 +316,14 @@ impl Pen<'_> {
             self.gfx.d2d.PopAxisAlignedClip();
         }
         if let Some(r) = s.admin {
-            self.button(r, "\u{E83D}", t); // shield
+            self.button(r, "\u{E83D}", s); // shield
         }
         if let Some(text) = s.banner {
             let b = l.banner_strip();
             self.fill(b, t.panel);
             self.text(text, Rect { x: b.x + 8.0, y: b.y, w: b.w - RESCAN_RESERVED, h: b.h }, t.fg, false);
             let r = l.rescan_button();
-            self.button(r, "\u{E72C}", t); // refresh
+            self.button(r, "\u{E72C}", s); // refresh
         }
         self.filter_bar(s);
         let h = l.header();
@@ -354,15 +358,17 @@ impl Pen<'_> {
         self.text(s.adapter, right, t.dim, true);
         if l.cancel {
             let r = l.cancel_button();
-            self.button(r, "\u{E711}", t); // cancel
+            self.button(r, "\u{E711}", s); // cancel
         }
     }
 
-    /// A framed icon button: the frame and glyph in the accent color on the selection tint.
-    fn button(&self, r: Rect, glyph: &str, t: &Theme) {
-        self.fill(r, t.select);
-        self.frame(r, t.accent);
-        self.draw_text(glyph, &self.painter.glyph, r, t.accent);
+    /// A framed icon button: quiet until the pointer is over it, then lit on the selection tint.
+    fn button(&self, r: Rect, glyph: &str, s: &Scene) {
+        let t = &s.theme;
+        let hot = s.hot == Some(r);
+        self.fill(r, if hot { t.select } else { t.panel });
+        self.frame(r, if hot { t.dim } else { t.select });
+        self.draw_text(glyph, &self.painter.glyph, r, if hot { t.fg } else { t.dim });
     }
 
     /// `s` centred in `r`, both ways.
