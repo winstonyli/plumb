@@ -1,7 +1,7 @@
 //! Draws the whole window with Direct2D onto a target bitmap. Reads state, owns none.
 use crate::fmt;
 use crate::gfx::Gfx;
-use crate::layout::{Layout, Rect, FILTER_CLEAR_W, INDENT, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, CANCEL_W, FILTER_CLEAR_W, INDENT, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use plumb_core::{NodeFlags, Tree};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
@@ -265,7 +265,13 @@ impl Pen<'_> {
         }
         let st = l.status();
         self.fill(st, t.panel);
-        self.text(s.status, Rect { x: st.x + 8.0, y: st.y, w: st.w - 16.0, h: st.h }, t.dim, false);
+        let reserved = if l.cancel { CANCEL_W + 8.0 } else { 0.0 };
+        self.text(s.status, Rect { x: st.x + 8.0, y: st.y, w: (st.w - 16.0 - reserved).max(0.0), h: st.h }, t.dim, false);
+        if l.cancel {
+            let r = l.cancel_button();
+            self.fill(r, t.select);
+            self.text("Cancel", Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
+        }
     }
 
     fn picker(&self, s: &Scene) {

@@ -4,6 +4,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+- `plumb`: a running scan can be cancelled with the Cancel button in the status bar or Esc, and picking another drive mid-scan cancels the scan in flight and starts the new one. A cancelled first scan leaves no tree; a cancelled background rescan keeps the old one. `plumb-scan`: `Progress::cancel` and `ScanError::Cancelled`; both scanners stop within one directory or one read chunk.
+
 ### Changed
 - `plumb`: while a scan runs, sizes and file counts carry a leading ≥ (they are what has been found so far).
 

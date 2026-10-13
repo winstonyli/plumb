@@ -409,7 +409,27 @@ impl Win {
         }
     }
 
+    /// Stops the scan in flight. Its thread winds down on its own and its result is dropped with
+    /// the old channel. A first scan leaves no tree; a background rescan keeps the old one.
+    fn cancel_scan(&mut self) {
+        if self.rx.take().is_none() {
+            return;
+        }
+        self.progress.cancel();
+        let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PROGRESS) };
+        let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PREVIEW) };
+        self.preview = None;
+        self.background = false;
+        self.drop_pending();
+        self.app.cancel_scan();
+        self.invalidate();
+    }
+
     fn spawn_scan(&mut self, drive: usize, root: String, background: bool) {
+        if self.rx.is_some() {
+            // Another drive was picked mid-scan: the old scan is abandoned, not waited for.
+            self.progress.cancel();
+        }
         self.background = background;
         if background {
             self.app.refreshing = true;
@@ -827,6 +847,9 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         }
         Effect::Filter => {
             with(|w| w.arm_filter());
+        }
+        Effect::Cancel => {
+            with(|w| w.cancel_scan());
         }
         Effect::Rescan(i) => {
             with(|w| w.start_rescan(i));
@@ -1310,7 +1333,21 @@ pub fn selftest_watch() -> Result<String> {
         if with(|w| matches!(w.app.live, LiveStatus::Stale(_))).unwrap_or(false) {
             return Err(fail("live updates reported stale".into()));
         }
-        Ok("create, grow, rename, new folder and delete followed".to_string())
+        // Cancel a long scan of the whole drive, then replace one with another mid-scan.
+        let big = format!("{letter}:\\");
+        let running = |w: &mut Win| matches!(w.app.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200);
+        with(|w| w.spawn_scan(i, big.clone(), false));
+        wait("the drive scan to get going", 60, &running)?;
+        with(|w| w.cancel_scan());
+        let cancelled = with(|w| matches!(w.app.scan, crate::app::Scan::Cancelled) && w.app.tree.is_none() && w.rx.is_none());
+        if cancelled != Some(true) {
+            return Err(fail("cancelling did not leave a cancelled, empty state".into()));
+        }
+        with(|w| w.spawn_scan(i, big, false));
+        wait("the drive scan to get going again", 60, &running)?;
+        with(|w| w.spawn_scan(i, dir.to_string_lossy().into_owned(), false));
+        wait("the replacement scan", 60, &|w| w.watch.is_some() && size_at(w, "g.bin") == Some(3 << 20))?;
+        Ok("create, grow, rename, new folder and delete followed; cancel and switch mid-scan work".to_string())
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);

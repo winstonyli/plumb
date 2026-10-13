@@ -22,6 +22,8 @@ pub struct DriveInfo {
 pub enum Scan {
     Idle,
     Running { drive: usize, dirs: u64, files: u64, bytes: u64 },
+    /// The user stopped the scan; there is no tree.
+    Cancelled,
     Failed(String),
 }
 
@@ -68,6 +70,8 @@ pub enum Effect {
     Rescan(usize),
     /// Start the debounce timer for a filter run.
     Filter,
+    /// Stop the scan in flight.
+    Cancel,
 }
 
 /// The sort each header column stands for; "% of parent" orders by size.
@@ -214,6 +218,23 @@ impl App {
         }
     }
 
+    /// A scan is in flight (a first scan, or a background rescan).
+    pub fn cancelable(&self) -> bool {
+        self.refreshing || matches!(self.scan, Scan::Running { .. })
+    }
+
+    /// The user cancelled the scan in flight. A first scan leaves no tree; a background rescan
+    /// leaves the old one on screen.
+    pub fn cancel_scan(&mut self) {
+        if matches!(self.scan, Scan::Running { .. }) {
+            self.tree = None;
+            self.model = None;
+            self.preview_paused = false;
+            self.scan = Scan::Cancelled;
+        }
+        self.refreshing = false;
+    }
+
     pub fn fail_scan(&mut self, msg: String) {
         self.tree = None;
         self.model = None;
@@ -238,9 +259,10 @@ impl App {
     }
 
     pub fn handle(&mut self, input: Input) -> Effect {
+        self.layout.cancel = self.cancelable();
         match input {
             Input::Resize(w, h) => {
-                self.layout = Layout::new(w, h).with_banner(self.layout.banner);
+                self.layout = Layout::new(w, h).with_banner(self.layout.banner).with_cancel(self.layout.cancel);
                 self.set_scroll(self.scroll);
             }
             Input::Wheel(rows) => self.set_scroll((self.scroll as i64 + rows as i64).max(0) as usize),
@@ -261,7 +283,11 @@ impl App {
                 self.filter.ui.focus = true;
                 self.filter.ui.edit(Edit::SelectAll);
             }
-            Input::Escape => return self.filter_escape(),
+            Input::Escape => {
+                let used = self.filter.ui.focus || !self.filter.ui.text.is_empty();
+                let e = self.filter_escape();
+                return if !used && self.cancelable() { Effect::Cancel } else { e };
+            }
             Input::Enter => self.filter_enter(),
             Input::Tab => self.filter.ui.focus = !self.filter.ui.focus,
             Input::Click(x, y) => return self.click(x, y),
@@ -315,7 +341,9 @@ impl App {
             _ => self.filter.ui.focus = false,
         }
         match hit {
-            Hit::Chip(i) if !matches!(self.scan, Scan::Running { .. }) => return Effect::Scan(i),
+            Hit::Cancel => return Effect::Cancel,
+            // Picking another drive mid-scan cancels the scan in flight; the same drive does nothing.
+            Hit::Chip(i) if !(matches!(self.scan, Scan::Running { .. }) && self.active == Some(i)) => return Effect::Scan(i),
             Hit::Rescan => {
                 if let Some(i) = self.active.filter(|_| !self.refreshing && !matches!(self.scan, Scan::Running { .. })) {
                     return Effect::Rescan(i);
@@ -368,6 +396,7 @@ impl App {
                 self.drives[*drive].letter, fmt::count(*dirs), fmt::count(*files), fmt::size(*bytes)
             ),
             Scan::Failed(m) => format!("Scan failed: {m}"),
+            Scan::Cancelled => "Scan cancelled. Select a drive above to scan it again.".into(),
         }
     }
 
@@ -411,7 +440,7 @@ impl App {
             _ => None,
         };
         f(&Scene {
-            layout: self.layout,
+            layout: self.layout.with_cancel(self.cancelable()),
             theme: Theme::new(dark),
             chips: &chips,
             active_chip: self.active,
@@ -452,11 +481,37 @@ mod tests {
     }
 
     #[test]
-    fn clicking_a_chip_requests_a_scan_unless_one_is_running() {
+    fn clicking_a_chip_requests_a_scan_and_another_drive_replaces_one_in_flight() {
         let mut a = app();
         assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0)), Effect::Scan(1));
         a.begin_scan(1);
-        assert_eq!(a.handle(Input::Click(10.0, 10.0)), Effect::None);
+        assert_eq!(a.handle(Input::Click(10.0, 10.0)), Effect::Scan(0), "another drive replaces the scan");
+        assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0)), Effect::None, "the same drive is left alone");
+    }
+
+    #[test]
+    fn the_cancel_button_and_escape_cancel_a_scan_only_while_one_runs() {
+        let mut a = app();
+        assert_eq!(a.handle(Input::Escape), Effect::None);
+        a.begin_scan(0);
+        let b = a.layout.with_cancel(true).cancel_button();
+        assert_eq!(a.handle(Input::Click(b.x + 5.0, b.y + 5.0)), Effect::Cancel);
+        assert_eq!(a.handle(Input::Escape), Effect::Cancel);
+        // Esc that clears the filter does not cancel.
+        a.filter.ui.focus = true;
+        assert_ne!(a.handle(Input::Escape), Effect::Cancel);
+        a.cancel_scan();
+        assert!(a.message().starts_with("Scan cancelled") && a.tree.is_none() && !a.cancelable());
+        assert_eq!(a.handle(Input::Escape), Effect::None);
+    }
+
+    #[test]
+    fn cancelling_a_background_rescan_keeps_the_tree() {
+        let mut a = scanned();
+        a.refreshing = true;
+        assert!(a.cancelable());
+        a.cancel_scan();
+        assert!(a.tree.is_some() && !a.refreshing && matches!(a.scan, Scan::Idle));
     }
 
     #[test]

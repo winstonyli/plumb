@@ -28,6 +28,7 @@ pub const FILTER_H: f32 = 32.0;
 pub const FILTER_REGEX_W: f32 = 72.0;
 pub const FILTER_COUNT_W: f32 = 150.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
+pub const CANCEL_W: f32 = 72.0;
 pub const INDENT: f32 = 16.0;
 /// Widths of the Size, % of parent and Items columns; Name takes the rest.
 pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
@@ -42,6 +43,8 @@ pub enum Hit {
     Scrollbar,
     /// The Rescan button on the stale banner.
     Rescan,
+    /// The Cancel button in the status bar, shown while a scan runs.
+    Cancel,
     /// The filter text box (not its clear button).
     FilterBox,
     FilterRegex,
@@ -55,11 +58,17 @@ pub struct Layout {
     pub h: f32,
     /// A banner strip sits between the picker and the header.
     pub banner: bool,
+    /// A Cancel button sits at the right end of the status bar.
+    pub cancel: bool,
 }
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false }
+        Self { w, h, banner: false, cancel: false }
+    }
+
+    pub fn with_cancel(self, cancel: bool) -> Self {
+        Self { cancel, ..self }
     }
 
     pub fn with_banner(self, banner: bool) -> Self {
@@ -134,6 +143,12 @@ impl Layout {
         Rect { x: a.x + a.w, y: a.y, w: SCROLLBAR_W.min(self.w), h: a.h }
     }
 
+    /// "Cancel", right-aligned in the status bar.
+    pub fn cancel_button(&self) -> Rect {
+        let s = self.status();
+        Rect { x: (s.x + s.w - 8.0 - CANCEL_W).max(0.0), y: s.y + 2.0, w: CANCEL_W, h: s.h - 4.0 }
+    }
+
     pub fn status(&self) -> Rect {
         Rect { x: 0.0, y: (self.h - STATUS_H).max(0.0), w: self.w, h: STATUS_H }
     }
@@ -183,6 +198,9 @@ impl Layout {
             if self.chip(i).contains(x, y) {
                 return Hit::Chip(i);
             }
+        }
+        if self.cancel && self.cancel_button().contains(x, y) {
+            return Hit::Cancel;
         }
         if self.banner && self.rescan_button().contains(x, y) {
             return Hit::Rescan;
