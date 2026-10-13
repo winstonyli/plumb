@@ -333,6 +333,7 @@ impl App {
             message: &message,
             status: &status,
             banner: banner.as_deref(),
+            filter: crate::draw::FilterBar::default(),
         })
     }
 }

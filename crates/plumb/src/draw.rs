@@ -1,7 +1,7 @@
 //! Draws the whole window with Direct2D onto a target bitmap. Reads state, owns none.
 use crate::fmt;
 use crate::gfx::Gfx;
-use crate::layout::{Layout, Rect, INDENT, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, FILTER_CLEAR_W, INDENT, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use plumb_core::{NodeFlags, Tree};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap1, ID2D1SolidColorBrush, D2D
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
-    DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::core::{w, Result};
@@ -39,6 +39,8 @@ pub struct Theme {
     pub accent: D2D1_COLOR_F,
     pub bar: D2D1_COLOR_F,
     pub select: D2D1_COLOR_F,
+    /// Box tint for a pattern that does not compile.
+    pub error: D2D1_COLOR_F,
 }
 
 impl Theme {
@@ -46,12 +48,12 @@ impl Theme {
         if dark {
             Self {
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
-                accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), select: rgb(0x37373d),
+                accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), select: rgb(0x37373d), error: rgb(0x5c2b2e),
             }
         } else {
             Self {
                 bg: rgb(0xffffff), panel: rgb(0xf0f0f0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
-                accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), select: rgb(0xdbe8fb),
+                accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
             }
         }
     }
@@ -61,6 +63,22 @@ pub struct Chip {
     pub label: String,
     /// Fraction of the drive in use, 0..=1.
     pub used: f32,
+}
+
+/// What the filter strip shows: the text box state plus the count text.
+#[derive(Clone, Copy, Default)]
+pub struct FilterBar<'a> {
+    pub text: &'a str,
+    /// Caret as a byte offset into `text`.
+    pub caret: usize,
+    pub regex: bool,
+    pub focus: bool,
+    /// The whole text is selected.
+    pub all: bool,
+    /// The pattern did not compile: the box is tinted.
+    pub error: bool,
+    /// "1,240 matches", "searching...", "invalid pattern", or empty.
+    pub count: &'a str,
 }
 
 pub struct View<'a> {
@@ -84,6 +102,7 @@ pub struct Scene<'a> {
     pub status: &'a str,
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
     pub banner: Option<&'a str>,
+    pub filter: FilterBar<'a>,
 }
 
 pub struct Painter {
@@ -153,6 +172,62 @@ impl Pen<'_> {
         }
     }
 
+    fn frame(&self, r: Rect, c: D2D1_COLOR_F) {
+        for e in [
+            Rect { h: 1.0, ..r },
+            Rect { y: r.y + r.h - 1.0, h: 1.0, ..r },
+            Rect { w: 1.0, ..r },
+            Rect { x: r.x + r.w - 1.0, w: 1.0, ..r },
+        ] {
+            self.fill(e, c);
+        }
+    }
+
+    fn text_width(&self, s: &str) -> f32 {
+        let u: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let Ok(layout) = self.gfx.dw.CreateTextLayout(&u, &self.painter.left, 10_000.0, 100.0) else { return 0.0 };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_err() {
+                return 0.0;
+            }
+            m.widthIncludingTrailingWhitespace
+        }
+    }
+
+    fn filter_bar(&self, s: &Scene) {
+        let (t, l, f) = (&s.theme, &s.layout, &s.filter);
+        self.fill(l.filter_strip(), t.panel);
+        let b = l.filter_box();
+        self.fill(b, if f.error { t.error } else { t.bg });
+        self.frame(b, if f.focus { t.accent } else { t.select });
+        let inner = Rect { x: b.x + 8.0, y: b.y, w: (b.w - 16.0 - FILTER_CLEAR_W).max(0.0), h: b.h };
+        if f.text.is_empty() {
+            if !f.focus {
+                self.text("Filter by name  (Ctrl+F)", inner, t.dim, false);
+            }
+        } else {
+            if f.all {
+                let w = self.text_width(f.text).min(inner.w);
+                self.fill(Rect { x: inner.x, y: b.y + 4.0, w, h: b.h - 8.0 }, t.select);
+            }
+            self.text(f.text, inner, t.fg, false);
+            let c = l.filter_clear();
+            self.text("\u{00D7}", Rect { w: c.w - 6.0, ..c }, t.dim, true);
+        }
+        if f.focus && !f.all {
+            let x = inner.x + self.text_width(f.text.get(..f.caret).unwrap_or(f.text));
+            if x <= inner.x + inner.w {
+                self.fill(Rect { x, y: b.y + 5.0, w: 1.0, h: b.h - 10.0 }, t.fg);
+            }
+        }
+        let r = l.filter_regex();
+        self.fill(r, if f.regex { t.select } else { t.bg });
+        self.frame(r, if f.regex { t.accent } else { t.select });
+        self.text("Regex", Rect { x: r.x + 16.0, w: r.w - 16.0, ..r }, if f.regex { t.accent } else { t.dim }, false);
+        self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
+    }
+
     fn draw(&self, s: &Scene) {
         let t = &s.theme;
         let l = &s.layout;
@@ -170,6 +245,7 @@ impl Pen<'_> {
             self.fill(r, t.select);
             self.text("Rescan", Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
         }
+        self.filter_bar(s);
         let h = l.header();
         self.fill(h, t.panel);
         for (c, name) in ["Name", "Size", "% of parent", "Items"].iter().enumerate() {
@@ -212,6 +288,7 @@ impl Pen<'_> {
             let parent = v.tree.parent[id];
             let denom = if parent.is_none() { v.tree.subtree_size[id] } else { v.tree.subtree_size[parent] };
             let frac = fmt::fraction(v.tree.subtree_size[id], denom);
+            let fg = if row.dim { t.dim } else { t.fg };
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
             let mark = if !dir { "  " } else if v.model.is_expanded(id) { "\u{25BE} " } else { "\u{25B8} " };
             let mut name = format!("{mark}{}", v.tree.name_string(id));
@@ -220,14 +297,14 @@ impl Pen<'_> {
             }
             let (nx, nw) = l.column(0);
             let indent = row.depth as f32 * INDENT;
-            self.text(&name, Rect { x: nx + 8.0 + indent, y: r.y, w: (nw - 16.0 - indent).max(0.0), h: r.h }, t.fg, false);
+            self.text(&name, Rect { x: nx + 8.0 + indent, y: r.y, w: (nw - 16.0 - indent).max(0.0), h: r.h }, fg, false);
             let (sx, sw) = l.column(1);
-            self.text(&fmt::size(v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, t.fg, true);
+            self.text(&fmt::size(v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
             let (px, pw) = l.column(2);
             self.fill(Rect { x: px + 4.0, y: r.y + 3.0, w: (pw - 8.0) * frac, h: r.h - 6.0 }, t.bar);
-            self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, t.fg, false);
+            self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (ix, iw) = l.column(3);
-            self.text(&fmt::count(v.tree.subtree_files[id] as u64), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, t.fg, true);
+            self.text(&fmt::count(v.tree.subtree_files[id] as u64), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, fg, true);
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {
             self.fill(l.scrollbar(), t.panel);

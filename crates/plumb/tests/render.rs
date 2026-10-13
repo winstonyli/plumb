@@ -1,7 +1,7 @@
 #![cfg(windows)]
 //! Draws a fixed small tree through a WARP (software) device into an offscreen bitmap.
 //! Opens no window and never touches the physical GPU.
-use plumb::draw::{Chip, Painter, Scene, Theme, View};
+use plumb::draw::{Chip, FilterBar, Painter, Scene, Theme, View};
 use plumb::gfx::Gfx;
 use plumb::layout::Layout;
 use plumb_core::rows::RowModel;
@@ -27,7 +27,7 @@ fn bitmap(gfx: &Gfx, options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OP
     unsafe { gfx.d2d.CreateBitmap(D2D_SIZE_U { width: W, height: H }, None, 0, &props).unwrap() }
 }
 
-fn render(dark: bool) -> Vec<u8> {
+fn render(dark: bool, error: bool) -> Vec<u8> {
     let gfx = Gfx::warp().expect("WARP device");
     assert!(gfx.adapter.contains("WARP"), "{}", gfx.adapter);
     let tree = kary_builder(200, 4).finish().unwrap();
@@ -47,6 +47,7 @@ fn render(dark: bool) -> Vec<u8> {
         message: "",
         status: "MFT scan: 200 files",
         banner: None,
+        filter: FilterBar { text: "txt", caret: 3, regex: true, focus: true, error, count: "12 matches", ..Default::default() },
     };
     let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
     Painter::new(&gfx).unwrap().paint(&gfx, &target, 96.0, &scene).expect("EndDraw");
@@ -71,7 +72,7 @@ fn pixel(buf: &[u8], x: u32, y: u32) -> [u8; 3] {
 #[test]
 fn draws_regions_in_both_themes() {
     for dark in [false, true] {
-        let buf = render(dark);
+        let buf = render(dark, false);
         let t = Theme::new(dark);
         let to8 = |c: f32| (c * 255.0).round() as u8;
         let want_bg = [to8(t.bg.r), to8(t.bg.g), to8(t.bg.b)];
@@ -82,5 +83,23 @@ fn draws_regions_in_both_themes() {
         // some pixel in the rows area is text/bar, i.e. not background.
         let drawn = (100..570).any(|y| (0..400).any(|x| pixel(&buf, x, y) != want_bg && pixel(&buf, x, y) != [to8(t.select.r), to8(t.select.g), to8(t.select.b)]));
         assert!(drawn, "no row content (dark={dark})");
+    }
+}
+
+#[test]
+fn the_filter_strip_draws_and_an_invalid_pattern_tints_the_box() {
+    let to8 = |c: f32| (c * 255.0).round() as u8;
+    for dark in [false, true] {
+        let t = Theme::new(dark);
+        let l = Layout::new(W as f32, H as f32);
+        let b = l.filter_box();
+        // inside the box, well right of the three typed characters and left of the clear button
+        let (x, y) = ((b.x + b.w / 2.0) as u32, (b.y + b.h / 2.0) as u32);
+        let ok = render(dark, false);
+        let bad = render(dark, true);
+        let col = |c: windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F| [to8(c.r), to8(c.g), to8(c.b)];
+        assert_eq!(pixel(&ok, 3, y), col(t.panel), "strip (dark={dark})");
+        assert_eq!(pixel(&ok, x, y), col(t.bg), "box (dark={dark})");
+        assert_eq!(pixel(&bad, x, y), col(t.error), "error tint (dark={dark})");
     }
 }
