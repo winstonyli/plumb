@@ -404,6 +404,7 @@ impl Pen<'_> {
             } else if v.hover == Some(i) {
                 self.fill(r, t.hover);
             }
+            self.fill(Rect { x: r.x, y: r.y + r.h - 1.0, w: r.w, h: 1.0 }, t.panel); // hairline between rows
             let parent = v.tree.parent[id];
             let denom = if parent.is_none() { v.tree.subtree_size[id] } else { v.tree.subtree_size[parent] };
             let frac = fmt::fraction(v.tree.subtree_size[id], denom);

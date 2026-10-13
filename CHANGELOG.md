@@ -11,6 +11,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 - `plumb`: the second press of a quick double-click on a column header, button, drive chip or scrollbar was dropped (Windows delivers it as a double-click); it now acts as a click, so a double-click on a header flips the sort twice.
 
 ### Changed
+- `plumb`: a hairline separates rows.
 - `plumb`: rows show Explorer's own icons for folders (open or closed) and file types, replacing the drawn folder, the drawn page and the expand chevrons. A folder with children carries a small triangle inlaid on its icon (right when closed, down when open); an empty folder has none. Icons are fetched by extension, cached per painter, 32-pixel at 150% scaling and up; the drawn ones remain as the fallback when the shell has none. `INDENT` is now 20.
 
 ## [0.4.0] - 2026-10-13
