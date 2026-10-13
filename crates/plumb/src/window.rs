@@ -1,6 +1,6 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
-use crate::app::{App, DriveInfo, Effect, Input, LiveStatus};
+use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, Parked};
 use crate::draw::Painter;
 use crate::filter_ui::{push_utf16, Edit};
 use crate::gfx::Gfx;
@@ -190,6 +190,42 @@ fn local_time() -> String {
     format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
 }
 
+/// Everything the window keeps per drive besides what the app holds (`Parked`). The fields of the
+/// drive on screen live directly in `Win`; the others wait in `Win::parked` as one of these.
+#[derive(Default)]
+struct Drive {
+    app: Parked,
+    progress: Arc<Progress>,
+    rx: Option<Receiver<ScanResult>>,
+    background: bool,
+    watch: Option<Watch>,
+    dir_pending: Option<Watcher>,
+    dir_failed: Option<String>,
+    /// Order of last use, for eviction.
+    used: u64,
+}
+
+impl Drive {
+    /// Ends the drive's scan and watches. The watches may be mid-wait, so they stop off the UI thread.
+    fn discard(self) {
+        self.progress.cancel();
+        if self.watch.is_none() && self.dir_pending.is_none() {
+            return;
+        }
+        std::thread::spawn(move || {
+            if let Some(w) = self.watch {
+                w.stop();
+            }
+            if let Some(w) = self.dir_pending {
+                w.stop();
+            }
+        });
+    }
+}
+
+/// Drives whose trees are held at once, the one on screen included.
+const KEPT_DRIVES: usize = 3;
+
 struct Win {
     hwnd: HWND,
     app: App,
@@ -223,6 +259,14 @@ struct Win {
     preview_pacer: Pacer,
     /// The preview tree changed since the rows were last refreshed.
     preview_dirty: bool,
+    /// The drives not on screen that hold a tree or a scan, by drive index.
+    parked: Vec<Option<Drive>>,
+    /// Counts drive switches, to find the least recently used.
+    clock: u64,
+    /// Which of the progress, preview and live timers are running.
+    timers: [bool; 3],
+    /// A parked drive is swapped in for one operation (`in_slot`): timers and the filter stay as they are.
+    borrowed: bool,
 }
 
 thread_local! {
@@ -311,6 +355,7 @@ impl Win {
             background: false, watch: None, dir_pending: None, dir_failed: None, policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
+            parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false,
         };
         win.apply_title_theme();
         Ok(win)
@@ -398,7 +443,133 @@ impl Win {
 
     fn start_scan(&mut self, drive: usize) {
         let root = format!("{}:\\", self.app.drives[drive].letter);
+        self.open(drive, root);
+    }
+
+    /// Puts `drive` on screen: the state kept for it if there is any (a finished tree, or a scan
+    /// that kept running), else a new scan of `root`. The drive on screen is kept, not cancelled.
+    /// Choosing the drive already on screen scans it afresh.
+    fn open(&mut self, drive: usize, root: String) {
+        if self.app.active != Some(drive) {
+            self.park_active();
+            if self.unpark(drive) {
+                return;
+            }
+        }
         self.spawn_scan(drive, root, false);
+    }
+
+    /// Exchanges all per-drive state, the app's and the window's, with `d`.
+    fn swap_drive(&mut self, d: &mut Drive) {
+        self.app.switch_slot(&mut d.app);
+        self.swap_window_fields(d);
+        self.sync_timers();
+    }
+
+    fn swap_window_fields(&mut self, d: &mut Drive) {
+        use std::mem::swap;
+        swap(&mut self.progress, &mut d.progress);
+        swap(&mut self.rx, &mut d.rx);
+        swap(&mut self.background, &mut d.background);
+        swap(&mut self.watch, &mut d.watch);
+        swap(&mut self.dir_pending, &mut d.dir_pending);
+        swap(&mut self.dir_failed, &mut d.dir_failed);
+    }
+
+    /// Takes the drive on screen away, keeping its tree, scan and watch unless there is nothing
+    /// worth coming back to. A partial tree follows only the drive on screen, so it is dropped.
+    fn park_active(&mut self) {
+        let Some(old) = self.app.active.take() else { return };
+        if self.preview.take().is_some() {
+            self.app.discard_partial();
+        }
+        let mut d = Drive::default();
+        self.swap_drive(&mut d);
+        if d.app.has_tree() || d.rx.is_some() {
+            self.clock += 1;
+            d.used = self.clock;
+            self.parked.resize_with(self.parked.len().max(old + 1), || None);
+            self.parked[old] = Some(d);
+            self.evict();
+        } else {
+            d.discard();
+        }
+    }
+
+    /// Brings the state kept for `drive` on screen, if any. Call with nothing on screen.
+    fn unpark(&mut self, drive: usize) -> bool {
+        let Some(mut d) = self.parked.get_mut(drive).and_then(Option::take) else { return false };
+        self.swap_drive(&mut d);
+        self.app.active = Some(drive);
+        self.apply_live(); // what changed while it was away
+        if self.app.filter_dirty() {
+            self.run_filter();
+        }
+        self.invalidate();
+        true
+    }
+
+    /// Lets go of the least recently used kept drives that have no scan running, so at most
+    /// `KEPT_DRIVES` trees are held with the one on screen.
+    fn evict(&mut self) {
+        while self.parked.iter().flatten().filter(|d| d.app.has_tree()).count() >= KEPT_DRIVES {
+            let lru = self.parked.iter().enumerate().filter_map(|(i, d)| d.as_ref().filter(|d| d.rx.is_none()).map(|d| (d.used, i))).min();
+            let Some((_, i)) = lru else { return };
+            if let Some(d) = self.parked[i].take() {
+                d.discard();
+            }
+        }
+    }
+
+    /// Runs `f` with the kept state of `drive` swapped in, then puts it back; `f` sees that drive as
+    /// the one on screen. `None` if nothing is kept for it. Timers and the filter are not touched.
+    fn in_slot<R>(&mut self, drive: usize, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+        if self.app.active == Some(drive) {
+            return Some(f(self));
+        }
+        let mut d = self.parked.get_mut(drive).and_then(Option::take)?;
+        let shown = self.app.active;
+        self.borrowed = true;
+        self.app.swap_slot(&mut d.app);
+        self.swap_window_fields(&mut d);
+        self.app.active = Some(drive);
+        let r = f(self);
+        self.app.active = shown;
+        self.app.swap_slot(&mut d.app);
+        self.swap_window_fields(&mut d);
+        self.borrowed = false;
+        self.parked[drive] = Some(d);
+        Some(r)
+    }
+
+    /// Starts and stops the progress, preview and live timers to match the drive on screen.
+    fn sync_timers(&mut self) {
+        if self.borrowed {
+            return;
+        }
+        let want = [
+            (TIMER_PROGRESS, self.rx.is_some() && !self.background, 100),
+            (TIMER_PREVIEW, self.preview.is_some(), PREVIEW_TICK_MS),
+            (TIMER_LIVE, self.watch.as_ref().is_some_and(|w| w.armed), REPAINT.as_millis() as u32),
+        ];
+        for (i, (id, on, ms)) in want.into_iter().enumerate() {
+            if self.timers[i] != on {
+                self.timers[i] = on;
+                if on {
+                    unsafe { SetTimer(Some(self.hwnd), id, ms, None) };
+                } else {
+                    let _ = unsafe { KillTimer(Some(self.hwnd), id) };
+                }
+            }
+        }
+    }
+
+    /// Ends every scan and watch, for exit.
+    fn shutdown(&mut self) {
+        self.progress.cancel();
+        for d in self.parked.drain(..).flatten() {
+            d.discard();
+        }
     }
 
     /// Rescans in the background, keeping the old tree on screen until the new one is ready.
@@ -416,18 +587,17 @@ impl Win {
             return;
         }
         self.progress.cancel();
-        let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PROGRESS) };
-        let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PREVIEW) };
         self.preview = None;
         self.background = false;
         self.drop_pending();
         self.app.cancel_scan();
+        self.sync_timers();
         self.invalidate();
     }
 
     fn spawn_scan(&mut self, drive: usize, root: String, background: bool) {
         if self.rx.is_some() {
-            // Another drive was picked mid-scan: the old scan is abandoned, not waited for.
+            // The drive on screen is scanned afresh mid-scan: the old scan is abandoned, not waited for.
             self.progress.cancel();
         }
         self.background = background;
@@ -467,12 +637,9 @@ impl Win {
             }));
             let msg = run.unwrap_or_else(|_| Err("the scanner panicked".to_string()));
             let _ = tx.send(msg);
-            let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_SCAN_DONE, WPARAM(0), LPARAM(0)) };
+            let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_SCAN_DONE, WPARAM(drive), LPARAM(0)) };
         });
-        if !background {
-            unsafe { SetTimer(Some(self.hwnd), TIMER_PROGRESS, 100, None) };
-            unsafe { SetTimer(Some(self.hwnd), TIMER_PREVIEW, PREVIEW_TICK_MS, None) };
-        }
+        self.sync_timers();
         self.invalidate();
     }
 
@@ -534,8 +701,6 @@ impl Win {
         let Some(rx) = &self.rx else { return };
         let Ok(msg) = rx.try_recv() else { return };
         self.rx = None;
-        let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PROGRESS) };
-        let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PREVIEW) };
         self.preview = None; // anything still queued is discarded; the exact tree is here
         let background = std::mem::take(&mut self.background);
         match msg {
@@ -570,7 +735,8 @@ impl Win {
                 self.app.fail_scan(e);
             }
         }
-        if self.app.filter_dirty() {
+        self.sync_timers();
+        if self.app.filter_dirty() && !self.borrowed {
             self.run_filter();
         }
         self.invalidate();
@@ -636,34 +802,47 @@ impl Win {
     /// Stops following changes. The source may be mid-wait, so it is joined off the UI thread.
     fn drop_watch(&mut self) {
         if let Some(w) = self.watch.take() {
-            if w.armed {
-                let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_LIVE) };
-            }
             std::thread::spawn(move || w.stop());
+            self.sync_timers();
         }
     }
 
     /// `WM_JOURNAL`: moves what the source has queued into its queue and applies some of it.
     fn journal_event(&mut self) {
         self.posted.store(false, Ordering::Release);
-        let ended = self.watch.as_mut().and_then(Watch::drain);
-        self.apply_live();
-        if let Some(e) = ended {
-            self.watch_ended(e);
+        for d in 0..self.parked.len().max(self.app.active.map_or(0, |a| a + 1)) {
+            // The watches of drives off screen keep their trees current too.
+            self.in_slot(d, |w| {
+                let ended = w.watch.as_mut().and_then(Watch::drain);
+                w.apply_live();
+                if let Some(e) = ended {
+                    w.watch_ended(e);
+                }
+            });
         }
     }
 
     /// Applies queued changes for at most `APPLY_BUDGET`; leftovers continue on the next message.
-    fn apply_live(&mut self) {
+    fn apply_queued(&mut self) {
         let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) else { return };
         let n = w.apply(tree, Instant::now() + APPLY_BUDGET);
         w.dirty |= n > 0;
         if w.queued() {
             let _ = unsafe { PostMessageW(Some(self.hwnd), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
         }
-        if !w.armed && (w.dirty || w.backlog()) {
-            unsafe { SetTimer(Some(self.hwnd), TIMER_LIVE, REPAINT.as_millis() as u32, None) };
+    }
+
+    /// `apply_queued`, and starts the live timer if there is work to refresh. A drive off screen
+    /// keeps its changes marked until it is shown again.
+    fn apply_live(&mut self) {
+        self.apply_queued();
+        if let Some(w) = &mut self.watch
+            && !w.armed
+            && (w.dirty || w.backlog())
+            && !self.borrowed
+        {
             w.armed = true;
+            self.sync_timers();
         }
     }
 
@@ -689,8 +868,8 @@ impl Win {
             && !w.dirty
             && !w.backlog()
         {
-            let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_LIVE) };
             w.armed = false;
+            self.sync_timers();
         }
     }
 
@@ -1058,7 +1237,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(0)
         }
         WM_SCAN_DONE => {
-            with(|w| w.scan_done());
+            with(|w| w.in_slot(wp.0, |w| w.scan_done()));
             LRESULT(0)
         }
         WM_SETTINGCHANGE => {
@@ -1073,6 +1252,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         WM_DESTROY => {
+            with(|w| w.shutdown());
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
@@ -1277,6 +1457,7 @@ pub fn selftest_watch() -> Result<String> {
         return Err(fail("the directory watch is for non-elevated runs; the journal serves elevated ones".into()));
     }
     let dir = std::fs::canonicalize(std::env::temp_dir()).map_err(|e| fail(e.to_string()))?;
+    let dir2 = dir.join(format!("plumb-watch2-{}", std::process::id()));
     let dir = dir.join(format!("plumb-watch-{}", std::process::id()));
     let shown = dir.to_string_lossy().trim_start_matches(r"\\?\").to_string();
     let _ = std::fs::remove_dir_all(&dir);
@@ -1302,8 +1483,7 @@ pub fn selftest_watch() -> Result<String> {
         }
         Ok(())
     };
-    let size_at = |w: &mut Win, rel: &str| -> Option<u64> {
-        let t = w.app.tree.as_ref()?;
+    let size_in = |t: &Tree, rel: &str| -> Option<u64> {
         // The root node is named by the whole scanned path, so look up below it, not by path string.
         let (parent, name) = rel.rsplit_once('\\').unwrap_or(("", rel));
         let parent: Vec<u16> = parent.encode_utf16().collect();
@@ -1311,6 +1491,7 @@ pub fn selftest_watch() -> Result<String> {
         let id = t.children(dir).find(|&c| t.name_string(c) == name)?;
         Some(t.subtree_size[id])
     };
+    let size_at = |w: &mut Win, rel: &str| -> Option<u64> { size_in(w.app.tree.as_ref()?, rel) };
     let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
     let run = || -> Result<String> {
         let io = |e: std::io::Error| fail(e.to_string());
@@ -1335,6 +1516,7 @@ pub fn selftest_watch() -> Result<String> {
         }
         // Cancel a long scan of the whole drive, then replace one with another mid-scan.
         let big = format!("{letter}:\\");
+        let big2 = big.clone();
         let running = |w: &mut Win| matches!(w.app.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200);
         with(|w| w.spawn_scan(i, big.clone(), false));
         wait("the drive scan to get going", 60, &running)?;
@@ -1347,9 +1529,48 @@ pub fn selftest_watch() -> Result<String> {
         wait("the drive scan to get going again", 60, &running)?;
         with(|w| w.spawn_scan(i, dir.to_string_lossy().into_owned(), false));
         wait("the replacement scan", 60, &|w| w.watch.is_some() && size_at(w, "g.bin") == Some(3 << 20))?;
-        Ok("create, grow, rename, new folder and delete followed; cancel and switch mid-scan work".to_string())
+        // A second drive (made up; its root is another temp directory). Leaving the first keeps its
+        // tree and watch: a change made while it is away shows when it comes back, with no rescan.
+        let j = with(|w| {
+            w.app.drives.push(DriveInfo { letter: 'Z', total: 0, free: 0 });
+            w.app.drives.len() - 1
+        })
+        .ok_or_else(|| fail("no window".into()))?;
+        std::fs::create_dir_all(&dir2).map_err(io)?;
+        std::fs::write(dir2.join("x.bin"), vec![1u8; 8192]).map_err(io)?;
+        let root2 = || dir2.to_string_lossy().into_owned();
+        with(|w| w.open(j, root2()));
+        wait("the second drive's scan", 60, &|w| w.watch.is_some() && size_at(w, "x.bin") == Some(8192))?;
+        std::fs::write(dir.join("h.bin"), vec![1u8; 2 << 20]).map_err(io)?;
+        let away = |w: &mut Win, rel: &str| w.parked.get(i).and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).and_then(|t| size_in(t, rel));
+        wait("the change to reach the drive that is away", 20, &|w| away(w, "h.bin") == Some(2 << 20))?;
+        with(|w| w.open(i, dir.to_string_lossy().into_owned()));
+        let back = with(|w| w.rx.is_none() && w.watch.is_some() && size_at(w, "h.bin") == Some(2 << 20));
+        if back != Some(true) {
+            return Err(fail("coming back to a drive did not show its kept, current tree".into()));
+        }
+        // A scan in flight keeps going while another drive is shown, and is still running on return.
+        with(|w| w.spawn_scan(i, big2.clone(), false));
+        wait("the drive scan to get going once more", 60, &running)?;
+        with(|w| w.open(j, root2()));
+        let kept = with(|w| {
+            w.watch.is_some()
+                && size_at(w, "x.bin") == Some(8192)
+                && w.parked.get(i).and_then(|d| d.as_ref()).is_some_and(|d| d.rx.is_some())
+        });
+        if kept != Some(true) {
+            return Err(fail("the scan did not keep running while another drive was shown".into()));
+        }
+        with(|w| w.open(i, big2.clone()));
+        let resumed = with(|w| w.rx.is_some() && matches!(w.app.scan, crate::app::Scan::Running { .. }));
+        if resumed != Some(true) {
+            return Err(fail("the running scan was not on screen after switching back".into()));
+        }
+        with(|w| w.cancel_scan());
+        Ok("create, grow, rename, new folder and delete followed; cancel works; drives keep their trees, watches and scans when switched".to_string())
     };
     let out = run();
+    let _ = std::fs::remove_dir_all(&dir2);
     let _ = std::fs::remove_dir_all(&dir);
     unsafe { DestroyWindow(hwnd)? };
     STATE.with(|s| *s.borrow_mut() = None);

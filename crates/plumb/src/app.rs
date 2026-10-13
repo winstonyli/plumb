@@ -19,7 +19,9 @@ pub struct DriveInfo {
     pub free: u64,
 }
 
+#[derive(Default)]
 pub enum Scan {
+    #[default]
     Idle,
     Running { drive: usize, dirs: u64, files: u64, bytes: u64 },
     /// The user stopped the scan; there is no tree.
@@ -28,8 +30,9 @@ pub enum Scan {
 }
 
 /// Whether the tree is being kept up to date from the change journal.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum LiveStatus {
+    #[default]
     Off,
     /// `last` is the clock time of the last applied change.
     On { last: Option<String> },
@@ -79,6 +82,35 @@ fn sort_key(col: usize) -> SortKey {
     [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items][col]
 }
 
+/// What the app holds for one drive, kept while another drive is on screen. The filter box text
+/// and the sort stay with the app; everything derived from this drive's tree travels with it.
+#[derive(Default)]
+pub struct Parked {
+    tree: Option<Tree>,
+    model: Option<RowModel>,
+    scroll: usize,
+    scan: Scan,
+    summary: String,
+    live: LiveStatus,
+    refreshing: bool,
+    preview_paused: bool,
+    filter: filter::Filter,
+}
+
+impl Parked {
+    pub fn has_tree(&self) -> bool {
+        self.tree.is_some()
+    }
+
+    pub fn tree(&self) -> Option<&Tree> {
+        self.tree.as_ref()
+    }
+
+    pub fn scan(&self) -> &Scan {
+        &self.scan
+    }
+}
+
 pub struct App {
     pub layout: Layout,
     pub drives: Vec<DriveInfo>,
@@ -116,6 +148,43 @@ impl App {
     /// The header column the rows are sorted by, and whether descending.
     pub fn sort(&self) -> (usize, bool) {
         self.sort
+    }
+
+    /// Exchanges the per-drive state with `p`. The result is consistent on its own (banner and
+    /// Cancel button follow the new state) but leaves the filter alone: see `switch_slot`.
+    pub fn swap_slot(&mut self, p: &mut Parked) {
+        use std::mem::swap;
+        swap(&mut self.tree, &mut p.tree);
+        swap(&mut self.model, &mut p.model);
+        swap(&mut self.scroll, &mut p.scroll);
+        swap(&mut self.scan, &mut p.scan);
+        swap(&mut self.summary, &mut p.summary);
+        swap(&mut self.live, &mut p.live);
+        swap(&mut self.refreshing, &mut p.refreshing);
+        swap(&mut self.preview_paused, &mut p.preview_paused);
+        swap(&mut self.filter, &mut p.filter);
+        swap(&mut self.filter.ui, &mut p.filter.ui); // the query text belongs to the window
+        self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable());
+        self.set_scroll(self.scroll);
+    }
+
+    /// Puts another drive on screen: the outgoing rows lose the filter so they come back whole, and
+    /// the incoming ones are filtered afresh.
+    pub fn switch_slot(&mut self, p: &mut Parked) {
+        if self.filter.installed.is_some() {
+            self.unfilter_rows();
+        }
+        self.filter_reset();
+        self.swap_slot(p);
+        self.filter_reset();
+    }
+
+    /// The partial tree of a scan that is no longer followed on screen is dropped.
+    pub fn discard_partial(&mut self) {
+        self.tree = None;
+        self.model = None;
+        self.scroll = 0;
+        self.preview_paused = false;
     }
 
     pub fn begin_scan(&mut self, drive: usize) {
@@ -503,6 +572,43 @@ mod tests {
         a.cancel_scan();
         assert!(a.message().starts_with("Scan cancelled") && a.tree.is_none() && !a.cancelable());
         assert_eq!(a.handle(Input::Escape), Effect::None);
+    }
+
+    #[test]
+    fn switching_drives_keeps_each_drives_tree_selection_and_scan_apart() {
+        let mut a = scanned();
+        let sel = a.model.as_ref().and_then(|m| m.selected());
+        a.refreshing = true;
+        let mut away = Parked::default();
+        a.switch_slot(&mut away);
+        assert!(a.tree.is_none() && a.model.is_none() && !a.cancelable() && !a.refreshing);
+        assert!(away.has_tree());
+        a.begin_scan(1);
+        assert!(matches!(a.scan, Scan::Running { drive: 1, .. }) && a.cancelable());
+        let mut other = Parked::default();
+        a.switch_slot(&mut other); // the running scan goes away, then the first drive comes back
+        a.switch_slot(&mut away);
+        assert!(a.tree.is_some() && a.refreshing && a.cancelable());
+        assert_eq!(a.model.as_ref().and_then(|m| m.selected()), sel);
+        assert!(matches!(other.scan(), Scan::Running { drive: 1, .. }) && !other.has_tree());
+    }
+
+    #[test]
+    fn switching_drives_takes_the_filter_off_the_rows_and_refilters_the_other_drive() {
+        let mut a = scanned();
+        let all = a.total_rows();
+        a.filter.ui.text = "zzz".into();
+        a.filter_changed();
+        let job = a.start_filter().expect("a run");
+        let h = job.names.scan(&job.matcher, &job.cancel, job.generation).unwrap();
+        a.filter_ready(job.generation, h);
+        assert!(a.filter_installed());
+        let mut away = Parked::default();
+        a.switch_slot(&mut away);
+        assert!(!a.filter_installed() && a.filter_ui().text == "zzz");
+        a.switch_slot(&mut away);
+        assert!(!a.filter_installed() && a.filter_dirty()); // asks for a fresh run on the returning tree
+        assert_eq!(a.total_rows(), all);
     }
 
     #[test]

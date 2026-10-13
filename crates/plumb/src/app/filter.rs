@@ -27,6 +27,8 @@ pub(super) struct Installed {
     keep: Rc<Keep>,
 }
 
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Default)]
 pub(super) struct Filter {
     pub ui: FilterUi,
@@ -52,7 +54,8 @@ impl Filter {
 
     /// The query or the tree changed: cancel the scan in flight and forget it.
     fn bump(&mut self) {
-        self.generation += 1;
+        // Unique across drives: a result can only match the run that asked for it.
+        self.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
         self.cancel.store(self.generation, Ordering::Relaxed);
         self.running = None;
         self.touched.clear();
