@@ -145,3 +145,22 @@ fn a_bad_record_zero_is_an_error() {
     img.data[record_offset(0)] = b'X';
     assert!(matches!(run(&img, &layout(), 1, BPC), Err(MftError::Record0(_))));
 }
+
+#[test]
+fn the_mft_scan_sends_begin_then_one_upsert_per_base_record_but_the_root() {
+    use crate::preview::{PreviewMsg, channel};
+    let (tx, rx) = channel(1 << 16);
+    let p = Progress::with_preview(tx);
+    let mut b = TreeBuilder::new();
+    scan_mft(&image(), &layout(), "X:", &MftOptions { threads: 2, chunk_bytes: 4 << 20 }, &mut b, &p).unwrap();
+    let mut msgs = Vec::new();
+    while let Some(m) = rx.try_recv() {
+        msgs.push(m);
+    }
+    assert!(matches!(msgs.first(), Some(PreviewMsg::Begin { root, nodes }) if root == "X:" && *nodes == RECORDS as usize));
+    let mut upserts: Vec<_> = msgs.iter().filter_map(|m| if let PreviewMsg::Upsert(s) = m { Some(s) } else { None }).collect();
+    upserts.sort_by_key(|s| s.record);
+    assert_eq!(upserts.iter().map(|s| s.record).collect::<Vec<_>>(), [0, 30, 31, 32, 33, 34], "record 5 is not sent");
+    let link = upserts.last().unwrap();
+    assert_eq!((link.parent, String::from_utf16_lossy(&link.name).as_str()), (5, "link2"), "the lowest (parent, name) carries the size");
+}

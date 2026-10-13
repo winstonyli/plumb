@@ -2,7 +2,9 @@
 //! the whole pipeline is testable with an in-memory image; the Windows volume handle is in `volume`.
 
 use crate::Progress;
+use crate::journal::state::file_state;
 use crate::merge::{MergeStats, MftMerger};
+use crate::preview::PreviewMsg;
 use plumb_core::{NodeId, TreeBuilder};
 use plumb_core::mft::{ParseError, ParsedRecord, mft_extents, parse_record};
 use std::io;
@@ -115,6 +117,7 @@ pub fn scan_mft<V: VolumeRead>(
         )));
     }
     let record_count = layout.mft_valid_len / RECORD as u64;
+    progress.emit(|| Some(PreviewMsg::Begin { root: root_name.to_string(), nodes: record_count as usize }));
 
     // The reads: every extent cut into chunks of whole clusters.
     let chunk = (opts.chunk_bytes as u64 / bpc).max(1) * bpc;
@@ -192,6 +195,14 @@ fn parse_chunks(rx: &Mutex<mpsc::Receiver<Chunk>>, merger: &Mutex<MftMerger>, re
                             dirs += 1;
                         } else {
                             files += 1;
+                        }
+                    }
+                    if slot.in_use {
+                        match slot.base {
+                            None if number != 5 => progress.emit(|| file_state(number, slot).map(PreviewMsg::Upsert)),
+                            // `base` is already masked to the record number, as `MftMerger::add` uses it.
+                            Some(owner) => progress.emit(|| slot.data_alloc.map(|size| PreviewMsg::Size { record: owner, size })),
+                            None => {}
                         }
                     }
                     numbers.push(number);
