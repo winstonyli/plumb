@@ -4,6 +4,10 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
+Name filter, partial tree while a scan runs, and live updates without admin.
+
 ### Added
 - `plumb-core`: `filter` module (case-insensitive substring or regex name matching with the `regex` crate, a name snapshot for worker threads, hits and the keep set) and `RowModel::set_filter`, which shows matches and their ancestors and dims rows under a leaf match.
 - `plumb`: name filter. Ctrl+F (or a click) focuses a strip above the column headers; typing shows only the files and folders whose name contains the text (case-insensitive), with the folders on the way to them open. The Regex toggle reads the text as a regular expression; an invalid pattern keeps the previous result and tints the box. A matching folder with no matching content is shown collapsed and opens to dimmed rows. Esc clears the filter and restores the previous expansion and scroll. The scan runs on a worker thread 100 ms after the last keystroke, and the filter follows live updates and rescans.
