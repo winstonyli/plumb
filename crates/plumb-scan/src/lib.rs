@@ -13,6 +13,8 @@ pub mod select;
 pub mod volume;
 #[cfg(windows)]
 pub mod walk;
+#[cfg(windows)]
+pub mod watch;
 
 use plumb_core::TreeBuilder;
 use std::path::Path;
