@@ -41,6 +41,22 @@ pub enum Seen {
     Live { state: FileState, needs_size: bool },
 }
 
+/// The state of a parsed base record, using the name that carries the size in the exact build:
+/// the lowest (parent, name). `None` if the record has no name.
+pub fn file_state(record: u64, rec: &ParsedRecord) -> Option<FileState> {
+    let first = rec.names.iter().min_by(|a, b| (a.parent, rec.name(a)).cmp(&(b.parent, rec.name(b))))?;
+    Some(FileState {
+        record,
+        sequence: rec.sequence,
+        parent: first.parent,
+        name: rec.name(first).to_vec(),
+        size: if rec.is_dir { 0 } else { rec.data_alloc.unwrap_or(0) },
+        is_dir: rec.is_dir,
+        reparse: is_name_surrogate(rec.reparse_tag),
+        links: rec.names.len() as u32,
+    })
+}
+
 /// Parses record number `record`. `buf` is exactly one record as `FSCTL_GET_NTFS_FILE_RECORD`
 /// returns it: the update-sequence fixups are already undone.
 pub fn observe(record: u64, buf: &[u8], scratch: &mut ParsedRecord) -> Result<Seen, ParseError> {
@@ -51,20 +67,7 @@ pub fn observe(record: u64, buf: &[u8], scratch: &mut ParsedRecord) -> Result<Se
     if let Some(base) = scratch.base {
         return Ok(Seen::Extension(base & REF_MASK));
     }
-    let Some(first) = scratch.names.iter().min_by(|a, b| (a.parent, scratch.name(a)).cmp(&(b.parent, scratch.name(b))))
-    else {
-        return Ok(Seen::Gone);
-    };
-    let state = FileState {
-        record,
-        sequence: scratch.sequence,
-        parent: first.parent,
-        name: scratch.name(first).to_vec(),
-        size: if scratch.is_dir { 0 } else { scratch.data_alloc.unwrap_or(0) },
-        is_dir: scratch.is_dir,
-        reparse: is_name_surrogate(scratch.reparse_tag),
-        links: scratch.names.len() as u32,
-    };
+    let Some(state) = file_state(record, scratch) else { return Ok(Seen::Gone) };
     Ok(Seen::Live { needs_size: !scratch.is_dir && scratch.data_alloc.is_none(), state })
 }
 
