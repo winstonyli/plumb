@@ -76,7 +76,7 @@ impl Preview {
                 self.handle(msg, tree, &mut out);
             }
             n += 1;
-            if n % CLOCK_EVERY == 0 && Instant::now() >= deadline {
+            if n.is_multiple_of(CLOCK_EVERY) && Instant::now() >= deadline {
                 return out;
             }
         }

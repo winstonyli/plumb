@@ -5,10 +5,12 @@ use crate::draw::Painter;
 use crate::filter_ui::{push_utf16, Edit};
 use crate::gfx::Gfx;
 use crate::layout::Layout;
+use crate::preview::Preview;
 use crate::live::{needs_compaction, Live, Pacer, RescanPolicy, REPAINT};
 use plumb_core::filter::Hits;
 use plumb_core::rows::Key;
 use plumb_core::{NodeId, Tree, TreeBuilder};
+use plumb_scan::preview::channel as preview_channel;
 use plumb_scan::journal::{Delta, Event, JournalConfig, JournalInfo, JournalReader, JournalSource, Stop};
 use plumb_scan::select::{scan_auto, ScanReport, Used};
 use plumb_scan::volume::{drive_letter, is_elevated, is_ntfs, Volume};
@@ -62,6 +64,10 @@ const TIMER_PROGRESS: usize = 1;
 const TIMER_LIVE: usize = 2;
 const TIMER_FILTER: usize = 3;
 const FILTER_DEBOUNCE_MS: u32 = 100;
+const TIMER_PREVIEW: usize = 4;
+const PREVIEW_TICK_MS: u32 = 15;
+/// Messages the partial-tree queue holds: about 150 ms of an MFT scan.
+const PREVIEW_QUEUE: usize = 200_000;
 /// Longest a batch of journal deltas may hold the UI thread.
 const APPLY_BUDGET: Duration = Duration::from_millis(5);
 const CMD_REVEAL: usize = 1;
@@ -131,6 +137,11 @@ struct Win {
     filter_rx: Receiver<(u64, Hits)>,
     /// First half of a surrogate pair seen by `WM_CHAR`.
     high_surrogate: Option<u16>,
+    /// The partial tree of the foreground scan in progress.
+    preview: Option<Preview>,
+    preview_pacer: Pacer,
+    /// The preview tree changed since the rows were last refreshed.
+    preview_dirty: bool,
 }
 
 thread_local! {
@@ -218,6 +229,7 @@ impl Win {
             hwnd, app, gfx, painter, swap, target: None, dpi, dark, progress: Arc::default(), rx: None,
             background: false, watch: None, policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
+            preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
         };
         win.apply_title_theme();
         Ok(win)
@@ -324,7 +336,16 @@ impl Win {
             self.drop_watch();
             self.app.begin_scan(drive);
         }
-        self.progress = Arc::default();
+        self.progress = if background {
+            self.preview = None;
+            Arc::default()
+        } else {
+            let (tx, rx) = preview_channel(PREVIEW_QUEUE);
+            self.preview = Some(Preview::new(rx));
+            self.preview_pacer = Pacer::new(Instant::now());
+            self.preview_dirty = false;
+            Arc::new(Progress::with_preview(tx))
+        };
         let progress = self.progress.clone();
         let (tx, rx) = channel();
         self.rx = Some(rx);
@@ -347,6 +368,7 @@ impl Win {
         });
         if !background {
             unsafe { SetTimer(Some(self.hwnd), TIMER_PROGRESS, 100, None) };
+            unsafe { SetTimer(Some(self.hwnd), TIMER_PREVIEW, PREVIEW_TICK_MS, None) };
         }
         self.invalidate();
     }
@@ -385,18 +407,42 @@ impl Win {
         self.invalidate();
     }
 
+    /// `TIMER_PREVIEW`: applies some of what the scan has found, and at the live-update pace
+    /// refreshes the rows.
+    fn preview_tick(&mut self) {
+        let Some(p) = &mut self.preview else { return };
+        let a = p.apply(&mut self.app.tree, Instant::now() + APPLY_BUDGET);
+        if a.reset || a.created {
+            self.app.preview_installed(); // builds the model from whatever tree there is now
+        } else {
+            self.preview_dirty |= a.changes > 0;
+        }
+        self.app.preview_paused = p.paused();
+        if self.preview_dirty && self.preview_pacer.due(Instant::now()) {
+            let t0 = Instant::now();
+            self.app.refresh_rows();
+            self.preview_pacer.done(Instant::now(), t0.elapsed());
+            self.preview_dirty = false;
+        }
+        self.invalidate();
+    }
+
     fn scan_done(&mut self) {
         let Some(rx) = &self.rx else { return };
         let Ok(msg) = rx.try_recv() else { return };
         self.rx = None;
         let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PROGRESS) };
+        let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_PREVIEW) };
+        self.preview = None; // anything still queued is discarded; the exact tree is here
         let background = std::mem::take(&mut self.background);
         match msg {
             Ok(sc) => {
                 let files = sc.tree.subtree_files[NodeId(0)] as u64;
                 let corrupt = sc.report.mft.as_ref().map(|m| m.stats.corrupt);
                 let s = summary(sc.report.used, files, sc.elapsed, corrupt, sc.report.note.as_deref());
-                if background {
+                // `begin_scan` cleared the tree, so one on screen is the preview (or the tree
+                // being rescanned); with none yet the scan finished before the first preview.
+                if self.app.tree.is_some() {
                     self.app.swap_tree(sc.tree, s);
                     self.drop_watch();
                 } else {
@@ -857,6 +903,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             with(|w| w.filter_done());
             LRESULT(0)
         }
+        WM_TIMER if wp.0 == TIMER_PREVIEW => {
+            with(|w| w.preview_tick());
+            LRESULT(0)
+        }
         WM_TIMER if wp.0 == TIMER_PROGRESS => {
             with(|w| w.poll_progress());
             LRESULT(0)
@@ -980,7 +1030,7 @@ pub fn selftest() -> Result<String> {
     let win = Win::new(hwnd, crate::drives::list())?;
     STATE.with(|s| *s.borrow_mut() = Some(win));
     with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned(), false));
-    pump_until("the scan", 30, &|w| w.app.tree.is_some() || matches!(w.app.scan, crate::app::Scan::Failed(_)))?;
+    pump_until("the scan", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle | crate::app::Scan::Failed(_)))?;
     // The filter, end to end: type into the box, let the worker scan, check the rows.
     with(|w| {
         w.app.handle(Input::Find);

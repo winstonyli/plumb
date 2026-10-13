@@ -5,7 +5,7 @@ use crate::journal::state::FileState;
 use plumb_core::{NodeFlags, NodeId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 
 #[derive(Debug)]
 pub enum PreviewMsg {
@@ -76,10 +76,7 @@ impl PreviewRx {
 
     /// `None` when nothing is queued (or the sender is gone).
     pub fn try_recv(&self) -> Option<PreviewMsg> {
-        match self.rx.try_recv() {
-            Ok(m) => Some(m),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
-        }
+        self.rx.try_recv().ok()
     }
 }
 
