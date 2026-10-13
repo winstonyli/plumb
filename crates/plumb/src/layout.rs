@@ -28,12 +28,13 @@ pub const ADMIN_W: f32 = 32.0;
 pub const CAPTION_RESERVE: f32 = 150.0;
 pub const BANNER_H: f32 = 28.0;
 pub const RESCAN_W: f32 = 32.0;
-/// What follows the filter box: gap, Regex toggle, gap, match count.
-const FILTER_AFTER_W: f32 = 8.0 + FILTER_REGEX_W + 8.0 + FILTER_COUNT_W;
+/// What follows the filter box: gap, match count.
+const FILTER_AFTER_W: f32 = 8.0 + FILTER_COUNT_W;
 pub const FILTER_BOX_H: f32 = 28.0;
-pub const FILTER_BOX_W: f32 = 260.0;
-pub const FILTER_BOX_MIN: f32 = 140.0;
-pub const FILTER_REGEX_W: f32 = 36.0;
+pub const FILTER_BOX_W: f32 = 304.0;
+pub const FILTER_BOX_MIN: f32 = 184.0;
+/// The Regex toggle sits inside the right end of the filter box, inset 4 px from its edges.
+pub const FILTER_REGEX_W: f32 = 28.0;
 pub const FILTER_COUNT_W: f32 = 110.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 32.0;
@@ -108,7 +109,7 @@ impl Layout {
 
     /// The filter box shares the picker bar: after the drive chips, before the administrator button. It
     /// takes `FILTER_BOX_W` when there is room and shrinks (to `FILTER_BOX_MIN`) when there is not.
-    /// The Regex toggle and the match count follow it.
+    /// The match count follows it; the Regex toggle is inside it.
     pub fn filter_box(&self) -> Rect {
         let room = self.admin_button().x - 8.0 - self.filter_left() - FILTER_AFTER_W;
         Rect { x: self.filter_left(), y: (PICKER_H - FILTER_BOX_H) / 2.0, w: room.clamp(FILTER_BOX_MIN, FILTER_BOX_W), h: FILTER_BOX_H }
@@ -119,20 +120,22 @@ impl Layout {
         8.0 + self.chips as f32 * (CHIP_W + CHIP_GAP) + 8.0
     }
 
+    /// The Regex toggle: at the right end inside the filter box.
     pub fn filter_regex(&self) -> Rect {
         let b = self.filter_box();
-        Rect { x: b.x + b.w + 8.0, w: FILTER_REGEX_W, ..b }
+        Rect { x: b.x + b.w - 4.0 - FILTER_REGEX_W, y: b.y + 4.0, w: FILTER_REGEX_W, h: b.h - 8.0 }
     }
 
-    /// Match count or status text, after the Regex toggle.
+    /// Match count or status text, after the filter box.
     pub fn filter_count(&self) -> Rect {
-        let r = self.filter_regex();
-        Rect { x: r.x + r.w + 8.0, y: 0.0, w: FILTER_COUNT_W, h: PICKER_H }
+        let b = self.filter_box();
+        Rect { x: b.x + b.w + 8.0, y: 0.0, w: FILTER_COUNT_W, h: PICKER_H }
     }
 
+    /// The clear button: inside the box, left of the Regex toggle.
     pub fn filter_clear(&self) -> Rect {
-        let b = self.filter_box();
-        Rect { x: b.x + b.w - FILTER_CLEAR_W, y: b.y, w: FILTER_CLEAR_W, h: b.h }
+        let (b, r) = (self.filter_box(), self.filter_regex());
+        Rect { x: r.x - FILTER_CLEAR_W, y: b.y, w: FILTER_CLEAR_W, h: b.h }
     }
 
     pub fn banner_strip(&self) -> Rect {
@@ -233,11 +236,11 @@ impl Layout {
         if self.filter_clear().contains(x, y) {
             return Hit::FilterClear;
         }
-        if self.filter_box().contains(x, y) {
-            return Hit::FilterBox;
-        }
         if self.filter_regex().contains(x, y) {
             return Hit::FilterRegex;
+        }
+        if self.filter_box().contains(x, y) {
+            return Hit::FilterBox;
         }
         if self.header().contains(x, y) {
             if let Some(c) = (1..4).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
@@ -339,7 +342,8 @@ mod tests {
         assert!(tight.filter_box().w >= FILTER_BOX_MIN && tight.filter_box().w < FILTER_BOX_W, "the box shrinks to fit");
         assert!(tight.filter_count().x + tight.filter_count().w <= tight.admin_button().x, "and nothing overlaps");
         let (b, r, c, n) = (l.filter_box(), l.filter_regex(), l.filter_clear(), l.filter_count());
-        assert!(b.x + b.w <= r.x && r.x + r.w <= n.x && n.x + n.w <= l.w, "{b:?} {r:?} {n:?}");
+        assert!(c.x + c.w <= r.x && r.x + r.w <= b.x + b.w && b.x + b.w <= n.x && n.x + n.w <= l.w, "{b:?} {r:?} {c:?} {n:?}");
+        assert!(c.x >= b.x + 8.0 + 40.0, "the buttons leave the text some room");
         assert_eq!(l.hit(b.x + b.w / 2.0, b.y + 2.0, 3), Hit::FilterBox);
         assert_eq!(l.hit(c.x + 2.0, c.y + 2.0, 3), Hit::FilterClear);
         assert_eq!(l.hit(r.x + 2.0, r.y + 2.0, 3), Hit::FilterRegex);

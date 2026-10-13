@@ -2,7 +2,7 @@
 use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
-use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_CLEAR_W, INDENT, PICKER_H, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, INDENT, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -275,7 +275,7 @@ impl Pen<'_> {
         let b = l.filter_box();
         self.fill(b, if f.error { t.error } else { t.panel });
         self.frame(b, if f.focus { t.accent } else { t.select });
-        let inner = Rect { x: b.x + 8.0, y: b.y, w: (b.w - 16.0 - FILTER_CLEAR_W).max(0.0), h: b.h };
+        let inner = Rect { x: b.x + 8.0, y: b.y, w: (l.filter_clear().x - b.x - 8.0).max(0.0), h: b.h };
         if f.text.is_empty() {
             if !f.focus {
                 self.text("Filter  (Ctrl+F)", inner, t.dim, false);
@@ -297,8 +297,12 @@ impl Pen<'_> {
         }
         let r = l.filter_regex();
         let hot = s.hot == Some(r);
-        self.fill(r, if f.regex || hot { t.select } else { t.panel });
-        self.frame(r, if f.regex { t.accent } else if hot { t.dim } else { t.select });
+        if f.regex || hot {
+            self.fill(r, t.select);
+        }
+        if f.regex {
+            self.frame(r, t.accent);
+        }
         self.centered(".*", r, if f.regex { t.accent } else if hot { t.fg } else { t.dim });
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
