@@ -2,9 +2,11 @@
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
 use crate::app::{App, DriveInfo, Effect, Input, LiveStatus};
 use crate::draw::Painter;
+use crate::filter_ui::{push_utf16, Edit};
 use crate::gfx::Gfx;
 use crate::layout::Layout;
 use crate::live::{needs_compaction, Live, Pacer, RescanPolicy, REPAINT};
+use plumb_core::filter::Hits;
 use plumb_core::rows::Key;
 use plumb_core::{NodeId, Tree, TreeBuilder};
 use plumb_scan::journal::{Delta, Event, JournalConfig, JournalInfo, JournalReader, JournalSource, Stop};
@@ -14,11 +16,11 @@ use plumb_scan::{Progress, ScanError};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::{HANDLE, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HGLOBAL, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_IGNORE, D2D1_PIXEL_FORMAT};
 use windows::Win32::Graphics::Direct2D::{
     ID2D1Bitmap1, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
@@ -35,7 +37,9 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, InvalidateRect, MonitorFromWindow, ValidateRect, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
@@ -44,8 +48,8 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR,
-    VK_RIGHT, VK_UP,
+    GetKeyState, ReleaseCapture, SetCapture, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
+    VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -53,8 +57,11 @@ use windows::core::{w, Interface, Result, BOOL, PCWSTR};
 
 const WM_SCAN_DONE: u32 = WM_APP + 1;
 const WM_JOURNAL: u32 = WM_APP + 2;
+const WM_FILTER: u32 = WM_APP + 3;
 const TIMER_PROGRESS: usize = 1;
 const TIMER_LIVE: usize = 2;
+const TIMER_FILTER: usize = 3;
+const FILTER_DEBOUNCE_MS: u32 = 100;
 /// Longest a batch of journal deltas may hold the UI thread.
 const APPLY_BUDGET: Duration = Duration::from_millis(5);
 const CMD_REVEAL: usize = 1;
@@ -119,6 +126,11 @@ struct Win {
     last_input: Instant,
     /// A `WM_JOURNAL` is already queued, so the reader need not post another.
     posted: Arc<AtomicBool>,
+    /// Finished filter scans; the worker posts `WM_FILTER` after each send.
+    filter_tx: Sender<(u64, Hits)>,
+    filter_rx: Receiver<(u64, Hits)>,
+    /// First half of a surrogate pair seen by `WM_CHAR`.
+    high_surrogate: Option<u16>,
 }
 
 thread_local! {
@@ -201,10 +213,11 @@ impl Win {
         let mut app = App::new(layout, drives, gfx.adapter.clone());
         app.can_elevate = !plumb_scan::volume::is_elevated();
         let dark = dark_mode();
+        let (filter_tx, filter_rx) = channel();
         let win = Self {
             hwnd, app, gfx, painter, swap, target: None, dpi, dark, progress: Arc::default(), rx: None,
             background: false, watch: None, policy: RescanPolicy::default(), last_input: Instant::now(),
-            posted: Arc::default(),
+            posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
         };
         win.apply_title_theme();
         Ok(win)
@@ -338,6 +351,34 @@ impl Win {
         self.invalidate();
     }
 
+    /// (Re)starts the debounce: the scan begins 100 ms after the last keystroke.
+    fn arm_filter(&self) {
+        unsafe { SetTimer(Some(self.hwnd), TIMER_FILTER, FILTER_DEBOUNCE_MS, None) };
+    }
+
+    /// Scans the names for the current query on a worker thread, if the app wants a run.
+    fn run_filter(&mut self) {
+        let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_FILTER) };
+        if let Some(job) = self.app.start_filter() {
+            let (tx, hwnd) = (self.filter_tx.clone(), self.hwnd.0 as isize);
+            std::thread::spawn(move || {
+                if let Some(hits) = job.names.scan(&job.matcher, &job.cancel, job.generation) {
+                    let _ = tx.send((job.generation, hits));
+                    let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_FILTER, WPARAM(0), LPARAM(0)) };
+                }
+            });
+        }
+        self.invalidate();
+    }
+
+    /// `WM_FILTER`: installs the finished scans (the app drops stale ones).
+    fn filter_done(&mut self) {
+        while let Ok((generation, hits)) = self.filter_rx.try_recv() {
+            self.app.filter_ready(generation, hits);
+        }
+        self.invalidate();
+    }
+
     fn poll_progress(&mut self) {
         let (d, f, b) = self.progress.snapshot();
         self.app.progress(d, f, b);
@@ -370,6 +411,9 @@ impl Win {
                 self.app.set_live(LiveStatus::Stale(format!("the rescan failed: {e}")));
             }
             Err(e) => self.app.fail_scan(e),
+        }
+        if self.app.filter_dirty() {
+            self.run_filter();
         }
         self.invalidate();
     }
@@ -620,6 +664,9 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         Effect::Scan(i) => {
             with(|w| w.start_scan(i));
         }
+        Effect::Filter => {
+            with(|w| w.arm_filter());
+        }
         Effect::Rescan(i) => {
             with(|w| w.start_rescan(i));
         }
@@ -654,6 +701,63 @@ fn dispatch(hwnd: HWND, l: LPARAM, make: impl FnOnce(f32, f32) -> Input) {
         return;
     };
     effect(hwnd, e, pos(l));
+}
+
+/// Sends `input` to the app, then runs any effect.
+fn send(hwnd: HWND, input: Input) {
+    let Some(e) = with(|w| {
+        w.last_input = Instant::now();
+        let e = w.app.handle(input);
+        w.invalidate();
+        e
+    }) else {
+        return;
+    };
+    effect(hwnd, e, (0, 0));
+}
+
+/// The clipboard's text, if it has any.
+fn paste_text(hwnd: HWND) -> Option<String> {
+    unsafe {
+        OpenClipboard(Some(hwnd)).ok()?;
+        let text = (|| {
+            let h = GetClipboardData(13).ok()?; // CF_UNICODETEXT
+            let g = HGLOBAL(h.0);
+            let p = GlobalLock(g) as *const u16;
+            if p.is_null() {
+                return None;
+            }
+            let mut n = 0;
+            while n < 65_536 && *p.add(n) != 0 {
+                n += 1;
+            }
+            let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
+            let _ = GlobalUnlock(g);
+            Some(s)
+        })();
+        let _ = CloseClipboard();
+        text
+    }
+}
+
+/// The app input a key press stands for. Ctrl+C is handled by the caller.
+fn key_input(vk: u16, ctrl: bool, hwnd: HWND) -> Option<Input> {
+    if ctrl {
+        match vk {
+            v if v == b'F' as u16 => return Some(Input::Find),
+            v if v == b'A' as u16 => return Some(Input::Edit(Edit::SelectAll)),
+            v if v == b'V' as u16 => return paste_text(hwnd).map(|s| Input::Edit(Edit::Paste(s))),
+            _ => {}
+        }
+    }
+    Some(match vk {
+        x if x == VK_BACK.0 => Input::Edit(Edit::Backspace),
+        x if x == VK_DELETE.0 => Input::Edit(Edit::Delete),
+        x if x == VK_RETURN.0 => Input::Enter,
+        x if x == VK_ESCAPE.0 => Input::Escape,
+        x if x == VK_TAB.0 => Input::Tab,
+        x => Input::Key(key_of(x)?),
+    })
 }
 
 fn key_of(vk: u16) -> Option<Key> {
@@ -728,19 +832,29 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             });
             LRESULT(0)
         }
+        WM_CHAR => {
+            if let Some(Some(c)) = with(|w| push_utf16(&mut w.high_surrogate, wp.0 as u16)) {
+                send(hwnd, Input::Edit(Edit::Char(c)));
+            }
+            LRESULT(0)
+        }
         WM_KEYDOWN => {
             let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
             if ctrl && wp.0 == 'C' as usize {
                 if let Some(Some(p)) = with(|w| w.selected_path()) {
                     copy_to_clipboard(hwnd, &p);
                 }
-            } else if let Some(k) = key_of(wp.0 as u16) {
-                with(|w| {
-                    w.last_input = Instant::now();
-                    w.app.handle(Input::Key(k));
-                    w.invalidate();
-                });
+            } else if let Some(input) = key_input(wp.0 as u16, ctrl, hwnd) {
+                send(hwnd, input);
             }
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_FILTER => {
+            with(|w| w.run_filter());
+            LRESULT(0)
+        }
+        WM_FILTER => {
+            with(|w| w.filter_done());
             LRESULT(0)
         }
         WM_TIMER if wp.0 == TIMER_PROGRESS => {
@@ -832,6 +946,29 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// Pumps window messages until `cond` holds; errors after `secs`.
+fn pump_until(what: &str, secs: u64, cond: &dyn Fn(&mut Win) -> bool) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    let mut msg = MSG::default();
+    while with(|w| !cond(w)) == Some(true) {
+        if Instant::now() > deadline {
+            return Err(windows::core::Error::new(
+                windows::Win32::Foundation::E_FAIL,
+                format!("timed out waiting for: {what}"),
+            ));
+        }
+        unsafe {
+            if PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            } else {
+                std::thread::yield_now();
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Builds the window hidden, scans a small temp directory on a worker thread through the real
 /// message loop and swapchain, and returns "adapter; summary". Never shows a window.
 pub fn selftest() -> Result<String> {
@@ -843,25 +980,29 @@ pub fn selftest() -> Result<String> {
     let win = Win::new(hwnd, crate::drives::list())?;
     STATE.with(|s| *s.borrow_mut() = Some(win));
     with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned(), false));
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut msg = MSG::default();
-    while with(|w| w.app.tree.is_none() && !matches!(w.app.scan, crate::app::Scan::Failed(_))) == Some(true) {
-        if Instant::now() > deadline {
-            return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "scan did not finish in 30 s"));
+    pump_until("the scan", 30, &|w| w.app.tree.is_some() || matches!(w.app.scan, crate::app::Scan::Failed(_)))?;
+    // The filter, end to end: type into the box, let the worker scan, check the rows.
+    with(|w| {
+        w.app.handle(Input::Find);
+        for c in "bin".chars() {
+            w.app.handle(Input::Edit(Edit::Char(c)));
         }
-        unsafe {
-            if PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            } else {
-                std::thread::yield_now();
-            }
-        }
+        w.run_filter();
+    });
+    pump_until("the filter result", 10, &|w| w.app.filter_installed())?;
+    let filtered = with(|w| w.app.model.as_ref().map(|m| m.rows().len())).flatten();
+    if filtered != Some(3) {
+        return Err(windows::core::Error::new(
+            windows::Win32::Foundation::E_FAIL,
+            format!("filter \"bin\" should show 3 rows (root, sub, f.bin), got {filtered:?}"),
+        ));
     }
     let out = with(|w| {
         w.resize();
         let sub = w.app.tree.as_ref().map(|t| t.subtree_size[NodeId(0)]);
-        w.try_render().map(|_| format!("{}; {}; root {:?} bytes", w.gfx.adapter, w.app.summary, sub))
+        w.try_render().map(|_| {
+            format!("{}; {}; root {:?} bytes; filter ok: {} rows", w.gfx.adapter, w.app.summary, sub, filtered.unwrap_or(0))
+        })
     });
     let _ = std::fs::remove_dir_all(&dir);
     unsafe { DestroyWindow(hwnd)? };

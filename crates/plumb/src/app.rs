@@ -1,11 +1,16 @@
 //! Window-independent application state: what is selected, scrolled and scanning, and how
 //! input changes it. No Win32 types, so the whole interaction model tests anywhere.
+mod filter;
+
 use crate::draw::{Chip, Scene, Theme, View};
+use crate::filter_ui::Edit;
 use crate::fmt;
 use crate::layout::{Hit, Layout};
 use crate::restore::Snapshot;
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::{NodeId, Tree};
+
+pub use filter::FilterJob;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DriveInfo {
@@ -41,6 +46,13 @@ pub enum Input {
     Drag(f32),
     Release,
     Resize(f32, f32),
+    /// A text edit for the filter box (ignored unless it has focus).
+    Edit(Edit),
+    /// Ctrl+F: focus the filter box with its text selected.
+    Find,
+    Escape,
+    Enter,
+    Tab,
 }
 
 #[derive(Debug, PartialEq)]
@@ -54,6 +66,8 @@ pub enum Effect {
     Elevate,
     /// Rescan the drive at this index in the background, keeping the old tree on screen.
     Rescan(usize),
+    /// Start the debounce timer for a filter run.
+    Filter,
 }
 
 /// The sort each header column stands for; "% of parent" orders by size.
@@ -81,6 +95,7 @@ pub struct App {
     sort: (usize, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
     grab: Option<f32>,
+    filter: filter::Filter,
 }
 
 impl App {
@@ -88,7 +103,7 @@ impl App {
         Self {
             layout, drives, adapter, active: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None,
-            live: LiveStatus::Off, refreshing: false,
+            live: LiveStatus::Off, refreshing: false, filter: Default::default(),
         }
     }
 
@@ -98,6 +113,7 @@ impl App {
     }
 
     pub fn begin_scan(&mut self, drive: usize) {
+        self.filter_reset();
         self.active = Some(drive);
         self.tree = None;
         self.model = None;
@@ -116,6 +132,7 @@ impl App {
 
     /// Installs a finished tree. The root is expanded and selected so there is something to see.
     pub fn finish_scan(&mut self, tree: Tree, summary: String) {
+        self.filter_reset();
         let mut model = RowModel::new(&tree);
         model.set_sort(&tree, sort_key(self.sort.0), self.sort.1);
         if let Some(r) = model.rows().first().map(|r| r.id) {
@@ -133,6 +150,9 @@ impl App {
     /// Replaces the tree with a rescanned one, keeping the sort, the expanded folders and the
     /// selection (by path) and where it sits on screen.
     pub fn swap_tree(&mut self, tree: Tree, summary: String) {
+        if self.filter.installed.is_some() {
+            self.unfilter_rows();
+        }
         let kept = match (&self.tree, &self.model) {
             (Some(t), Some(m)) => Some(Snapshot::take(t, m, self.scroll)),
             _ => None,
@@ -144,11 +164,13 @@ impl App {
         self.scroll = scroll;
         self.summary = summary;
         self.refreshing = false;
+        self.filter_reset();
         self.set_live(LiveStatus::Off);
     }
 
     /// Brings the rows up to date after the tree changed in place.
     pub fn refresh_rows(&mut self) {
+        self.filter_live();
         if let (Some(t), Some(m)) = (&mut self.tree, &mut self.model) {
             let s = m.refresh(t, self.scroll);
             self.set_scroll(s);
@@ -196,12 +218,25 @@ impl App {
             }
             Input::Wheel(rows) => self.set_scroll((self.scroll as i64 + rows as i64).max(0) as usize),
             Input::Key(k) => {
+                if self.filter.ui.focus
+                    && let Some(e) = filter::edit_for_key(k)
+                {
+                    return self.filter_edit(e);
+                }
                 if let (Some(t), Some(m)) = (&self.tree, &mut self.model) {
                     m.handle_key(t, k, self.layout.rows_visible().max(1));
                     let s = m.scroll_to_selected(self.scroll, self.layout.rows_visible());
                     self.set_scroll(s);
                 }
             }
+            Input::Edit(e) => return self.filter_edit(e),
+            Input::Find => {
+                self.filter.ui.focus = true;
+                self.filter.ui.edit(Edit::SelectAll);
+            }
+            Input::Escape => return self.filter_escape(),
+            Input::Enter => self.filter_enter(),
+            Input::Tab => self.filter.ui.focus = !self.filter.ui.focus,
             Input::Click(x, y) => return self.click(x, y),
             Input::DoubleClick(x, y) => {
                 if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len()) {
@@ -235,7 +270,26 @@ impl App {
         if self.can_elevate && self.layout.admin_button().contains(x, y) {
             return Effect::Elevate;
         }
-        match self.layout.hit(x, y, self.drives.len()) {
+        let hit = self.layout.hit(x, y, self.drives.len());
+        match hit {
+            Hit::FilterBox => {
+                self.filter.ui.focus = true;
+                self.filter.ui.all = false;
+                self.filter.ui.caret = self.filter.ui.text.len();
+                return Effect::None;
+            }
+            Hit::FilterRegex => {
+                self.filter.ui.focus = true;
+                self.filter.ui.regex = !self.filter.ui.regex;
+                return self.filter_changed();
+            }
+            Hit::FilterClear => {
+                self.filter.ui.focus = true;
+                return if self.filter.ui.clear() { self.filter_changed() } else { Effect::None };
+            }
+            _ => self.filter.ui.focus = false,
+        }
+        match hit {
             Hit::Chip(i) if !matches!(self.scan, Scan::Running { .. }) => return Effect::Scan(i),
             Hit::Rescan => {
                 if let Some(i) = self.active.filter(|_| !self.refreshing && !matches!(self.scan, Scan::Running { .. })) {
@@ -318,6 +372,7 @@ impl App {
     pub fn with_scene<R>(&self, dark: bool, f: impl FnOnce(&Scene) -> R) -> R {
         let chips = self.chips();
         let (message, status, banner) = (self.message(), self.status(), self.banner());
+        let count = self.filter_count();
         let view = match (&self.tree, &self.model) {
             (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll }),
             _ => None,
@@ -333,7 +388,7 @@ impl App {
             message: &message,
             status: &status,
             banner: banner.as_deref(),
-            filter: crate::draw::FilterBar::default(),
+            filter: self.filter_bar(&count),
         })
     }
 }
