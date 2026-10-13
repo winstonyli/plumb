@@ -46,6 +46,8 @@ pub struct Theme {
     pub dim: D2D1_COLOR_F,
     pub accent: D2D1_COLOR_F,
     pub bar: D2D1_COLOR_F,
+    /// The faded part of a bar: how much more it could still grow while scanning.
+    pub bound: D2D1_COLOR_F,
     pub select: D2D1_COLOR_F,
     /// The row under the mouse: fainter than `select`.
     pub hover: D2D1_COLOR_F,
@@ -60,13 +62,13 @@ impl Theme {
         if dark {
             Self {
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
-                accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), select: rgb(0x37373d), error: rgb(0x5c2b2e),
+                accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
                 hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
             }
         } else {
             Self {
                 bg: rgb(0xffffff), panel: rgb(0xf0f0f0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
-                accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
+                accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), bound: rgb(0xf0b860), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
                 hover: rgb(0xedf3fc), folder: rgb(0xd09a2a),
             }
         }
@@ -461,7 +463,7 @@ impl Pen<'_> {
                 let (s, p, rest) = (v.tree.subtree_size[id] as f64, denom as f64, rest as f64);
                 let high = (((s + rest) / (p + rest)) as f32).min(1.0);
                 if high > frac {
-                    self.fade(Rect { x: bx + bw * frac, y: r.y + 3.0, w: bw * (high - frac), h: r.h - 6.0 }, t.bar);
+                    self.fade(Rect { x: bx + bw * frac, y: r.y + 3.0, w: bw * (high - frac), h: r.h - 6.0 }, t.bound);
                 }
             }
             self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
