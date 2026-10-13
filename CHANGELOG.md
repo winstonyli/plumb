@@ -18,7 +18,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 - The partial tree is approximate: only the first name of a hard-linked file appears, and records whose parent never arrives are not shown. The exact tree replaces it at the end. It needs about 200 MB more memory at 5M nodes until then.
 - The filter box takes direct keyboard input only: no IME composition, no mouse text selection or undo, and a click puts the caret at the end of the text. Text wider than the box is clipped.
 - A query matching most of a very large tree opens most folders; the first install on a 2M-node tree takes about 0.3 s on the UI thread.
-- Directory-watch live updates see a file's size when the writer closes or flushes it; a renamed folder is re-listed (its expansion resets); hard links are not tracked; an elevated scan that falls back to the walker has no live updates; a watch that cannot be opened leaves the tree static without a message.
+- Directory-watch live updates see a file's size when the writer closes or flushes it; a renamed folder is re-listed (its expansion resets); hard links are not tracked; an elevated scan that falls back to the walker has no live updates; a watch that cannot be opened shows the stale banner with the reason.
 
 ## [0.2.0] - 2026-10-12
 

@@ -206,6 +206,8 @@ struct Win {
     watch: Option<Watch>,
     /// A directory watch started with the scan and held until the tree is installed.
     dir_pending: Option<Watcher>,
+    /// Why the directory watch for the scan in flight could not start.
+    dir_failed: Option<String>,
     policy: RescanPolicy,
     /// When the user last clicked, scrolled or pressed a key.
     last_input: Instant,
@@ -306,7 +308,7 @@ impl Win {
         let (filter_tx, filter_rx) = channel();
         let win = Self {
             hwnd, app, gfx, painter, swap, target: None, dpi, dark, progress: Arc::default(), rx: None,
-            background: false, watch: None, dir_pending: None, policy: RescanPolicy::default(), last_input: Instant::now(),
+            background: false, watch: None, dir_pending: None, dir_failed: None, policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
         };
@@ -533,6 +535,8 @@ impl Win {
                     self.start_watch(vol, info, mft.records);
                 } else if let Some(w) = self.dir_pending.take() {
                     self.install_dir_watch(w);
+                } else if let Some(m) = self.dir_failed.take() {
+                    self.app.set_live(LiveStatus::Stale(format!("live updates are off: {m}")));
                 }
             }
             Err(e) if background => {
@@ -586,17 +590,20 @@ impl Win {
     /// drive, which gets the change journal). A watch that cannot start leaves the tree static.
     fn start_dir_pending(&mut self, root: &str) {
         self.drop_pending();
+        self.dir_failed = None;
         if is_elevated() && is_ntfs(Path::new(root)) {
             return;
         }
         let hwnd = self.hwnd.0 as isize;
         let posted = self.posted.clone();
-        self.dir_pending = Watcher::start(Path::new(root), WatchConfig::default(), move || {
+        match Watcher::start(Path::new(root), WatchConfig::default(), move || {
             if !posted.swap(true, Ordering::AcqRel) {
                 let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
             }
-        })
-        .ok();
+        }) {
+            Ok(w) => self.dir_pending = Some(w),
+            Err(m) => self.dir_failed = Some(m),
+        }
     }
 
     fn drop_pending(&mut self) {
