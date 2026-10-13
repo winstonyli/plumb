@@ -29,7 +29,7 @@ pub const FILTER_REGEX_W: f32 = 72.0;
 pub const FILTER_COUNT_W: f32 = 150.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 72.0;
-pub const INDENT: f32 = 16.0;
+pub const INDENT: f32 = 20.0;
 /// Widths of the Size, % of parent and Items columns; Name takes the rest.
 pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
 

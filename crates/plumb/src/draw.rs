@@ -139,9 +139,9 @@ pub struct Scene<'a> {
 pub struct Painter {
     left: IDWriteTextFormat,
     right: IDWriteTextFormat,
-    /// Shell icons by (extension key, folder, large); `None` when the shell had none. Device bitmaps, so
+    /// Shell icons by (extension key, folder, open, large). Device bitmaps, so
     /// they live and die with the painter.
-    icons: RefCell<HashMap<(String, bool, bool), Option<ID2D1Bitmap1>>>,
+    icons: RefCell<HashMap<(String, bool, bool, bool), ID2D1Bitmap1>>,
 }
 
 const ICON_CACHE_MAX: usize = 512;
@@ -320,8 +320,8 @@ impl Pen<'_> {
 
     /// The shell's icon for `name` (or for a folder) in a 16-DIP square at `x`, `y`; a small drawn
     /// folder or page when the shell has none.
-    fn icon(&self, x: f32, y: f32, name: &str, dir: bool, t: &Theme) {
-        if let Some(bitmap) = self.shell_icon(name, dir) {
+    fn icon(&self, x: f32, y: f32, name: &str, dir: bool, open: bool, t: &Theme) {
+        if let Some(bitmap) = self.shell_icon(name, dir, open) {
             let dest = D2D_RECT_F { left: x, top: y, right: x + 16.0, bottom: y + 16.0 };
             unsafe { self.gfx.d2d.DrawBitmap(&bitmap, Some(&dest), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None) };
         } else if dir {
@@ -332,27 +332,42 @@ impl Pen<'_> {
         }
     }
 
-    fn shell_icon(&self, name: &str, dir: bool) -> Option<ID2D1Bitmap1> {
-        let key = (icons::key(name, dir), dir, self.large);
+    /// A small triangle centred on `cx`, `cy`, inlaid on a folder: pointing right when closed, down when open.
+    fn chevron(&self, cx: f32, cy: f32, open: bool) {
+        let c = D2D1_COLOR_F { r: 0.30, g: 0.22, b: 0.05, a: 0.9 };
+        for k in 0..4 {
+            let (n, k) = (7.0 - 2.0 * k as f32, k as f32);
+            let r = if open {
+                Rect { x: cx - n / 2.0, y: cy - 2.0 + k, w: n, h: 1.0 }
+            } else {
+                Rect { x: cx - 2.0 + k, y: cy - n / 2.0, w: 1.0, h: n }
+            };
+            self.fill(r, c);
+        }
+    }
+
+    fn shell_icon(&self, name: &str, dir: bool, open: bool) -> Option<ID2D1Bitmap1> {
+        let key = (icons::key(name, dir), dir, open, self.large);
         let mut cache = self.painter.icons.borrow_mut();
+        if let Some(b) = cache.get(&key) {
+            return Some(b.clone());
+        }
+        // A failed lookup is not remembered: it is retried on the next paint.
+        let img = icons::load(&key.0, dir, open, self.large)?;
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+            colorContext: std::mem::ManuallyDrop::new(None),
+        };
+        let size = D2D_SIZE_U { width: img.size, height: img.size };
+        let bitmap = unsafe { self.gfx.d2d.CreateBitmap(size, Some(img.bgra.as_ptr().cast()), img.size * 4, &props).ok()? };
         if cache.len() >= ICON_CACHE_MAX {
             cache.clear();
         }
-        cache
-            .entry(key)
-            .or_insert_with_key(|(k, dir, large)| {
-                let img = icons::load(k, *dir, *large)?;
-                let props = D2D1_BITMAP_PROPERTIES1 {
-                    pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
-                    dpiX: 96.0,
-                    dpiY: 96.0,
-                    bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
-                    colorContext: std::mem::ManuallyDrop::new(None),
-                };
-                let size = D2D_SIZE_U { width: img.size, height: img.size };
-                unsafe { self.gfx.d2d.CreateBitmap(size, Some(img.bgra.as_ptr().cast()), img.size * 4, &props).ok() }
-            })
-            .clone()
+        cache.insert(key, bitmap.clone());
+        Some(bitmap)
     }
 
     fn picker(&self, s: &Scene) {
@@ -391,7 +406,6 @@ impl Pen<'_> {
             let fg = if row.dim { t.dim } else { t.fg };
             let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
-            let arrow = if !dir { "" } else if v.model.is_expanded(id) { "\u{25BE}" } else { "\u{25B8}" };
             let mut name = v.tree.name_string(id).to_string();
             if v.tree.flags[id].contains(NodeFlags::DENIED) {
                 name.push_str("  (access denied)");
@@ -399,9 +413,13 @@ impl Pen<'_> {
             let (nx, nw) = l.column(0);
             let indent = row.depth as f32 * INDENT;
             let ax = nx + 8.0 + indent;
-            self.text(arrow, Rect { x: ax, y: r.y, w: 14.0, h: r.h }, fg, false);
-            self.icon(ax + 16.0, r.y + (r.h - 16.0) / 2.0, &name, dir, t);
-            self.text(&name, Rect { x: ax + 38.0, y: r.y, w: (nw - 16.0 - indent - 38.0).max(0.0), h: r.h }, fg, false);
+            let open = dir && v.model.is_expanded(id);
+            let iy = r.y + (r.h - 16.0) / 2.0;
+            self.icon(ax, iy, &name, dir, open, t);
+            if dir && v.tree.has_children(id) {
+                self.chevron(ax + 8.0, iy + 9.0, open);
+            }
+            self.text(&name, Rect { x: ax + 22.0, y: r.y, w: (nw - 16.0 - indent - 22.0).max(0.0), h: r.h }, fg, false);
             let (sx, sw) = l.column(1);
             let lower = if v.partial { "\u{2265} " } else { "" };
             self.text(&format!("{lower}{}", fmt::size(v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);

@@ -4,7 +4,7 @@ use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
 };
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
-use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_SMALLICON, SHGFI_USEFILEATTRIBUTES};
+use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_OPENICON, SHGFI_SMALLICON, SHGFI_USEFILEATTRIBUTES};
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
 
 /// What decides a node's icon: all folders share one; a file goes by its lowercased extension
@@ -25,11 +25,14 @@ pub struct Image {
     pub bgra: Vec<u8>,
 }
 
-/// The shell icon for a file with extension `key` (or a folder), small (16 px) or large (32 px).
-pub fn load(key: &str, dir: bool, large: bool) -> Option<Image> {
+/// The shell icon for a file with extension `key` (or a folder, open or closed), small (16 px) or large (32 px).
+pub fn load(key: &str, dir: bool, open: bool, large: bool) -> Option<Image> {
     let path: Vec<u16> = format!("x.{key}").encode_utf16().chain([0]).collect();
     let attrs = if dir { FILE_ATTRIBUTE_DIRECTORY } else { FILE_ATTRIBUTE_NORMAL };
-    let flags = SHGFI_ICON | SHGFI_USEFILEATTRIBUTES | if large { SHGFI_LARGEICON } else { SHGFI_SMALLICON };
+    let mut flags = SHGFI_ICON | SHGFI_USEFILEATTRIBUTES | if large { SHGFI_LARGEICON } else { SHGFI_SMALLICON };
+    if open {
+        flags |= SHGFI_OPENICON;
+    }
     let mut info = SHFILEINFOW::default();
     unsafe {
         if SHGetFileInfoW(PCWSTR(path.as_ptr()), attrs, Some(&mut info), size_of::<SHFILEINFOW>() as u32, flags) == 0 || info.hIcon.is_invalid() {
@@ -115,11 +118,11 @@ mod tests {
 
     #[test]
     fn the_shell_gives_a_visible_icon_for_a_folder_and_a_file_type() {
-        for (k, dir) in [("", true), ("txt", false), ("zzzunknown", false)] {
-            let img = load(k, dir, false).unwrap_or_else(|| panic!("no icon for {k:?}"));
+        for (k, dir, open) in [("", true, false), ("", true, true), ("txt", false, false), ("zzzunknown", false, false)] {
+            let img = load(k, dir, open, false).unwrap_or_else(|| panic!("no icon for {k:?}"));
             assert_eq!(img.size, 16);
             assert!(img.bgra.as_chunks::<4>().0.iter().any(|p| p[3] > 0), "{k:?} is fully transparent");
         }
-        assert_eq!(load("txt", false, true).unwrap().size, 32);
+        assert_eq!(load("txt", false, false, true).unwrap().size, 32);
     }
 }

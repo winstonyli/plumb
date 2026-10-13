@@ -5,7 +5,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 ## [Unreleased]
 
 ### Changed
-- `plumb`: rows show Explorer's own icons for folders and file types (fetched by extension, cached per painter, 32-pixel at 150% scaling and up), replacing the drawn folder and page; the drawn ones remain as the fallback when the shell has none.
+- `plumb`: rows show Explorer's own icons for folders (open or closed) and file types, replacing the drawn folder, the drawn page and the expand chevrons. A folder with children carries a small triangle inlaid on its icon (right when closed, down when open); an empty folder has none. Icons are fetched by extension, cached per painter, 32-pixel at 150% scaling and up; the drawn ones remain as the fallback when the shell has none. `INDENT` is now 20.
 
 ## [0.4.0] - 2026-10-13
 
