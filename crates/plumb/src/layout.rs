@@ -24,6 +24,10 @@ pub const CHIP_GAP: f32 = 8.0;
 pub const ADMIN_W: f32 = 168.0;
 pub const BANNER_H: f32 = 28.0;
 pub const RESCAN_W: f32 = 80.0;
+pub const FILTER_H: f32 = 32.0;
+pub const FILTER_REGEX_W: f32 = 72.0;
+pub const FILTER_COUNT_W: f32 = 150.0;
+pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const INDENT: f32 = 16.0;
 /// Widths of the Size, % of parent and Items columns; Name takes the rest.
 pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
@@ -38,6 +42,10 @@ pub enum Hit {
     Scrollbar,
     /// The Rescan button on the stale banner.
     Rescan,
+    /// The filter text box (not its clear button).
+    FilterBox,
+    FilterRegex,
+    FilterClear,
     None,
 }
 
@@ -58,9 +66,39 @@ impl Layout {
         Self { banner, ..self }
     }
 
-    /// Top edge of the header: below the picker, and below the banner when there is one.
-    fn top(&self) -> f32 {
+    /// Top edge of the filter strip: below the picker, and below the banner when there is one.
+    fn filter_top(&self) -> f32 {
         PICKER_H + if self.banner { BANNER_H } else { 0.0 }
+    }
+
+    /// Top edge of the header: below the filter strip.
+    fn top(&self) -> f32 {
+        self.filter_top() + FILTER_H
+    }
+
+    pub fn filter_strip(&self) -> Rect {
+        Rect { x: 0.0, y: self.filter_top(), w: self.w, h: FILTER_H }
+    }
+
+    /// Match count or status text, right-aligned in the strip.
+    pub fn filter_count(&self) -> Rect {
+        Rect { x: (self.w - 8.0 - FILTER_COUNT_W).max(0.0), y: self.filter_top(), w: FILTER_COUNT_W, h: FILTER_H }
+    }
+
+    pub fn filter_regex(&self) -> Rect {
+        let x = (self.filter_count().x - 8.0 - FILTER_REGEX_W).max(0.0);
+        Rect { x, y: self.filter_top() + 4.0, w: FILTER_REGEX_W, h: FILTER_H - 8.0 }
+    }
+
+    /// The text box, including its clear button at the right end.
+    pub fn filter_box(&self) -> Rect {
+        let w = (self.filter_regex().x - 8.0 - 8.0).max(60.0);
+        Rect { x: 8.0, y: self.filter_top() + 4.0, w, h: FILTER_H - 8.0 }
+    }
+
+    pub fn filter_clear(&self) -> Rect {
+        let b = self.filter_box();
+        Rect { x: b.x + b.w - FILTER_CLEAR_W, y: b.y, w: FILTER_CLEAR_W, h: b.h }
     }
 
     pub fn banner_strip(&self) -> Rect {
@@ -149,6 +187,15 @@ impl Layout {
         if self.banner && self.rescan_button().contains(x, y) {
             return Hit::Rescan;
         }
+        if self.filter_clear().contains(x, y) {
+            return Hit::FilterClear;
+        }
+        if self.filter_box().contains(x, y) {
+            return Hit::FilterBox;
+        }
+        if self.filter_regex().contains(x, y) {
+            return Hit::FilterRegex;
+        }
         if self.header().contains(x, y) {
             return (0..4).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
         }
@@ -173,9 +220,9 @@ mod tests {
     #[test]
     fn regions_tile_the_window() {
         let l = Layout::new(800.0, 600.0);
-        assert_eq!(l.rows_area().y, PICKER_H + HEADER_H);
+        assert_eq!(l.rows_area().y, PICKER_H + FILTER_H + HEADER_H);
         assert_eq!(l.rows_area().y + l.rows_area().h + STATUS_H, 600.0);
-        assert_eq!(l.rows_visible(), ((600.0 - 44.0 - 24.0 - 24.0) / 22.0) as usize);
+        assert_eq!(l.rows_visible(), ((600.0 - 44.0 - 32.0 - 24.0 - 24.0) / 22.0) as usize);
     }
 
     #[test]
@@ -192,10 +239,10 @@ mod tests {
         assert_eq!(l.hit(10.0, 10.0, 3), Hit::Chip(0));
         assert_eq!(l.hit(10.0 + 2.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::Chip(2));
         assert_eq!(l.hit(10.0 + 3.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::None);
-        assert_eq!(l.hit(5.0, PICKER_H + 5.0, 3), Hit::Header(0));
-        assert_eq!(l.hit(l.column(2).0 + 1.0, PICKER_H + 5.0, 3), Hit::Header(2));
-        assert_eq!(l.hit(5.0, PICKER_H + HEADER_H + 1.0, 3), Hit::Row(0));
-        assert_eq!(l.hit(5.0, PICKER_H + HEADER_H + 3.0 * ROW_H + 1.0, 3), Hit::Row(3));
+        assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + 5.0, 3), Hit::Header(0));
+        assert_eq!(l.hit(l.column(2).0 + 1.0, PICKER_H + FILTER_H + 5.0, 3), Hit::Header(2));
+        assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + HEADER_H + 1.0, 3), Hit::Row(0));
+        assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + HEADER_H + 3.0 * ROW_H + 1.0, 3), Hit::Row(3));
         assert_eq!(l.hit(795.0, 200.0, 3), Hit::Scrollbar);
         assert_eq!(l.hit(5.0, 595.0, 3), Hit::None);
     }
@@ -207,9 +254,26 @@ mod tests {
         assert_eq!(b.header().y, l.header().y + BANNER_H);
         assert_eq!(b.rows_area().y + b.rows_area().h + STATUS_H, 600.0);
         assert_eq!(b.hit(b.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
-        assert_eq!(l.hit(l.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Header(3));
-        assert_eq!(b.hit(5.0, PICKER_H + BANNER_H + 5.0, 3), Hit::Header(0));
+        assert_ne!(l.hit(l.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
+        assert_eq!(b.hit(5.0, PICKER_H + BANNER_H + FILTER_H + 5.0, 3), Hit::Header(0));
         assert!(b.rows_visible() < l.rows_visible());
+    }
+
+    #[test]
+    fn the_filter_strip_sits_above_the_header_and_its_controls_hit() {
+        let l = Layout::new(800.0, 600.0);
+        assert_eq!(l.filter_strip().y, PICKER_H);
+        assert_eq!(l.header().y, PICKER_H + FILTER_H);
+        let (b, r, c, n) = (l.filter_box(), l.filter_regex(), l.filter_clear(), l.filter_count());
+        assert!(b.x + b.w <= r.x && r.x + r.w <= n.x && n.x + n.w <= 800.0, "{b:?} {r:?} {n:?}");
+        assert_eq!(l.hit(b.x + b.w / 2.0, b.y + 2.0, 3), Hit::FilterBox);
+        assert_eq!(l.hit(c.x + 2.0, c.y + 2.0, 3), Hit::FilterClear);
+        assert_eq!(l.hit(r.x + 2.0, r.y + 2.0, 3), Hit::FilterRegex);
+        assert_eq!(l.hit(n.x + 2.0, n.y + 2.0, 3), Hit::None);
+        let banner = l.with_banner(true);
+        assert_eq!(banner.filter_strip().y, PICKER_H + BANNER_H);
+        assert_eq!(banner.header().y, PICKER_H + BANNER_H + FILTER_H);
+        assert_eq!(banner.hit(banner.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
     }
 
     #[test]

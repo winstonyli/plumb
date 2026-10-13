@@ -78,9 +78,9 @@ fn draws_regions_in_both_themes() {
         let want_panel = [to8(t.panel.r), to8(t.panel.g), to8(t.panel.b)];
         // bottom-right of the row area is empty background; the status bar and header are panel colour.
         assert_eq!(pixel(&buf, 700, 590), want_panel, "status bar (dark={dark})");
-        assert_eq!(pixel(&buf, 790, 60), want_panel, "header (dark={dark})");
+        assert_eq!(pixel(&buf, 790, 88), want_panel, "header (dark={dark})");
         // some pixel in the rows area is text/bar, i.e. not background.
-        let drawn = (68..570).any(|y| (0..400).any(|x| pixel(&buf, x, y) != want_bg && pixel(&buf, x, y) != [to8(t.select.r), to8(t.select.g), to8(t.select.b)]));
+        let drawn = (100..570).any(|y| (0..400).any(|x| pixel(&buf, x, y) != want_bg && pixel(&buf, x, y) != [to8(t.select.r), to8(t.select.g), to8(t.select.b)]));
         assert!(drawn, "no row content (dark={dark})");
     }
 }
