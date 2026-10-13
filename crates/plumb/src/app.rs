@@ -372,13 +372,18 @@ impl App {
                 };
             }
             Input::Click(x, y) => return self.click(x, y),
+            // Windows sends the second press of a quick pair as a double-click instead of a click, so
+            // anywhere but a row it must act as a click, or the second press of a header, button or
+            // scrollbar would be lost.
             Input::DoubleClick(x, y) => {
-                if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len())
-                    && let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
-                        m.select(id);
-                        m.toggle(t, id);
-                        self.set_scroll(self.scroll);
-                    }
+                let Hit::Row(i) = self.layout.hit(x, y, self.drives.len()) else {
+                    return self.click(x, y);
+                };
+                if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
+                    m.select(id);
+                    m.toggle(t, id);
+                    self.set_scroll(self.scroll);
+                }
             }
             Input::RightClick(x, y) => {
                 if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len())
@@ -723,6 +728,19 @@ mod tests {
         assert!(a.model.as_ref().unwrap().rows().len() > before);
         a.handle(Input::DoubleClick(20.0, row_y(1)));
         assert_eq!(a.model.as_ref().unwrap().rows().len(), before);
+    }
+
+    #[test]
+    fn a_double_click_on_a_header_sorts_again() {
+        let mut a = scanned();
+        let h = a.layout.column(1).0 + 4.0;
+        let y = a.layout.header().y + 4.0;
+        let first = a.sort;
+        a.handle(Input::Click(h, y));
+        let once = a.sort;
+        a.handle(Input::DoubleClick(h, y));
+        assert_ne!(first, once);
+        assert_ne!(once, a.sort, "the second press of the pair flips the sort again");
     }
 
     #[test]

@@ -1184,6 +1184,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(0)
         }
         WM_LBUTTONDBLCLK => {
+            unsafe { SetCapture(hwnd) };
             dispatch(hwnd, lp, Input::DoubleClick);
             LRESULT(0)
         }
