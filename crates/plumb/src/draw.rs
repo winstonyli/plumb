@@ -289,6 +289,10 @@ impl Pen<'_> {
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BC}" } else { " \u{25B2}" } } else { "" };
             let (label, color) = (format!("{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
             self.text(&label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, c == 1 || c == 3);
+            if c > 0 {
+                // The grip for resizing: a hairline at the column's left edge.
+                self.fill(Rect { x, y: h.y + 5.0, w: 1.0, h: h.h - 10.0 }, t.bg);
+            }
         }
         match &s.view {
             Some(v) => self.rows(s, v),

@@ -4,6 +4,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+- `plumb`: drag a column edge in the header to resize the Size, % of parent and Items columns (Name keeps at least 120 px; the pointer becomes a resize cursor over an edge). Clicking a folder's icon expands or collapses it.
+
 ### Fixed
 - `plumb`: the second press of a quick double-click on a column header, button, drive chip or scrollbar was dropped (Windows delivers it as a double-click); it now acts as a click, so a double-click on a header flips the sort twice.
 

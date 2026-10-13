@@ -30,14 +30,21 @@ pub const FILTER_COUNT_W: f32 = 150.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 72.0;
 pub const INDENT: f32 = 20.0;
-/// Widths of the Size, % of parent and Items columns; Name takes the rest.
+/// Starting widths of the Size, % of parent and Items columns; Name takes the rest.
 pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
+/// Narrowest a dragged column may get, and narrowest the Name column may be squeezed.
+pub const MIN_COL_W: f32 = 50.0;
+pub const MIN_NAME_W: f32 = 120.0;
+/// Half-width of the grab zone around a column's left edge in the header.
+const GRIP: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
     Chip(usize),
     /// Column header: 0 Name, 1 Size, 2 % of parent, 3 Items.
     Header(usize),
+    /// The left edge of column 1..=3 in the header, where a drag resizes that column.
+    Divider(usize),
     /// Index into the visible window (0 is the first drawn row).
     Row(usize),
     Scrollbar,
@@ -60,11 +67,20 @@ pub struct Layout {
     pub banner: bool,
     /// A Cancel button sits at the right end of the status bar.
     pub cancel: bool,
+    /// Widths of the Size, % of parent and Items columns.
+    pub col_w: [f32; 3],
 }
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false }
+        Self { w, h, banner: false, cancel: false, col_w: COL_W }
+    }
+
+    /// Sets the width of column `c` (1..=3), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
+    pub fn set_col_w(&mut self, c: usize, w: f32) {
+        let others: f32 = self.col_w.iter().sum::<f32>() - self.col_w[c - 1];
+        let max = (self.rows_area().w - MIN_NAME_W - others).max(MIN_COL_W);
+        self.col_w[c - 1] = w.clamp(MIN_COL_W, max);
     }
 
     pub fn with_cancel(self, cancel: bool) -> Self {
@@ -165,10 +181,10 @@ impl Layout {
 
     /// Left edge of column `c` (0 Name .. 3 Items) and its width.
     pub fn column(&self, c: usize) -> (f32, f32) {
-        let fixed: f32 = COL_W.iter().sum();
+        let fixed: f32 = self.col_w.iter().sum();
         let name_w = (self.rows_area().w - fixed).max(60.0);
-        let x = name_w + COL_W[..c.saturating_sub(1)].iter().sum::<f32>();
-        if c == 0 { (0.0, name_w) } else { (x, COL_W[c - 1]) }
+        let x = name_w + self.col_w[..c.saturating_sub(1)].iter().sum::<f32>();
+        if c == 0 { (0.0, name_w) } else { (x, self.col_w[c - 1]) }
     }
 
     /// Scrollbar thumb for `total` rows scrolled to `scroll`; `None` when everything fits.
@@ -215,6 +231,9 @@ impl Layout {
             return Hit::FilterRegex;
         }
         if self.header().contains(x, y) {
+            if let Some(c) = (1..4).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
+                return Hit::Divider(c);
+            }
             return (0..4).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
         }
         if self.scrollbar().contains(x, y) {
@@ -258,11 +277,27 @@ mod tests {
         assert_eq!(l.hit(10.0 + 2.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::Chip(2));
         assert_eq!(l.hit(10.0 + 3.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::None);
         assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + 5.0, 3), Hit::Header(0));
-        assert_eq!(l.hit(l.column(2).0 + 1.0, PICKER_H + FILTER_H + 5.0, 3), Hit::Header(2));
+        assert_eq!(l.hit(l.column(2).0 + 20.0, PICKER_H + FILTER_H + 5.0, 3), Hit::Header(2));
         assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + HEADER_H + 1.0, 3), Hit::Row(0));
         assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + HEADER_H + 3.0 * ROW_H + 1.0, 3), Hit::Row(3));
         assert_eq!(l.hit(795.0, 200.0, 3), Hit::Scrollbar);
         assert_eq!(l.hit(5.0, 595.0, 3), Hit::None);
+    }
+
+    #[test]
+    fn dragging_a_column_edge_resizes_it_within_limits() {
+        let mut l = Layout::new(800.0, 600.0);
+        let y = l.header().y + 4.0;
+        let edge = l.column(2).0;
+        assert_eq!(l.hit(edge, y, 0), Hit::Divider(2));
+        assert_eq!(l.hit(edge + 10.0, y, 0), Hit::Header(2));
+        l.set_col_w(2, 200.0);
+        assert_eq!(l.column(2).1, 200.0);
+        assert_eq!(l.column(3).0 + l.column(3).1, l.rows_area().w, "the right edge stays put");
+        l.set_col_w(2, 1.0);
+        assert_eq!(l.column(2).1, MIN_COL_W);
+        l.set_col_w(2, 10_000.0);
+        assert!(l.column(0).1 >= MIN_NAME_W);
     }
 
     #[test]

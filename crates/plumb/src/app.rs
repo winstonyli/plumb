@@ -5,7 +5,7 @@ mod filter;
 use crate::draw::{Chip, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{Hit, Layout};
+use crate::layout::{Hit, Layout, INDENT};
 use crate::restore::Snapshot;
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::{NodeId, Tree};
@@ -47,8 +47,8 @@ pub enum Input {
     /// Rows to scroll; positive is down.
     Wheel(i32),
     Key(Key),
-    /// Mouse moved with the left button held, at this y.
-    Drag(f32),
+    /// Mouse moved with the left button held, at this x and y.
+    Drag(f32, f32),
     Release,
     Resize(f32, f32),
     /// A text edit for the filter box (ignored unless it has focus).
@@ -139,6 +139,8 @@ pub struct App {
     sort: (usize, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
     grab: Option<f32>,
+    /// While dragging a column edge: the column, and the pointer x and column width at the start.
+    col_drag: Option<(usize, f32, f32)>,
     filter: filter::Filter,
 }
 
@@ -146,7 +148,7 @@ impl App {
     pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
         Self {
             layout, drives, adapter, active: None, marks: Vec::new(), hover: None, tree: None, model: None, scroll: 0,
-            can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None,
+            can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
     }
@@ -329,6 +331,19 @@ impl App {
         self.scroll = s.min(self.max_scroll());
     }
 
+    /// The folder whose icon is at x on visible row `i`, if `x` is over that icon and the folder can expand.
+    fn icon_at(&self, i: usize, x: f32) -> Option<NodeId> {
+        let (t, m) = (self.tree.as_ref()?, self.model.as_ref()?);
+        let row = m.rows().get(self.scroll + i)?;
+        let left = self.layout.column(0).0 + 8.0 + row.depth as f32 * INDENT;
+        (x >= left && x < left + 16.0 && m.is_expandable(t, row.id)).then_some(row.id)
+    }
+
+    /// Whether the pointer is on a column edge in the header (or one is being dragged), for the resize cursor.
+    pub fn over_divider(&self, x: f32, y: f32) -> bool {
+        self.col_drag.is_some() || matches!(self.layout.hit(x, y, self.drives.len()), Hit::Divider(_))
+    }
+
     fn row_at(&self, i: usize) -> Option<NodeId> {
         self.model.as_ref()?.rows().get(self.scroll + i).map(|r| r.id)
     }
@@ -337,7 +352,7 @@ impl App {
         self.layout.cancel = self.cancelable();
         match input {
             Input::Resize(w, h) => {
-                self.layout = Layout::new(w, h).with_banner(self.layout.banner).with_cancel(self.layout.cancel);
+                self.layout = Layout { w, h, ..self.layout };
                 self.set_scroll(self.scroll);
             }
             Input::Wheel(rows) => self.set_scroll((self.scroll as i64 + rows as i64).max(0) as usize),
@@ -379,6 +394,9 @@ impl App {
                 let Hit::Row(i) = self.layout.hit(x, y, self.drives.len()) else {
                     return self.click(x, y);
                 };
+                if self.icon_at(i, x).is_some() {
+                    return self.click(x, y);
+                }
                 if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
                     m.select(id);
                     m.toggle(t, id);
@@ -392,13 +410,19 @@ impl App {
                         return Effect::Menu(id);
                     }
             }
-            Input::Drag(y) => {
-                if let Some(g) = self.grab {
+            Input::Drag(x, y) => {
+                if let Some((c, x0, w0)) = self.col_drag {
+                    // The edge is the column's left side, so moving it left widens the column.
+                    self.layout.set_col_w(c, w0 + x0 - x);
+                } else if let Some(g) = self.grab {
                     let s = self.layout.scroll_for_thumb_y(self.total_rows(), y - g);
                     self.set_scroll(s);
                 }
             }
-            Input::Release => self.grab = None,
+            Input::Release => {
+                self.grab = None;
+                self.col_drag = None;
+            }
         }
         Effect::None
     }
@@ -443,9 +467,15 @@ impl App {
                     self.scroll = 0;
                 }
             }
+            Hit::Divider(c) => self.col_drag = Some((c, x, self.layout.col_w[c - 1])),
             Hit::Row(i) => {
-                if let (Some(id), Some(m)) = (self.row_at(i), &mut self.model) {
+                let folder = self.icon_at(i, x);
+                if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
                     m.select(id);
+                    if folder.is_some() {
+                        m.toggle(t, id);
+                        self.set_scroll(self.scroll);
+                    }
                 }
             }
             Hit::Scrollbar => {
@@ -731,9 +761,41 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_folders_icon_toggles_it_and_a_double_click_on_it_toggles_again() {
+        let mut a = scanned();
+        let before = a.model.as_ref().unwrap().rows().len();
+        let depth = a.model.as_ref().unwrap().rows()[1].depth as f32;
+        let icon_x = a.layout.column(0).0 + 8.0 + depth * INDENT + 4.0;
+        a.handle(Input::Click(icon_x, row_y(1)));
+        let opened = a.model.as_ref().unwrap().rows().len();
+        assert!(opened > before, "one click on the icon opens the folder");
+        a.handle(Input::DoubleClick(icon_x, row_y(1)));
+        assert_eq!(a.model.as_ref().unwrap().rows().len(), before, "the second press of a pair toggles again");
+        a.handle(Input::Click(icon_x + 200.0, row_y(1)));
+        assert_eq!(a.model.as_ref().unwrap().rows().len(), before, "a click on the name only selects");
+    }
+
+    #[test]
+    fn dragging_a_column_edge_widens_the_column_and_release_ends_it() {
+        let mut a = scanned();
+        let y = a.layout.header().y + 4.0;
+        let x = a.layout.column(1).0;
+        let w = a.layout.column(1).1;
+        assert!(a.over_divider(x, y));
+        a.handle(Input::Click(x, y));
+        a.handle(Input::Drag(x - 30.0, y));
+        assert_eq!(a.layout.column(1).1, w + 30.0);
+        assert!(a.over_divider(0.0, 0.0), "while dragging the cursor stays a resize cursor");
+        a.handle(Input::Release);
+        a.handle(Input::Drag(x - 60.0, y));
+        assert_eq!(a.layout.column(1).1, w + 30.0, "released: further moves do nothing");
+        assert!(!a.over_divider(0.0, 0.0));
+    }
+
+    #[test]
     fn a_double_click_on_a_header_sorts_again() {
         let mut a = scanned();
-        let h = a.layout.column(1).0 + 4.0;
+        let h = a.layout.column(1).0 + 20.0;
         let y = a.layout.header().y + 4.0;
         let first = a.sort;
         a.handle(Input::Click(h, y));
@@ -799,11 +861,11 @@ mod tests {
         let total = m.rows().len();
         let th = a.layout.thumb(total, 0).unwrap();
         a.handle(Input::Click(795.0, th.y + 2.0));
-        a.handle(Input::Drag(th.y + 2.0 + 100.0));
+        a.handle(Input::Drag(795.0, th.y + 2.0 + 100.0));
         assert!(a.scroll > 0);
         a.handle(Input::Release);
         let s = a.scroll;
-        a.handle(Input::Drag(th.y + 300.0));
+        a.handle(Input::Drag(795.0, th.y + 300.0));
         assert_eq!(a.scroll, s);
     }
 

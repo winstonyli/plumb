@@ -39,7 +39,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, InvalidateRect, MonitorFromWindow, ValidateRect, MONITOR_DEFAULTTONEAREST,
+    ClientToScreen, ScreenToClient, InvalidateRect, MonitorFromWindow, ValidateRect, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
@@ -1199,7 +1199,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_MOUSEMOVE => {
             if wp.0 & 1 != 0 {
-                dispatch(hwnd, lp, |_, y| Input::Drag(y));
+                dispatch(hwnd, lp, Input::Drag);
             } else {
                 let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
                 let _ = unsafe { TrackMouseEvent(&mut t) }; // asks for WM_MOUSELEAVE
@@ -1213,6 +1213,21 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 });
             }
             LRESULT(0)
+        }
+        WM_SETCURSOR if (lp.0 & 0xffff) as u32 == HTCLIENT => {
+            let mut p = POINT::default();
+            let over = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(hwnd, &mut p).as_bool() }
+                && with(|w| {
+                    let (x, y) = w.dip(LPARAM((p.x as isize & 0xffff) | ((p.y as isize & 0xffff) << 16)));
+                    w.app.over_divider(x, y)
+                })
+                .unwrap_or(false);
+            if over {
+                unsafe { SetCursor(LoadCursorW(None, IDC_SIZEWE).ok()) };
+                LRESULT(1)
+            } else {
+                unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+            }
         }
         WM_MOUSELEAVE => {
             with(|w| {
