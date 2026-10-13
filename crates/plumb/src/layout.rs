@@ -33,8 +33,8 @@ const FILTER_AFTER_W: f32 = 8.0 + FILTER_COUNT_W;
 pub const FILTER_BOX_H: f32 = 28.0;
 pub const FILTER_BOX_W: f32 = 304.0;
 pub const FILTER_BOX_MIN: f32 = 184.0;
-/// The Regex toggle sits inside the right end of the filter box, inset 4 px from its edges.
-pub const FILTER_REGEX_W: f32 = 28.0;
+/// The Regex toggle sits inside the right end of the filter box, inset 4 px from its edges: a square.
+pub const FILTER_REGEX_W: f32 = FILTER_BOX_H - 8.0;
 pub const FILTER_COUNT_W: f32 = 110.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 32.0;

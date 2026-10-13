@@ -303,7 +303,8 @@ impl Pen<'_> {
         if f.regex {
             self.frame(r, t.accent);
         }
-        self.centered(".*", r, if f.regex { t.accent } else if hot { t.fg } else { t.dim });
+        // The line box centres the text, but `.*` sits low in it (a period on the baseline and a raised star).
+        self.centered(".*", Rect { y: r.y - 3.0, ..r },if f.regex { t.accent } else if hot { t.fg } else { t.dim });
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
 
