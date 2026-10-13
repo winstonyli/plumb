@@ -401,7 +401,7 @@ impl Pen<'_> {
             let ax = nx + 8.0 + indent;
             self.text(arrow, Rect { x: ax, y: r.y, w: 14.0, h: r.h }, fg, false);
             self.icon(ax + 16.0, r.y + (r.h - 16.0) / 2.0, &name, dir, t);
-            self.text(&name, Rect { x: ax + 34.0, y: r.y, w: (nw - 16.0 - indent - 34.0).max(0.0), h: r.h }, fg, false);
+            self.text(&name, Rect { x: ax + 38.0, y: r.y, w: (nw - 16.0 - indent - 38.0).max(0.0), h: r.h }, fg, false);
             let (sx, sw) = l.column(1);
             let lower = if v.partial { "\u{2265} " } else { "" };
             self.text(&format!("{lower}{}", fmt::size(v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
