@@ -4,6 +4,10 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-13
+
+Cancel a scan, keep each drive's tree and scan when switching drives, and a visual refresh.
+
 ### Added
 - `plumb`: a running scan can be cancelled with the Cancel button in the status bar or Esc. A cancelled first scan leaves no tree; a cancelled background rescan keeps the old one. `plumb-scan`: `Progress::cancel` and `ScanError::Cancelled`; both scanners stop within one directory or one read chunk.
 
