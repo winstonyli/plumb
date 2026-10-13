@@ -8,9 +8,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use plumb_core::{NodeFlags, Tree};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
-use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
+use windows_numerics::Vector2;
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    ID2D1Bitmap1, ID2D1SolidColorBrush, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{
@@ -112,6 +113,9 @@ pub struct View<'a> {
     pub scroll: usize,
     /// The scan is still running, so sizes and counts are what has been found so far.
     pub partial: bool,
+    /// While `partial`: bytes of the drive's used space the scan has not found yet, as far as the
+    /// drive's used space says (`None` once the scan has counted more than that, when it says nothing).
+    pub unscanned: Option<u64>,
     /// The visible row under the mouse.
     pub hover: Option<usize>,
 }
@@ -207,6 +211,21 @@ impl Pen<'_> {
         unsafe {
             self.brush.SetColor(&c);
             self.gfx.d2d.DrawText(&u, f, &rc(r), &self.brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+        }
+    }
+
+    /// Fills `r` with `c` fading out to nothing from its left edge to its right: an estimate's soft end.
+    fn fade(&self, r: Rect, c: D2D1_COLOR_F) {
+        let stops = [
+            D2D1_GRADIENT_STOP { position: 0.0, color: D2D1_COLOR_F { a: c.a * 0.9, ..c } },
+            D2D1_GRADIENT_STOP { position: 1.0, color: D2D1_COLOR_F { a: 0.0, ..c } },
+        ];
+        let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: r.x, Y: 0.0 }, endPoint: Vector2 { X: r.x + r.w, Y: 0.0 } };
+        unsafe {
+            let d2d = &self.gfx.d2d;
+            let Ok(stops) = ID2D1RenderTarget::CreateGradientStopCollection(d2d, &stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) else { return };
+            let Ok(brush) = d2d.CreateLinearGradientBrush(&props, None, &stops) else { return };
+            d2d.FillRectangle(&rc(r), &brush);
         }
     }
 
@@ -429,7 +448,16 @@ impl Pen<'_> {
             let lower = if v.partial { "\u{2265} " } else { "" };
             self.text(&format!("{lower}{}", fmt::size(v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
             let (px, pw) = l.column(2);
-            self.fill(Rect { x: px + 4.0, y: r.y + 3.0, w: (pw - 8.0) * frac, h: r.h - 6.0 }, t.bar);
+            let (bx, bw) = (px + 4.0, pw - 8.0);
+            self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
+            // While scanning, the share could still grow: at most to where all the unscanned bytes land in this row.
+            if let Some(rest) = v.unscanned.filter(|_| v.partial) {
+                let (s, p, rest) = (v.tree.subtree_size[id] as f64, denom as f64, rest as f64);
+                let high = (((s + rest) / (p + rest)) as f32).min(1.0);
+                if high > frac {
+                    self.fade(Rect { x: bx + bw * frac, y: r.y + 3.0, w: bw * (high - frac), h: r.h - 6.0 }, t.bar);
+                }
+            }
             self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (ix, iw) = l.column(3);
             self.text(&format!("{lower}{}", fmt::count(v.tree.subtree_files[id] as u64)), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);

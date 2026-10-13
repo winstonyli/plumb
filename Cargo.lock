@@ -239,6 +239,7 @@ dependencies = [
  "plumb-core",
  "plumb-scan",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]

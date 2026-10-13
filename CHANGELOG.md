@@ -5,6 +5,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 ## [Unreleased]
 
 ### Added
+- `plumb`: while a scan runs, the % of parent bar fades out past its solid part to the most that row could still grow, estimated from the drive's used space less what the scan has found. The fade is hidden once the scan has counted more than the drive reports used (hard links and placeholders can do that). See `docs/superpowers/specs/2026-10-13-plumb-scan-bounds-design.md`.
 - `plumb`: drag a column edge in the header to resize the Size, % of parent and Items columns (Name keeps at least 120 px; the pointer becomes a resize cursor over an edge). Clicking a folder's icon expands or collapses it.
 
 ### Fixed

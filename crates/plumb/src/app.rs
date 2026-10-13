@@ -547,13 +547,22 @@ impl App {
         }
     }
 
+    /// What the running scan has yet to find, by the drive's used space; `None` when no scan runs or it
+    /// has already counted more than the drive reports used (hard links, placeholders and compressed
+    /// files can make it, and then the used space says nothing about what is left).
+    pub fn unscanned(&self) -> Option<u64> {
+        let Scan::Running { drive, bytes, .. } = self.scan else { return None };
+        let d = self.drives.get(drive)?;
+        d.total.saturating_sub(d.free).checked_sub(bytes)
+    }
+
     /// Builds the scene for `dark` and passes it to `f`; the scene borrows locals made here.
     pub fn with_scene<R>(&self, dark: bool, f: impl FnOnce(&Scene) -> R) -> R {
         let chips = self.chips();
         let (message, status, banner) = (self.message(), self.status(), self.banner());
         let count = self.filter_count();
         let view = match (&self.tree, &self.model) {
-            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), hover: self.hover }),
+            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover }),
             _ => None,
         };
         f(&Scene {
@@ -790,6 +799,18 @@ mod tests {
         a.handle(Input::Drag(x - 60.0, y));
         assert_eq!(a.layout.column(1).1, w + 30.0, "released: further moves do nothing");
         assert!(!a.over_divider(0.0, 0.0));
+    }
+
+    #[test]
+    fn the_unscanned_bytes_are_the_drives_used_space_less_what_the_scan_found_and_vanish_past_it() {
+        let mut a = app();
+        assert_eq!(a.unscanned(), None, "no scan, nothing to estimate");
+        a.begin_scan(0); // drive C: 1000 total, 250 free
+        assert_eq!(a.unscanned(), Some(750));
+        a.progress(1, 1, 700);
+        assert_eq!(a.unscanned(), Some(50));
+        a.progress(1, 1, 751);
+        assert_eq!(a.unscanned(), None, "the scan counted more than the drive says is used");
     }
 
     #[test]

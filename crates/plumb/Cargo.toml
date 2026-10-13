@@ -8,6 +8,7 @@ plumb-core.workspace = true
 plumb-scan.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+windows-numerics = "0.3"
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
