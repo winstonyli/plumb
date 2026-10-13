@@ -174,6 +174,9 @@ impl Scanner for WalkScanner {
                     let mut buf = vec![0u64; BUF_BYTES / 8];
                     // The lock is held only while waiting for a job, never while listing.
                     while let Ok(job) = rx.lock().unwrap().recv() {
+                        if progress.cancelled() {
+                            break;
+                        }
                         let entries = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             list_dir(&job.path, &mut buf, cluster)
                         }))
@@ -188,6 +191,9 @@ impl Scanner for WalkScanner {
 
             // This thread owns the builder: it assigns ids and queues subdirectories.
             while outstanding > 0 {
+                if progress.cancelled() {
+                    break;
+                }
                 let Ok(done) = done_rx.recv() else { break };
                 outstanding -= 1;
                 let Ok(entries) = done.entries else {
@@ -219,7 +225,7 @@ impl Scanner for WalkScanner {
             }
             drop(job_tx); // workers see a closed queue and exit
         });
-        Ok(())
+        if progress.cancelled() { Err(ScanError::Cancelled) } else { Ok(()) }
     }
 }
 

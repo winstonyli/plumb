@@ -139,3 +139,13 @@ fn the_walker_sends_one_add_per_node_in_builder_order() {
         assert_eq!((*parent, name.as_slice(), *size, *flags), (t.parent[id], t.name(id), t.size[id], t.flags[id]), "node {i}");
     }
 }
+
+#[test]
+fn a_cancelled_walk_returns_cancelled_and_ends() {
+    let f = fixture("cancel");
+    let p = Progress::default();
+    p.cancel();
+    let mut b = TreeBuilder::new();
+    let r = WalkScanner { threads: 2 }.scan(&f.0, &mut b, &p);
+    assert!(matches!(r, Err(ScanError::Cancelled)));
+}

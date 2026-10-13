@@ -163,3 +163,14 @@ fn the_mft_scan_sends_begin_then_one_upsert_per_base_record_but_the_root() {
     let link = upserts.last().unwrap();
     assert_eq!((link.parent, String::from_utf16_lossy(&link.name).as_str()), (5, "link2"), "the lowest (parent, name) carries the size");
 }
+
+#[test]
+fn a_cancelled_scan_is_an_error_and_leaves_the_builder_empty() {
+    let img = image();
+    let p = Progress::default();
+    p.cancel();
+    let mut b = TreeBuilder::new();
+    let r = scan_mft(&img, &layout(), "X:", &MftOptions { threads: 2, chunk_bytes: BPC }, &mut b, &p);
+    assert!(matches!(r, Err(MftError::Cancelled)));
+    assert!(b.is_empty());
+}

@@ -18,7 +18,7 @@ pub mod watch;
 
 use plumb_core::TreeBuilder;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Counters a scanner updates while it runs. Read them from another thread to show progress.
 /// Optionally also carries the channel a partial-tree preview is sent through.
@@ -29,11 +29,22 @@ pub struct Progress {
     /// Allocated bytes seen so far.
     pub bytes: AtomicU64,
     pub preview: Option<preview::PreviewTx>,
+    /// Set from another thread to make the scan stop and return `ScanError::Cancelled`.
+    cancel: AtomicBool,
 }
 
 impl Progress {
     pub fn with_preview(tx: preview::PreviewTx) -> Self {
         Self { preview: Some(tx), ..Self::default() }
+    }
+
+    /// Asks the scan to stop. It returns `ScanError::Cancelled` soon after, with nothing usable.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
     }
 
     pub fn snapshot(&self) -> (u64, u64, u64) {
@@ -62,6 +73,8 @@ pub enum ScanError {
     Root(std::io::Error),
     /// The MFT scanner could not run or failed; the message says why. Nothing was added to the tree.
     Mft(String),
+    /// `Progress::cancel` was called.
+    Cancelled,
 }
 
 pub trait Scanner {

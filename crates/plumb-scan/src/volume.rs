@@ -159,7 +159,10 @@ impl MftScanner {
         let vol = Volume::open(letter).map_err(|e| ScanError::Mft(format!("cannot open volume {letter}: {e}")))?;
         let layout = vol.layout().map_err(|e| ScanError::Mft(format!("cannot query volume {letter}: {e}")))?;
         scan_mft(&vol, &layout, &format!("{letter}:"), &self.options, out, progress)
-            .map_err(|e| ScanError::Mft(e.to_string()))
+            .map_err(|e| match e {
+                crate::mft_scan::MftError::Cancelled => ScanError::Cancelled,
+                e => ScanError::Mft(e.to_string()),
+            })
     }
 }
 

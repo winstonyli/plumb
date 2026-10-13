@@ -440,6 +440,7 @@ impl Win {
                 let report = scan_auto(Path::new(&root), &mut b, &progress).map_err(|e| match e {
                     ScanError::Root(e) => e.to_string(),
                     ScanError::Mft(m) => m,
+                    ScanError::Cancelled => "cancelled".to_string(),
                 })?;
                 let tree = b.finish().map_err(|e| format!("{e:?}"))?;
                 Ok(Scanned { tree, report, elapsed: t0.elapsed(), journal })

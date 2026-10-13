@@ -51,6 +51,8 @@ pub enum MftError {
     Layout(String),
     /// Record 0 (`$MFT` itself) could not be parsed.
     Record0(ParseError),
+    /// `Progress::cancel` was called.
+    Cancelled,
 }
 
 impl std::fmt::Display for MftError {
@@ -59,6 +61,7 @@ impl std::fmt::Display for MftError {
             MftError::Read(e) => write!(f, "reading the volume failed: {e}"),
             MftError::Layout(s) => write!(f, "unsupported volume layout: {s}"),
             MftError::Record0(e) => write!(f, "cannot parse $MFT record 0: {e:?}"),
+            MftError::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -145,6 +148,9 @@ pub fn scan_mft<V: VolumeRead>(
     std::thread::scope(|s| {
         s.spawn(|| {
             for &(off, len, first_record) in &plan {
+                if progress.cancelled() {
+                    break;
+                }
                 let mut data = vec![0u8; len as usize];
                 if let Err(e) = vol.read_at(off, &mut data) {
                     *read_error.lock().unwrap() = Some(e);
@@ -163,6 +169,9 @@ pub fn scan_mft<V: VolumeRead>(
 
     if let Some(e) = read_error.into_inner().unwrap() {
         return Err(MftError::Read(e));
+    }
+    if progress.cancelled() {
+        return Err(MftError::Cancelled);
     }
     let t1 = Instant::now();
     let (stats, records) = merger.into_inner().unwrap().finish(root_name, out);
