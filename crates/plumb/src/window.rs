@@ -12,6 +12,8 @@ use plumb_core::rows::Key;
 use plumb_core::{NodeId, Tree, TreeBuilder};
 use plumb_scan::preview::channel as preview_channel;
 use plumb_scan::journal::{Delta, Event, JournalConfig, JournalInfo, JournalReader, JournalSource, Stop};
+use plumb_scan::listing::Listing;
+use plumb_scan::watch::{Event as WatchEvent, Stop as WatchStop, WatchConfig, Watcher};
 use plumb_scan::select::{scan_auto, ScanReport, Used};
 use plumb_scan::volume::{drive_letter, is_elevated, is_ntfs, Volume};
 use plumb_scan::{Progress, ScanError};
@@ -85,16 +87,91 @@ struct Scanned {
 
 type ScanResult = std::result::Result<Scanned, String>;
 
+/// What a live watch follows.
+enum Source {
+    Journal { reader: JournalReader, live: Live, queue: VecDeque<Delta> },
+    Dir { watcher: Watcher, queue: VecDeque<Listing> },
+}
+
 /// Everything live updates need for the drive on screen.
 struct Watch {
-    reader: JournalReader,
-    live: Live,
-    queue: VecDeque<Delta>,
+    src: Source,
     pacer: Pacer,
     /// The tree changed since the rows were last refreshed.
     dirty: bool,
     /// `TIMER_LIVE` is running.
     armed: bool,
+}
+
+/// Why a watch ended; `why` is `None` when it was asked to stop.
+struct Ended {
+    rescan: bool,
+    why: Option<String>,
+}
+
+impl Watch {
+    /// Moves what the source has queued into its queue; `Some` if the source has ended.
+    fn drain(&mut self) -> Option<Ended> {
+        let ended = |rescan: bool, why: &str| Some(Ended { rescan, why: Some(why.to_string()) });
+        match &mut self.src {
+            Source::Journal { reader, queue, .. } => {
+                while let Some(ev) = reader.try_recv() {
+                    match ev {
+                        Event::Deltas(d) => queue.extend(d),
+                        Event::Stopped(Stop::Requested) => return Some(Ended { rescan: false, why: None }),
+                        Event::Stopped(Stop::Wrapped) => {
+                            return ended(true, "the change journal wrapped, so changes were missed");
+                        }
+                        Event::Stopped(Stop::Disabled) => return ended(false, "the change journal is not active"),
+                        Event::Stopped(Stop::Failed(m)) => return ended(false, &m),
+                    }
+                }
+            }
+            Source::Dir { watcher, queue } => {
+                while let Some(ev) = watcher.try_recv() {
+                    match ev {
+                        WatchEvent::Listings(l) => queue.extend(l),
+                        WatchEvent::Stopped(WatchStop::Overflow) => {
+                            return ended(true, "the directory watch overflowed, so changes were missed");
+                        }
+                        WatchEvent::Stopped(WatchStop::TooMany) => {
+                            return ended(true, "too many folders changed at once");
+                        }
+                        WatchEvent::Stopped(WatchStop::Failed(m)) => return ended(false, &m),
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Applies queued changes for the budget; returns how many tree changes were made.
+    fn apply(&mut self, tree: &mut Tree, deadline: Instant) -> usize {
+        match &mut self.src {
+            Source::Journal { live, queue, .. } => live.apply(tree, queue, deadline),
+            Source::Dir { queue, .. } => crate::dirsync::apply(tree, queue, deadline),
+        }
+    }
+
+    fn queued(&self) -> bool {
+        match &self.src {
+            Source::Journal { queue, .. } => !queue.is_empty(),
+            Source::Dir { queue, .. } => !queue.is_empty(),
+        }
+    }
+
+    /// Work left that a timer tick should finish.
+    fn backlog(&self) -> bool {
+        self.queued() || matches!(&self.src, Source::Journal { live, .. } if live.pending())
+    }
+
+    /// Stops the source (blocks briefly: call off the UI thread).
+    fn stop(self) {
+        match self.src {
+            Source::Journal { reader, .. } => reader.stop(),
+            Source::Dir { watcher, .. } => watcher.stop(),
+        }
+    }
 }
 
 fn open_journal(root: &str) -> Option<(Volume, JournalInfo)> {
@@ -127,6 +204,8 @@ struct Win {
     /// The scan in flight is a rescan: the old tree stays on screen until it finishes.
     background: bool,
     watch: Option<Watch>,
+    /// A directory watch started with the scan and held until the tree is installed.
+    dir_pending: Option<Watcher>,
     policy: RescanPolicy,
     /// When the user last clicked, scrolled or pressed a key.
     last_input: Instant,
@@ -227,7 +306,7 @@ impl Win {
         let (filter_tx, filter_rx) = channel();
         let win = Self {
             hwnd, app, gfx, painter, swap, target: None, dpi, dark, progress: Arc::default(), rx: None,
-            background: false, watch: None, policy: RescanPolicy::default(), last_input: Instant::now(),
+            background: false, watch: None, dir_pending: None, policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
         };
@@ -346,6 +425,7 @@ impl Win {
             self.preview_dirty = false;
             Arc::new(Progress::with_preview(tx))
         };
+        self.start_dir_pending(&root);
         let progress = self.progress.clone();
         let (tx, rx) = channel();
         self.rx = Some(rx);
@@ -449,14 +529,21 @@ impl Win {
                     self.app.finish_scan(sc.tree, s);
                 }
                 if let (Some((vol, info)), Some(mft)) = (sc.journal, sc.report.mft) {
+                    self.drop_pending();
                     self.start_watch(vol, info, mft.records);
+                } else if let Some(w) = self.dir_pending.take() {
+                    self.install_dir_watch(w);
                 }
             }
             Err(e) if background => {
+                self.drop_pending();
                 self.app.refreshing = false;
                 self.app.set_live(LiveStatus::Stale(format!("the rescan failed: {e}")));
             }
-            Err(e) => self.app.fail_scan(e),
+            Err(e) => {
+                self.drop_pending();
+                self.app.fail_scan(e);
+            }
         }
         if self.app.filter_dirty() {
             self.run_filter();
@@ -473,53 +560,80 @@ impl Win {
             }
         });
         self.watch = Some(Watch {
-            reader, live: Live::new(records), queue: VecDeque::new(), pacer: Pacer::new(Instant::now()),
-            dirty: false, armed: false,
+            src: Source::Journal { reader, live: Live::new(records), queue: VecDeque::new() },
+            pacer: Pacer::new(Instant::now()),
+            dirty: false,
+            armed: false,
         });
         self.app.set_live(LiveStatus::On { last: None });
     }
 
-    /// Stops following the journal. The reader may be mid-wait, so it is joined off the UI thread.
+    /// Makes the directory watch started with the scan the live watch: releases what it collected
+    /// while the scan ran and wakes the window to apply it.
+    fn install_dir_watch(&mut self, watcher: Watcher) {
+        watcher.release();
+        self.watch = Some(Watch {
+            src: Source::Dir { watcher, queue: VecDeque::new() },
+            pacer: Pacer::new(Instant::now()),
+            dirty: false,
+            armed: false,
+        });
+        self.app.set_live(LiveStatus::On { last: None });
+        let _ = unsafe { PostMessageW(Some(self.hwnd), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
+    }
+
+    /// Starts a held directory watch on `root` when the walker will scan it (not an elevated NTFS
+    /// drive, which gets the change journal). A watch that cannot start leaves the tree static.
+    fn start_dir_pending(&mut self, root: &str) {
+        self.drop_pending();
+        if is_elevated() && is_ntfs(Path::new(root)) {
+            return;
+        }
+        let hwnd = self.hwnd.0 as isize;
+        let posted = self.posted.clone();
+        self.dir_pending = Watcher::start(Path::new(root), WatchConfig::default(), move || {
+            if !posted.swap(true, Ordering::AcqRel) {
+                let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
+            }
+        })
+        .ok();
+    }
+
+    fn drop_pending(&mut self) {
+        if let Some(w) = self.dir_pending.take() {
+            std::thread::spawn(move || w.stop());
+        }
+    }
+
+    /// Stops following changes. The source may be mid-wait, so it is joined off the UI thread.
     fn drop_watch(&mut self) {
         if let Some(w) = self.watch.take() {
             if w.armed {
                 let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_LIVE) };
             }
-            let reader = w.reader;
-            std::thread::spawn(move || reader.stop());
+            std::thread::spawn(move || w.stop());
         }
     }
 
-    /// `WM_JOURNAL`: moves what the reader has queued into the delta queue and applies some of it.
+    /// `WM_JOURNAL`: moves what the source has queued into its queue and applies some of it.
     fn journal_event(&mut self) {
         self.posted.store(false, Ordering::Release);
-        let mut stop = None;
-        if let Some(w) = &mut self.watch {
-            while let Some(ev) = w.reader.try_recv() {
-                match ev {
-                    Event::Deltas(d) => w.queue.extend(d),
-                    Event::Stopped(s) => {
-                        stop = Some(s);
-                        break;
-                    }
-                }
-            }
-        }
+        let ended = self.watch.as_mut().and_then(Watch::drain);
         self.apply_live();
-        if let Some(s) = stop {
-            self.journal_stopped(s);
+        if let Some(e) = ended {
+            self.watch_ended(e);
         }
     }
 
-    /// Applies queued deltas for at most `APPLY_BUDGET`; leftovers continue on the next message.
+    /// Applies queued changes for at most `APPLY_BUDGET`; leftovers continue on the next message.
     fn apply_live(&mut self) {
         let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) else { return };
-        let n = w.live.apply(tree, &mut w.queue, Instant::now() + APPLY_BUDGET);
+        let n = w.apply(tree, Instant::now() + APPLY_BUDGET);
         w.dirty |= n > 0;
-        if !w.queue.is_empty() {
+        if w.queued() {
             let _ = unsafe { PostMessageW(Some(self.hwnd), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
         }
-        if !w.armed && (w.dirty || !w.queue.is_empty() || w.live.pending()) {
+        if !w.armed && (w.dirty || w.backlog()) {
             unsafe { SetTimer(Some(self.hwnd), TIMER_LIVE, REPAINT.as_millis() as u32, None) };
             w.armed = true;
         }
@@ -545,30 +659,23 @@ impl Win {
         if let Some(w) = &mut self.watch
             && w.armed
             && !w.dirty
-            && w.queue.is_empty()
-            && !w.live.pending()
+            && !w.backlog()
         {
             let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_LIVE) };
             w.armed = false;
         }
     }
 
-    /// The reader ended: bring the tree up to date, then rescan or say why updates stopped.
-    fn journal_stopped(&mut self, stop: Stop) {
+    /// The source ended: bring the tree up to date, then rescan or say why updates stopped.
+    fn watch_ended(&mut self, e: Ended) {
         if let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) {
-            w.live.apply(tree, &mut w.queue, Instant::now() + Duration::from_millis(50));
+            w.apply(tree, Instant::now() + Duration::from_millis(50));
         }
         self.app.refresh_rows();
         self.drop_watch();
         self.app.set_live(LiveStatus::Off);
-        let wrapped = stop == Stop::Wrapped;
-        let why = match stop {
-            Stop::Requested => return,
-            Stop::Wrapped => "the change journal wrapped, so changes were missed".to_string(),
-            Stop::Disabled => "the change journal is not active".to_string(),
-            Stop::Failed(m) => m,
-        };
-        if !(wrapped && self.auto_rescan()) {
+        let Some(why) = e.why else { return };
+        if !(e.rescan && self.auto_rescan()) {
             self.app.set_live(LiveStatus::Stale(why));
         }
         self.invalidate();
@@ -1121,6 +1228,81 @@ pub fn selftest_live() -> Result<String> {
             return Err(fail("live updates reported stale".into()));
         }
         Ok(format!("{letter}: create, grow, rename and delete followed"))
+    };
+    let out = run();
+    let _ = std::fs::remove_dir_all(&dir);
+    unsafe { DestroyWindow(hwnd)? };
+    STATE.with(|s| *s.borrow_mut() = None);
+    out
+}
+
+/// Not elevated. Scans a temp directory in a hidden window, then creates, grows, renames and
+/// deletes files there and checks the tree follows each change within 20 s.
+/// Run it from a normal prompt: `plumb --selftest-watch`.
+pub fn selftest_watch() -> Result<String> {
+    use windows::Win32::Foundation::E_FAIL;
+    let fail = |m: String| windows::core::Error::new(E_FAIL, m);
+    if is_elevated() {
+        return Err(fail("the directory watch is for non-elevated runs; the journal serves elevated ones".into()));
+    }
+    let dir = std::fs::canonicalize(std::env::temp_dir()).map_err(|e| fail(e.to_string()))?;
+    let dir = dir.join(format!("plumb-watch-{}", std::process::id()));
+    let shown = dir.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).map_err(|e| fail(e.to_string()))?;
+    std::fs::write(dir.join("sub").join("seed.bin"), vec![1u8; 4096]).map_err(|e| fail(e.to_string()))?;
+    let hwnd = create_window(false)?;
+    let win = Win::new(hwnd, crate::drives::list())?;
+    STATE.with(|s| *s.borrow_mut() = Some(win));
+    unsafe { SetTimer(Some(hwnd), 99, 50, None) }; // wakes the message wait so deadlines are checked
+    let wait = |what: &str, secs: u64, cond: &dyn Fn(&mut Win) -> bool| -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        let mut msg = MSG::default();
+        while with(|w| !cond(w)) == Some(true) {
+            if Instant::now() > deadline {
+                return Err(fail(format!("timed out waiting for: {what}")));
+            }
+            unsafe {
+                if GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+        Ok(())
+    };
+    let size_at = |w: &mut Win, rel: &str| -> Option<u64> {
+        let t = w.app.tree.as_ref()?;
+        // The root node is named by the whole scanned path, so look up below it, not by path string.
+        let (parent, name) = rel.rsplit_once('\\').unwrap_or(("", rel));
+        let parent: Vec<u16> = parent.encode_utf16().collect();
+        let dir = crate::dirsync::resolve(t, &parent)?;
+        let id = t.children(dir).find(|&c| t.name_string(c) == name)?;
+        Some(t.subtree_size[id])
+    };
+    let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
+    let run = || -> Result<String> {
+        let io = |e: std::io::Error| fail(e.to_string());
+        let i = with(|w| w.app.drives.iter().position(|d| d.letter == letter)).flatten();
+        let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;
+        with(|w| w.spawn_scan(i, dir.to_string_lossy().into_owned(), false));
+        wait("the scan and the directory watch", 60, &|w| w.watch.is_some())?;
+        std::fs::write(dir.join("f.bin"), vec![1u8; 1 << 20]).map_err(io)?;
+        wait("the new file", 20, &|w| size_at(w, "f.bin") == Some(1 << 20))?;
+        wait("the live marker", 20, &|w| matches!(&w.app.live, LiveStatus::On { last: Some(_) }))?;
+        std::fs::write(dir.join("f.bin"), vec![1u8; 3 << 20]).map_err(io)?;
+        wait("the grown file", 20, &|w| size_at(w, "f.bin") == Some(3 << 20))?;
+        std::fs::rename(dir.join("f.bin"), dir.join("g.bin")).map_err(io)?;
+        wait("the rename", 20, &|w| size_at(w, "g.bin") == Some(3 << 20) && size_at(w, "f.bin").is_none())?;
+        std::fs::create_dir_all(dir.join("new").join("deep")).map_err(io)?;
+        std::fs::write(dir.join("new").join("deep").join("x.bin"), vec![1u8; 8192]).map_err(io)?;
+        wait("the new folder", 20, &|w| size_at(w, "new\\deep\\x.bin") == Some(8192))?;
+        std::fs::remove_dir_all(dir.join("sub")).map_err(io)?;
+        wait("the delete", 20, &|w| size_at(w, "sub").is_none() && size_at(w, "g.bin") == Some(3 << 20))?;
+        if with(|w| matches!(w.app.live, LiveStatus::Stale(_))).unwrap_or(false) {
+            return Err(fail("live updates reported stale".into()));
+        }
+        Ok("create, grow, rename, new folder and delete followed".to_string())
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);

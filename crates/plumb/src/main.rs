@@ -5,6 +5,8 @@ fn main() {
     {
         let r = if std::env::args().any(|a| a == "--selftest") {
             plumb::window::selftest().map(|a| println!("selftest ok: {a}"))
+        } else if std::env::args().any(|a| a == "--selftest-watch") {
+            plumb::window::selftest_watch().map(|a| println!("selftest-watch ok: {a}"))
         } else if std::env::args().any(|a| a == "--selftest-live") {
             plumb::window::selftest_live().map(|a| println!("selftest-live ok: {a}"))
         } else {
