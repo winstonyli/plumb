@@ -146,6 +146,7 @@ pub struct App {
 
 impl App {
     pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
+        let layout = Layout { chips: drives.len(), ..layout };
         Self {
             layout, drives, adapter, active: None, marks: Vec::new(), hover: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
@@ -348,7 +349,10 @@ impl App {
     /// it: the picker bar, away from the drive chips and the administrator button.
     pub fn is_caption(&self, x: f32, y: f32) -> bool {
         y < PICKER_H
-            && !matches!(self.layout.hit(x, y, self.drives.len()), Hit::Chip(_))
+            && !matches!(
+                self.layout.hit(x, y, self.drives.len()),
+                Hit::Chip(_) | Hit::FilterBox | Hit::FilterRegex | Hit::FilterClear
+            )
             && !(self.can_elevate && self.layout.admin_button().contains(x, y))
     }
 
@@ -593,7 +597,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{CHIP_GAP, CHIP_W, FILTER_H, HEADER_H, PICKER_H, ROW_H};
+    use crate::layout::{CHIP_GAP, CHIP_W, HEADER_H, PICKER_H, ROW_H};
     use plumb_core::synth::kary_builder;
 
     fn app() -> App {
@@ -612,7 +616,7 @@ mod tests {
     }
 
     fn row_y(i: usize) -> f32 {
-        PICKER_H + FILTER_H + HEADER_H + i as f32 * ROW_H + 1.0
+        PICKER_H + HEADER_H + i as f32 * ROW_H + 1.0
     }
 
     #[test]
@@ -882,7 +886,7 @@ mod tests {
     fn header_click_sorts_and_second_click_reverses() {
         let mut a = scanned();
         let name = |a: &App, i: usize| a.tree.as_ref().unwrap().name_string(a.model.as_ref().unwrap().rows()[i].id);
-        let hy = PICKER_H + FILTER_H + 2.0;
+        let hy = PICKER_H + 2.0;
         assert_eq!(a.sort(), (1, true)); // default: Size descending
         a.handle(Input::Click(5.0, hy));
         assert_eq!(a.sort(), (0, false)); // Name ascending
@@ -946,7 +950,7 @@ mod tests {
     #[test]
     fn a_rescanned_tree_keeps_sort_expansion_selection_and_screen_row() {
         let mut a = scanned();
-        a.handle(Input::Click(5.0, PICKER_H + FILTER_H + 2.0)); // sort by Name ascending
+        a.handle(Input::Click(5.0, PICKER_H + 2.0)); // sort by Name ascending
         let t = a.tree.as_ref().unwrap();
         let m = a.model.as_mut().unwrap();
         let first = m.rows()[1].id;

@@ -12,6 +12,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 - `plumb`: the second press of a quick double-click on a column header, button, drive chip or scrollbar was dropped (Windows delivers it as a double-click); it now acts as a click, so a double-click on a header flips the sort twice.
 
 ### Changed
+- `plumb`: the filter box, Regex toggle and match count moved into the picker bar, after the drive chips, saving a row. The box is 260 px wide when there is room; when there isn't, "Run as administrator" shrinks to "Admin" first, and only then does the box shrink (to 140 px). The placeholder is now "Filter  (Ctrl+F)".
 - `plumb`: the drive picker bar is now the title bar: the client area reaches the window's top edge (`WM_NCCALCSIZE`), empty bar space drags and double-click-maximizes the window, and Windows still draws its own minimize/maximize/close buttons (so snap layouts work) in a transparent corner of the bar, coloured to match it. This needs a DirectComposition swap chain with premultiplied alpha (an HWND swap chain cannot be transparent), a black `WM_ERASEBKGND` so DWM sees glass, and our own resize-edge hit testing.
 - `plumb`: visual polish: a smaller sort triangle, an accent bar on the selected row, no % bar on a root row, a smaller and softer triangle on folder icons, visible header grips, and the "at least" sign shown once in the Size and Items headers during a scan instead of on every row.
 - `plumb`: a hairline separates rows.

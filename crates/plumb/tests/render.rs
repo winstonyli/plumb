@@ -36,13 +36,14 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
     model.expand(&tree, root);
     model.select(model.rows()[1].id);
     let chips = [Chip { label: "C:  123 GB free".into(), used: 0.7, mark: Mark::Kept }, Chip { label: "D:  1 TB free".into(), used: 0.2, mark: Mark::Scanning }];
+    let layout = Layout { chips: chips.len(), ..Layout::new(W as f32, H as f32) };
     let scene = Scene {
-        layout: Layout::new(W as f32, H as f32),
+        layout,
         theme: Theme::new(dark),
         chips: &chips,
         active_chip: Some(0),
         sort: (1, true),
-        admin: Some(plumb::layout::Layout::new(W as f32, H as f32).admin_button()),
+        admin: Some(layout.admin_button()),
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2) }),
         message: "",
         status: "MFT scan: 200 files",
@@ -137,7 +138,7 @@ fn draws_regions_in_both_themes() {
         let want_panel = [to8(t.panel.r), to8(t.panel.g), to8(t.panel.b)];
         // bottom-right of the row area is empty background; the status bar and header are panel colour.
         assert_eq!(pixel(&buf, 700, 590), want_panel, "status bar (dark={dark})");
-        assert_eq!(pixel(&buf, 790, 88), want_panel, "header (dark={dark})");
+        assert_eq!(pixel(&buf, 790, 56), want_panel, "header (dark={dark})");
         // some pixel in the rows area is text/bar, i.e. not background.
         let drawn = (100..570).any(|y| (0..400).any(|x| pixel(&buf, x, y) != want_bg && pixel(&buf, x, y) != [to8(t.select.r), to8(t.select.g), to8(t.select.b)]));
         assert!(drawn, "no row content (dark={dark})");
@@ -149,15 +150,15 @@ fn the_filter_strip_draws_and_an_invalid_pattern_tints_the_box() {
     let to8 = |c: f32| (c * 255.0).round() as u8;
     for dark in [false, true] {
         let t = Theme::new(dark);
-        let l = Layout::new(W as f32, H as f32);
+        let l = Layout { chips: 2, ..Layout::new(W as f32, H as f32) };
         let b = l.filter_box();
         // inside the box, well right of the three typed characters and left of the clear button
         let (x, y) = ((b.x + b.w / 2.0) as u32, (b.y + b.h / 2.0) as u32);
         let ok = render(dark, false);
         let bad = render(dark, true);
         let col = |c: windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F| [to8(c.r), to8(c.g), to8(c.b)];
-        assert_eq!(pixel(&ok, 3, y), col(t.panel), "strip (dark={dark})");
-        assert_eq!(pixel(&ok, x, y), col(t.bg), "box (dark={dark})");
+        assert_eq!(pixel(&ok, 3, y), col(t.bg), "bar (dark={dark})");
+        assert_eq!(pixel(&ok, x, y), col(t.panel), "box (dark={dark})");
         assert_eq!(pixel(&bad, x, y), col(t.error), "error tint (dark={dark})");
     }
 }

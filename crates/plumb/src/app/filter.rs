@@ -269,7 +269,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::{DriveInfo, Input};
-    use crate::layout::{Layout, FILTER_H, HEADER_H, PICKER_H, ROW_H};
+    use crate::layout::{Layout, HEADER_H, PICKER_H, ROW_H};
     use crate::restore::resolve;
     use plumb_core::{NodeFlags, Tree, TreeBuilder};
 
@@ -302,7 +302,7 @@ mod tests {
     }
 
     fn row_y(i: usize) -> f32 {
-        PICKER_H + FILTER_H + HEADER_H + i as f32 * ROW_H + 1.0
+        PICKER_H + HEADER_H + i as f32 * ROW_H + 1.0
     }
 
     fn u(s: &str) -> Vec<u16> {
@@ -540,7 +540,7 @@ mod tests {
         let mut a = app();
         type_text(&mut a, "txt");
         run(&mut a);
-        a.handle(Input::Click(5.0, PICKER_H + FILTER_H + 2.0)); // sort by Name ascending
+        a.handle(Input::Click(5.0, PICKER_H + 2.0)); // sort by Name ascending
         assert_eq!(names(&a), ["C:", "docs", "notes.txt", "src", "deep", "more.txt"]);
     }
 }

@@ -2,7 +2,7 @@
 use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
-use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_CLEAR_W, INDENT, PICKER_H, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, ADMIN_W, CANCEL_W, CAPTION_RESERVE, FILTER_CLEAR_W, INDENT, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -256,14 +256,13 @@ impl Pen<'_> {
 
     fn filter_bar(&self, s: &Scene) {
         let (t, l, f) = (&s.theme, &s.layout, &s.filter);
-        self.fill(l.filter_strip(), t.panel);
         let b = l.filter_box();
-        self.fill(b, if f.error { t.error } else { t.bg });
+        self.fill(b, if f.error { t.error } else { t.panel });
         self.frame(b, if f.focus { t.accent } else { t.select });
         let inner = Rect { x: b.x + 8.0, y: b.y, w: (b.w - 16.0 - FILTER_CLEAR_W).max(0.0), h: b.h };
         if f.text.is_empty() {
             if !f.focus {
-                self.text("Filter by name  (Ctrl+F)", inner, t.dim, false);
+                self.text("Filter  (Ctrl+F)", inner, t.dim, false);
             }
         } else {
             if f.all {
@@ -281,7 +280,7 @@ impl Pen<'_> {
             }
         }
         let r = l.filter_regex();
-        self.fill(r, if f.regex { t.select } else { t.bg });
+        self.fill(r, if f.regex { t.select } else { t.panel });
         self.frame(r, if f.regex { t.accent } else { t.select });
         self.text("Regex", Rect { x: r.x + 16.0, w: r.w - 16.0, ..r }, if f.regex { t.accent } else { t.dim }, false);
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
@@ -300,7 +299,7 @@ impl Pen<'_> {
             self.gfx.d2d.PopAxisAlignedClip();
         }
         if let Some(r) = s.admin {
-            self.button(r, "Run as administrator", t);
+            self.button(r, if r.w < ADMIN_W { "Admin" } else { "Run as administrator" }, t);
         }
         if let Some(text) = s.banner {
             let b = l.banner_strip();

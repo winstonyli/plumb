@@ -27,9 +27,14 @@ pub const ADMIN_W: f32 = 168.0;
 pub const CAPTION_RESERVE: f32 = 150.0;
 pub const BANNER_H: f32 = 28.0;
 pub const RESCAN_W: f32 = 80.0;
-pub const FILTER_H: f32 = 32.0;
-pub const FILTER_REGEX_W: f32 = 72.0;
-pub const FILTER_COUNT_W: f32 = 150.0;
+pub const ADMIN_COMPACT_W: f32 = 60.0;
+/// What follows the filter box: gap, Regex toggle, gap, match count.
+const FILTER_AFTER_W: f32 = 8.0 + FILTER_REGEX_W + 8.0 + FILTER_COUNT_W;
+pub const FILTER_BOX_H: f32 = 28.0;
+pub const FILTER_BOX_W: f32 = 260.0;
+pub const FILTER_BOX_MIN: f32 = 140.0;
+pub const FILTER_REGEX_W: f32 = 64.0;
+pub const FILTER_COUNT_W: f32 = 110.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 72.0;
 pub const INDENT: f32 = 20.0;
@@ -72,11 +77,13 @@ pub struct Layout {
     pub cancel: bool,
     /// Widths of the Size, % of parent and Items columns.
     pub col_w: [f32; 3],
+    /// How many drive chips the picker bar holds, which decides where the filter box starts.
+    pub chips: usize,
 }
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false, col_w: COL_W }
+        Self { w, h, banner: false, cancel: false, col_w: COL_W, chips: 0 }
     }
 
     /// Sets the width of column `c` (1..=3), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
@@ -94,34 +101,33 @@ impl Layout {
         Self { banner, ..self }
     }
 
-    /// Top edge of the filter strip: below the picker, and below the banner when there is one.
-    fn filter_top(&self) -> f32 {
+    /// Top edge of the header: below the picker bar, and below the banner when there is one.
+    fn top(&self) -> f32 {
         PICKER_H + if self.banner { BANNER_H } else { 0.0 }
     }
 
-    /// Top edge of the header: below the filter strip.
-    fn top(&self) -> f32 {
-        self.filter_top() + FILTER_H
+    /// The filter box shares the picker bar: after the drive chips, before the administrator button. It
+    /// takes `FILTER_BOX_W` when there is room and shrinks (to `FILTER_BOX_MIN`) when there is not.
+    /// The Regex toggle and the match count follow it.
+    pub fn filter_box(&self) -> Rect {
+        let room = self.admin_button().x - 8.0 - self.filter_left() - FILTER_AFTER_W;
+        Rect { x: self.filter_left(), y: (PICKER_H - FILTER_BOX_H) / 2.0, w: room.clamp(FILTER_BOX_MIN, FILTER_BOX_W), h: FILTER_BOX_H }
     }
 
-    pub fn filter_strip(&self) -> Rect {
-        Rect { x: 0.0, y: self.filter_top(), w: self.w, h: FILTER_H }
-    }
-
-    /// Match count or status text, right-aligned in the strip.
-    pub fn filter_count(&self) -> Rect {
-        Rect { x: (self.w - 8.0 - FILTER_COUNT_W).max(0.0), y: self.filter_top(), w: FILTER_COUNT_W, h: FILTER_H }
+    /// Left edge of the filter box: after the drive chips.
+    fn filter_left(&self) -> f32 {
+        8.0 + self.chips as f32 * (CHIP_W + CHIP_GAP) + 8.0
     }
 
     pub fn filter_regex(&self) -> Rect {
-        let x = (self.filter_count().x - 8.0 - FILTER_REGEX_W).max(0.0);
-        Rect { x, y: self.filter_top() + 4.0, w: FILTER_REGEX_W, h: FILTER_H - 8.0 }
+        let b = self.filter_box();
+        Rect { x: b.x + b.w + 8.0, w: FILTER_REGEX_W, ..b }
     }
 
-    /// The text box, including its clear button at the right end.
-    pub fn filter_box(&self) -> Rect {
-        let w = (self.filter_regex().x - 8.0 - 8.0).max(60.0);
-        Rect { x: 8.0, y: self.filter_top() + 4.0, w, h: FILTER_H - 8.0 }
+    /// Match count or status text, after the Regex toggle.
+    pub fn filter_count(&self) -> Rect {
+        let r = self.filter_regex();
+        Rect { x: r.x + r.w + 8.0, y: 0.0, w: FILTER_COUNT_W, h: PICKER_H }
     }
 
     pub fn filter_clear(&self) -> Rect {
@@ -142,9 +148,13 @@ impl Layout {
         Rect { x: 8.0 + i as f32 * (CHIP_W + CHIP_GAP), y: 6.0, w: CHIP_W, h: PICKER_H - 12.0 }
     }
 
-    /// "Run as administrator", right-aligned in the picker bar.
+    /// "Run as administrator", right-aligned in the picker bar. When that would squeeze the filter box
+    /// below its full width, the button shrinks to the short "Admin" instead.
     pub fn admin_button(&self) -> Rect {
-        Rect { x: (self.w - CAPTION_RESERVE - 8.0 - ADMIN_W).max(0.0), y: 6.0, w: ADMIN_W, h: PICKER_H - 12.0 }
+        let right = self.w - CAPTION_RESERVE - 8.0;
+        let room = right - ADMIN_W - 8.0 - self.filter_left() - FILTER_AFTER_W;
+        let w = if room < FILTER_BOX_W { ADMIN_COMPACT_W } else { ADMIN_W };
+        Rect { x: (right - w).max(0.0), y: 6.0, w, h: PICKER_H - 12.0 }
     }
 
     pub fn header(&self) -> Rect {
@@ -260,9 +270,9 @@ mod tests {
     #[test]
     fn regions_tile_the_window() {
         let l = Layout::new(800.0, 600.0);
-        assert_eq!(l.rows_area().y, PICKER_H + FILTER_H + HEADER_H);
+        assert_eq!(l.rows_area().y, PICKER_H + HEADER_H);
         assert_eq!(l.rows_area().y + l.rows_area().h + STATUS_H, 600.0);
-        assert_eq!(l.rows_visible(), ((600.0 - 44.0 - 32.0 - 24.0 - 24.0) / 22.0) as usize);
+        assert_eq!(l.rows_visible(), ((600.0 - 44.0 - 24.0 - 24.0) / 22.0) as usize);
     }
 
     #[test]
@@ -275,14 +285,14 @@ mod tests {
 
     #[test]
     fn hit_testing() {
-        let l = Layout::new(800.0, 600.0);
+        let l = Layout { chips: 3, ..Layout::new(800.0, 600.0) };
         assert_eq!(l.hit(10.0, 10.0, 3), Hit::Chip(0));
         assert_eq!(l.hit(10.0 + 2.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::Chip(2));
         assert_eq!(l.hit(10.0 + 3.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::None);
-        assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + 5.0, 3), Hit::Header(0));
-        assert_eq!(l.hit(l.column(2).0 + 20.0, PICKER_H + FILTER_H + 5.0, 3), Hit::Header(2));
-        assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + HEADER_H + 1.0, 3), Hit::Row(0));
-        assert_eq!(l.hit(5.0, PICKER_H + FILTER_H + HEADER_H + 3.0 * ROW_H + 1.0, 3), Hit::Row(3));
+        assert_eq!(l.hit(5.0, PICKER_H + 5.0, 3), Hit::Header(0));
+        assert_eq!(l.hit(l.column(2).0 + 20.0, PICKER_H + 5.0, 3), Hit::Header(2));
+        assert_eq!(l.hit(5.0, PICKER_H + HEADER_H + 1.0, 3), Hit::Row(0));
+        assert_eq!(l.hit(5.0, PICKER_H + HEADER_H + 3.0 * ROW_H + 1.0, 3), Hit::Row(3));
         assert_eq!(l.hit(795.0, 200.0, 3), Hit::Scrollbar);
         assert_eq!(l.hit(5.0, 595.0, 3), Hit::None);
     }
@@ -318,24 +328,30 @@ mod tests {
         assert_eq!(b.rows_area().y + b.rows_area().h + STATUS_H, 600.0);
         assert_eq!(b.hit(b.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
         assert_ne!(l.hit(l.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
-        assert_eq!(b.hit(5.0, PICKER_H + BANNER_H + FILTER_H + 5.0, 3), Hit::Header(0));
+        assert_eq!(b.hit(5.0, PICKER_H + BANNER_H + 5.0, 3), Hit::Header(0));
         assert!(b.rows_visible() < l.rows_visible());
     }
 
     #[test]
-    fn the_filter_strip_sits_above_the_header_and_its_controls_hit() {
-        let l = Layout::new(800.0, 600.0);
-        assert_eq!(l.filter_strip().y, PICKER_H);
-        assert_eq!(l.header().y, PICKER_H + FILTER_H);
+    fn the_filter_shares_the_picker_bar_and_its_controls_hit() {
+        let l = Layout { chips: 3, ..Layout::new(1400.0, 600.0) };
+        assert_eq!(l.header().y, PICKER_H);
+        assert!(l.filter_box().x >= l.chip(2).x + CHIP_W, "after the chips");
+        assert_eq!(l.filter_box().w, FILTER_BOX_W, "full width when there is room");
+        assert!(l.filter_count().x + l.filter_count().w <= l.admin_button().x, "clear of the administrator button");
+        assert_eq!(l.admin_button().w, ADMIN_W, "plenty of room keeps the full administrator label");
+        let tight = Layout { chips: 2, ..Layout::new(800.0, 600.0) };
+        assert_eq!(tight.admin_button().w, ADMIN_COMPACT_W, "the button shrinks before the filter does");
+        assert!(tight.filter_box().w >= FILTER_BOX_MIN);
+        assert!(tight.filter_count().x + tight.filter_count().w <= tight.admin_button().x, "and nothing overlaps");
         let (b, r, c, n) = (l.filter_box(), l.filter_regex(), l.filter_clear(), l.filter_count());
-        assert!(b.x + b.w <= r.x && r.x + r.w <= n.x && n.x + n.w <= 800.0, "{b:?} {r:?} {n:?}");
+        assert!(b.x + b.w <= r.x && r.x + r.w <= n.x && n.x + n.w <= l.w, "{b:?} {r:?} {n:?}");
         assert_eq!(l.hit(b.x + b.w / 2.0, b.y + 2.0, 3), Hit::FilterBox);
         assert_eq!(l.hit(c.x + 2.0, c.y + 2.0, 3), Hit::FilterClear);
         assert_eq!(l.hit(r.x + 2.0, r.y + 2.0, 3), Hit::FilterRegex);
         assert_eq!(l.hit(n.x + 2.0, n.y + 2.0, 3), Hit::None);
         let banner = l.with_banner(true);
-        assert_eq!(banner.filter_strip().y, PICKER_H + BANNER_H);
-        assert_eq!(banner.header().y, PICKER_H + BANNER_H + FILTER_H);
+        assert_eq!(banner.header().y, PICKER_H + BANNER_H);
         assert_eq!(banner.hit(banner.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
     }
 
