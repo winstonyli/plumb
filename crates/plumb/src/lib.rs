@@ -13,4 +13,6 @@ pub mod drives;
 #[cfg(windows)]
 pub mod gfx;
 #[cfg(windows)]
+pub mod icons;
+#[cfg(windows)]
 pub mod window;

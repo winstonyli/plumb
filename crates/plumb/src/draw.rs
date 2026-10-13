@@ -1,11 +1,18 @@
 //! Draws the whole window with Direct2D onto a target bitmap. Reads state, owns none.
 use crate::fmt;
 use crate::gfx::Gfx;
+use crate::icons;
 use crate::layout::{Layout, Rect, CANCEL_W, FILTER_CLEAR_W, INDENT, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use plumb_core::{NodeFlags, Tree};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
-use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap1, ID2D1SolidColorBrush, D2D1_DRAW_TEXT_OPTIONS_CLIP};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::{
+    ID2D1Bitmap1, ID2D1SolidColorBrush, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
@@ -132,7 +139,12 @@ pub struct Scene<'a> {
 pub struct Painter {
     left: IDWriteTextFormat,
     right: IDWriteTextFormat,
+    /// Shell icons by (extension key, folder, large); `None` when the shell had none. Device bitmaps, so
+    /// they live and die with the painter.
+    icons: RefCell<HashMap<(String, bool, bool), Option<ID2D1Bitmap1>>>,
 }
+
+const ICON_CACHE_MAX: usize = 512;
 
 impl Painter {
     pub fn new(gfx: &Gfx) -> Result<Self> {
@@ -154,7 +166,7 @@ impl Painter {
             f.SetTrimming(&trim, &sign)?;
             Ok::<_, windows::core::Error>(f)
         };
-        Ok(Self { left: make(DWRITE_TEXT_ALIGNMENT_LEADING)?, right: make(DWRITE_TEXT_ALIGNMENT_TRAILING)? })
+        Ok(Self { left: make(DWRITE_TEXT_ALIGNMENT_LEADING)?, right: make(DWRITE_TEXT_ALIGNMENT_TRAILING)?, icons: RefCell::default() })
     }
 
     /// Draws `scene` into `target` (a Direct2D target bitmap) at `dpi`.
@@ -165,7 +177,7 @@ impl Painter {
             ctx.SetDpi(dpi, dpi);
             ctx.BeginDraw();
             let brush = ctx.CreateSolidColorBrush(&scene.theme.bg, None)?;
-            Pen { gfx, brush, painter: self }.draw(scene);
+            Pen { gfx, brush, painter: self, large: dpi >= 144.0 }.draw(scene);
             let r = ctx.EndDraw(None, None);
             ctx.SetTarget(None);
             r
@@ -177,6 +189,8 @@ struct Pen<'a> {
     gfx: &'a Gfx,
     brush: ID2D1SolidColorBrush,
     painter: &'a Painter,
+    /// Fetch the 32-pixel shell icons (drawn at 16 DIPs) rather than the 16-pixel ones.
+    large: bool,
 }
 
 impl Pen<'_> {
@@ -304,14 +318,41 @@ impl Pen<'_> {
         self.text(label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
     }
 
-    /// A 12-pixel folder (a filled body with a tab) or file (an outlined page) at `x`, `y`.
-    fn icon(&self, x: f32, y: f32, dir: bool, t: &Theme) {
-        if dir {
-            self.fill(Rect { x, y: y + 1.0, w: 5.0, h: 3.0 }, t.folder);
-            self.fill(Rect { x, y: y + 3.0, w: 12.0, h: 8.0 }, t.folder);
+    /// The shell's icon for `name` (or for a folder) in a 16-DIP square at `x`, `y`; a small drawn
+    /// folder or page when the shell has none.
+    fn icon(&self, x: f32, y: f32, name: &str, dir: bool, t: &Theme) {
+        if let Some(bitmap) = self.shell_icon(name, dir) {
+            let dest = D2D_RECT_F { left: x, top: y, right: x + 16.0, bottom: y + 16.0 };
+            unsafe { self.gfx.d2d.DrawBitmap(&bitmap, Some(&dest), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None) };
+        } else if dir {
+            self.fill(Rect { x, y: y + 3.0, w: 5.0, h: 3.0 }, t.folder);
+            self.fill(Rect { x, y: y + 5.0, w: 12.0, h: 8.0 }, t.folder);
         } else {
-            self.frame(Rect { x: x + 1.0, y, w: 10.0, h: 12.0 }, t.dim);
+            self.frame(Rect { x: x + 1.0, y: y + 2.0, w: 10.0, h: 12.0 }, t.dim);
         }
+    }
+
+    fn shell_icon(&self, name: &str, dir: bool) -> Option<ID2D1Bitmap1> {
+        let key = (icons::key(name, dir), dir, self.large);
+        let mut cache = self.painter.icons.borrow_mut();
+        if cache.len() >= ICON_CACHE_MAX {
+            cache.clear();
+        }
+        cache
+            .entry(key)
+            .or_insert_with_key(|(k, dir, large)| {
+                let img = icons::load(k, *dir, *large)?;
+                let props = D2D1_BITMAP_PROPERTIES1 {
+                    pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+                    dpiX: 96.0,
+                    dpiY: 96.0,
+                    bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+                    colorContext: std::mem::ManuallyDrop::new(None),
+                };
+                let size = D2D_SIZE_U { width: img.size, height: img.size };
+                unsafe { self.gfx.d2d.CreateBitmap(size, Some(img.bgra.as_ptr().cast()), img.size * 4, &props).ok() }
+            })
+            .clone()
     }
 
     fn picker(&self, s: &Scene) {
@@ -359,7 +400,7 @@ impl Pen<'_> {
             let indent = row.depth as f32 * INDENT;
             let ax = nx + 8.0 + indent;
             self.text(arrow, Rect { x: ax, y: r.y, w: 14.0, h: r.h }, fg, false);
-            self.icon(ax + 16.0, r.y + (r.h - 12.0) / 2.0, dir, t);
+            self.icon(ax + 16.0, r.y + (r.h - 16.0) / 2.0, &name, dir, t);
             self.text(&name, Rect { x: ax + 34.0, y: r.y, w: (nw - 16.0 - indent - 34.0).max(0.0), h: r.h }, fg, false);
             let (sx, sw) = l.column(1);
             let lower = if v.partial { "\u{2265} " } else { "" };

@@ -4,6 +4,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Changed
+- `plumb`: rows show Explorer's own icons for folders and file types (fetched by extension, cached per painter, 32-pixel at 150% scaling and up), replacing the drawn folder and page; the drawn ones remain as the fallback when the shell has none.
+
 ## [0.4.0] - 2026-10-13
 
 Cancel a scan, keep each drive's tree and scan when switching drives, and a visual refresh.
