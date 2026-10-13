@@ -248,16 +248,14 @@ impl Pen<'_> {
         unsafe { self.gfx.d2d.Clear(Some(&t.bg)) };
         self.picker(s);
         if let Some(r) = s.admin {
-            self.fill(r, t.panel);
-            self.text("Run as administrator", Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
+            self.button(r, "Run as administrator", t);
         }
         if let Some(text) = s.banner {
             let b = l.banner_strip();
             self.fill(b, t.panel);
             self.text(text, Rect { x: b.x + 8.0, y: b.y, w: b.w - RESCAN_RESERVED, h: b.h }, t.fg, false);
             let r = l.rescan_button();
-            self.fill(r, t.select);
-            self.text("Rescan", Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
+            self.button(r, "Rescan", t);
         }
         self.filter_bar(s);
         let h = l.header();
@@ -281,9 +279,15 @@ impl Pen<'_> {
         self.text(s.status, Rect { x: st.x + 8.0, y: st.y, w: (st.w - 16.0 - reserved).max(0.0), h: st.h }, t.dim, false);
         if l.cancel {
             let r = l.cancel_button();
-            self.fill(r, t.select);
-            self.text("Cancel", Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
+            self.button(r, "Cancel", t);
         }
+    }
+
+    /// A framed button: the frame and label in the accent color on the selection tint.
+    fn button(&self, r: Rect, label: &str, t: &Theme) {
+        self.fill(r, t.select);
+        self.frame(r, t.accent);
+        self.text(label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h }, t.accent, false);
     }
 
     fn picker(&self, s: &Scene) {
@@ -293,13 +297,14 @@ impl Pen<'_> {
             self.fill(r, if s.active_chip == Some(i) { t.select } else { t.panel });
             self.fill(Rect { x: r.x, y: r.y + r.h - 3.0, w: r.w * chip.used.clamp(0.0, 1.0), h: 3.0 }, t.accent);
             self.text(&chip.label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h - 3.0 }, t.fg, false);
-            let dot = match chip.mark {
+            // A strip along the top edge: neutral for a kept tree, the accent for a running scan.
+            let strip = match chip.mark {
                 Mark::None => None,
-                Mark::Kept => Some(t.bar),
+                Mark::Kept => Some(t.dim),
                 Mark::Scanning => Some(t.accent),
             };
-            if let Some(c) = dot {
-                self.fill(Rect { x: r.x + r.w - 10.0, y: r.y + 4.0, w: 6.0, h: 6.0 }, c);
+            if let Some(c) = strip {
+                self.fill(Rect { x: r.x, y: r.y, w: r.w, h: 3.0 }, c);
             }
         }
     }
@@ -317,6 +322,7 @@ impl Pen<'_> {
             let denom = if parent.is_none() { v.tree.subtree_size[id] } else { v.tree.subtree_size[parent] };
             let frac = fmt::fraction(v.tree.subtree_size[id], denom);
             let fg = if row.dim { t.dim } else { t.fg };
+            let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
             let mark = if !dir { "  " } else if v.model.is_expanded(id) { "\u{25BE} " } else { "\u{25B8} " };
             let mut name = format!("{mark}{}", v.tree.name_string(id));
@@ -333,7 +339,7 @@ impl Pen<'_> {
             self.fill(Rect { x: px + 4.0, y: r.y + 3.0, w: (pw - 8.0) * frac, h: r.h - 6.0 }, t.bar);
             self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (ix, iw) = l.column(3);
-            self.text(&format!("{lower}{}", fmt::count(v.tree.subtree_files[id] as u64)), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, fg, true);
+            self.text(&format!("{lower}{}", fmt::count(v.tree.subtree_files[id] as u64)), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {
             self.fill(l.scrollbar(), t.panel);

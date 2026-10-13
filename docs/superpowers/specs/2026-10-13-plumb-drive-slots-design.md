@@ -36,7 +36,7 @@ state; the rest is the scan channel and progress, the live watch, the held direc
   result can only match the run that asked for it.
 - Cancel and Esc cancel the scan of the drive on screen only.
 
-- Chips carry a small square for a drive off screen: `Mark::Kept` (muted) or `Mark::Scanning` (accent). `Win::sync_marks` sets `App::marks` whenever the parked set changes.
+- Chips carry a mark for a drive off screen: `Mark::Kept` (gray) or `Mark::Scanning` (accent), drawn as a strip along the top edge. `Win::sync_marks` sets `App::marks` whenever the parked set changes.
 
 ## Known limits
 
