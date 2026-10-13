@@ -1,3 +1,5 @@
+use crate::bits;
+use crate::filter::Keep;
 use crate::node::{NodeFlags, NodeId};
 use crate::tree::Tree;
 use std::cmp::Ordering;
@@ -27,6 +29,8 @@ pub enum Key {
 pub struct Row {
     pub id: NodeId,
     pub depth: u16,
+    /// Shown only because the user opened a folder under a filter; it does not match.
+    pub dim: bool,
 }
 
 /// Flat list of the rows currently visible in the tree view, plus selection and sort state.
@@ -39,6 +43,10 @@ pub struct RowModel {
     desc: bool,
     /// Sorted child lists, keyed by parent (`NodeId::NONE` is the list of roots).
     cache: HashMap<NodeId, Rc<[NodeId]>>,
+    /// The active filter, if any.
+    filter: Option<Rc<Keep>>,
+    /// Ancestors of matches the user collapsed while a filter is active (they are open by default).
+    closed: Vec<u64>,
 }
 
 fn cmp_names(a: &[u16], b: &[u16]) -> Ordering {
@@ -60,6 +68,8 @@ impl RowModel {
             key: SortKey::Size,
             desc: true,
             cache: HashMap::new(),
+            filter: None,
+            closed: Vec::new(),
         };
         m.rebuild(tree);
         m
@@ -78,18 +88,17 @@ impl RowModel {
     }
 
     pub fn is_expanded(&self, id: NodeId) -> bool {
-        self.expanded.get(id.idx() / 64).is_some_and(|w| w >> (id.idx() % 64) & 1 == 1)
+        match &self.filter {
+            Some(k) if k.is_ancestor(id) => !bits::get(&self.closed, id.idx()),
+            _ => bits::get(&self.expanded, id.idx()),
+        }
     }
 
     fn set_expanded(&mut self, id: NodeId, on: bool) {
-        let (w, b) = (id.idx() / 64, id.idx() % 64);
-        if w >= self.expanded.len() {
-            self.expanded.resize(w + 1, 0);
-        }
-        if on {
-            self.expanded[w] |= 1 << b;
+        if self.filter.as_ref().is_some_and(|k| k.is_ancestor(id)) {
+            bits::set(&mut self.closed, id.idx(), !on);
         } else {
-            self.expanded[w] &= !(1 << b);
+            bits::set(&mut self.expanded, id.idx(), on);
         }
     }
 
@@ -98,6 +107,25 @@ impl RowModel {
         self.desc = desc;
         self.cache.clear();
         self.rebuild(tree);
+    }
+
+    /// Installs (or, with `None`, removes) a filter and rebuilds the rows. A selection the filter
+    /// hides moves to its nearest visible ancestor, or is cleared. Folders the user closed under an
+    /// earlier filter stay closed while a filter stays active; they reopen when it is removed or
+    /// replaces none.
+    pub fn set_filter(&mut self, tree: &Tree, keep: Option<Rc<Keep>>) {
+        if self.filter.is_none() || keep.is_none() {
+            self.closed.clear();
+        }
+        self.filter = keep;
+        self.rebuild(tree);
+        while let Some(s) = self.selected {
+            if self.row_index(s).is_some() {
+                break;
+            }
+            let p = tree.parent[s];
+            self.selected = (!p.is_none()).then_some(p);
+        }
     }
 
     fn row_index(&self, id: NodeId) -> Option<usize> {
@@ -130,8 +158,16 @@ impl RowModel {
 
     fn push_children(&mut self, tree: &Tree, parent: NodeId, depth: u16, out: &mut Vec<Row>) {
         let kids = self.sorted_children(tree, parent);
+        let filter = self.filter.clone();
+        // Under a filter the roots and the children of an ancestor of a match are cut down to the
+        // kept ones. Below a leaf match, or below a node the filter hides, everything shows, dimmed.
+        let cut = filter.as_ref().is_some_and(|k| parent.is_none() || k.is_ancestor(parent));
         for &c in kids.iter() {
-            out.push(Row { id: c, depth });
+            let dim = filter.as_ref().is_some_and(|k| !k.is_kept(c));
+            if dim && cut {
+                continue;
+            }
+            out.push(Row { id: c, depth, dim });
             if self.is_expanded(c) {
                 self.push_children(tree, c, depth + 1, out);
             }
@@ -413,3 +449,6 @@ mod tests {
 
 #[cfg(test)]
 mod refresh_tests;
+
+#[cfg(test)]
+mod filter_tests;
