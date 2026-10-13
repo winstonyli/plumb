@@ -21,22 +21,22 @@ pub const ROW_H: f32 = 22.0;
 pub const SCROLLBAR_W: f32 = 12.0;
 pub const CHIP_W: f32 = 104.0;
 pub const CHIP_GAP: f32 = 8.0;
-pub const ADMIN_W: f32 = 168.0;
+/// The icon buttons: administrator (a shield), Rescan (a refresh arrow) and Cancel (a cross).
+pub const ADMIN_W: f32 = 32.0;
 /// Room kept at the right end of the picker bar for the system's minimize, maximize and close buttons,
 /// which Windows draws over the top of the window (the title bar is part of the client area).
 pub const CAPTION_RESERVE: f32 = 150.0;
 pub const BANNER_H: f32 = 28.0;
-pub const RESCAN_W: f32 = 80.0;
-pub const ADMIN_COMPACT_W: f32 = 60.0;
+pub const RESCAN_W: f32 = 32.0;
 /// What follows the filter box: gap, Regex toggle, gap, match count.
 const FILTER_AFTER_W: f32 = 8.0 + FILTER_REGEX_W + 8.0 + FILTER_COUNT_W;
 pub const FILTER_BOX_H: f32 = 28.0;
 pub const FILTER_BOX_W: f32 = 260.0;
 pub const FILTER_BOX_MIN: f32 = 140.0;
-pub const FILTER_REGEX_W: f32 = 64.0;
+pub const FILTER_REGEX_W: f32 = 36.0;
 pub const FILTER_COUNT_W: f32 = 110.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
-pub const CANCEL_W: f32 = 72.0;
+pub const CANCEL_W: f32 = 32.0;
 pub const INDENT: f32 = 20.0;
 /// Starting widths of the Size, % of parent and Items columns; Name takes the rest.
 pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
@@ -148,13 +148,9 @@ impl Layout {
         Rect { x: 8.0 + i as f32 * (CHIP_W + CHIP_GAP), y: 6.0, w: CHIP_W, h: PICKER_H - 12.0 }
     }
 
-    /// "Run as administrator", right-aligned in the picker bar. When that would squeeze the filter box
-    /// below its full width, the button shrinks to the short "Admin" instead.
+    /// "Run as administrator" (a shield), right-aligned in the picker bar.
     pub fn admin_button(&self) -> Rect {
-        let right = self.w - CAPTION_RESERVE - 8.0;
-        let room = right - ADMIN_W - 8.0 - self.filter_left() - FILTER_AFTER_W;
-        let w = if room < FILTER_BOX_W { ADMIN_COMPACT_W } else { ADMIN_W };
-        Rect { x: (right - w).max(0.0), y: 6.0, w, h: PICKER_H - 12.0 }
+        Rect { x: (self.w - CAPTION_RESERVE - 8.0 - ADMIN_W).max(0.0), y: 6.0, w: ADMIN_W, h: PICKER_H - 12.0 }
     }
 
     pub fn header(&self) -> Rect {
@@ -339,10 +335,8 @@ mod tests {
         assert!(l.filter_box().x >= l.chip(2).x + CHIP_W, "after the chips");
         assert_eq!(l.filter_box().w, FILTER_BOX_W, "full width when there is room");
         assert!(l.filter_count().x + l.filter_count().w <= l.admin_button().x, "clear of the administrator button");
-        assert_eq!(l.admin_button().w, ADMIN_W, "plenty of room keeps the full administrator label");
         let tight = Layout { chips: 2, ..Layout::new(800.0, 600.0) };
-        assert_eq!(tight.admin_button().w, ADMIN_COMPACT_W, "the button shrinks before the filter does");
-        assert!(tight.filter_box().w >= FILTER_BOX_MIN);
+        assert!(tight.filter_box().w >= FILTER_BOX_MIN && tight.filter_box().w < FILTER_BOX_W, "the box shrinks to fit");
         assert!(tight.filter_count().x + tight.filter_count().w <= tight.admin_button().x, "and nothing overlaps");
         let (b, r, c, n) = (l.filter_box(), l.filter_regex(), l.filter_clear(), l.filter_count());
         assert!(b.x + b.w <= r.x && r.x + r.w <= n.x && n.x + n.w <= l.w, "{b:?} {r:?} {n:?}");

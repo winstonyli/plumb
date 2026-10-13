@@ -2,7 +2,7 @@
 use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
-use crate::layout::{Layout, Rect, ADMIN_W, CANCEL_W, CAPTION_RESERVE, FILTER_CLEAR_W, INDENT, PICKER_H, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_CLEAR_W, INDENT, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,11 +16,11 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
     DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     DWRITE_WORD_WRAPPING_NO_WRAP,
 };
-use windows::core::{w, Result};
+use windows::core::{w, Result, PCWSTR};
 
 /// Banner text stops this far from the right edge, short of the Rescan button.
 const RESCAN_RESERVED: f32 = RESCAN_W + 24.0;
@@ -145,6 +145,8 @@ pub struct Scene<'a> {
 pub struct Painter {
     left: IDWriteTextFormat,
     right: IDWriteTextFormat,
+    center: IDWriteTextFormat,
+    glyph: IDWriteTextFormat,
     /// Shell icons by (extension key, folder, open, large). Device bitmaps, so
     /// they live and die with the painter.
     icons: RefCell<HashMap<(String, bool, bool, bool), ID2D1Bitmap1>>,
@@ -154,14 +156,14 @@ const ICON_CACHE_MAX: usize = 512;
 
 impl Painter {
     pub fn new(gfx: &Gfx) -> Result<Self> {
-        let make = |align| unsafe {
+        let make = |family: PCWSTR, size, align| unsafe {
             let f = gfx.dw.CreateTextFormat(
-                w!("Segoe UI"),
+                family,
                 None,
                 DWRITE_FONT_WEIGHT_NORMAL,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                13.0,
+                size,
                 w!("en-us"),
             )?;
             f.SetTextAlignment(align)?;
@@ -172,7 +174,15 @@ impl Painter {
             f.SetTrimming(&trim, &sign)?;
             Ok::<_, windows::core::Error>(f)
         };
-        Ok(Self { left: make(DWRITE_TEXT_ALIGNMENT_LEADING)?, right: make(DWRITE_TEXT_ALIGNMENT_TRAILING)?, icons: RefCell::default() })
+        let ui = w!("Segoe UI");
+        Ok(Self {
+            left: make(ui, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+            right: make(ui, 13.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+            center: make(ui, 13.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+            // Windows' icon font (Segoe MDL2 Assets): one glyph per button.
+            glyph: make(w!("Segoe MDL2 Assets"), 14.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+            icons: RefCell::default(),
+        })
     }
 
     /// Draws `scene` into `target` (a Direct2D target bitmap) at `dpi`.
@@ -208,8 +218,11 @@ impl Pen<'_> {
     }
 
     fn text(&self, s: &str, r: Rect, c: D2D1_COLOR_F, right: bool) {
+        self.draw_text(s, if right { &self.painter.right } else { &self.painter.left }, r, c);
+    }
+
+    fn draw_text(&self, s: &str, f: &IDWriteTextFormat, r: Rect, c: D2D1_COLOR_F) {
         let u: Vec<u16> = s.encode_utf16().collect();
-        let f = if right { &self.painter.right } else { &self.painter.left };
         unsafe {
             self.brush.SetColor(&c);
             self.gfx.d2d.DrawText(&u, f, &rc(r), &self.brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
@@ -282,7 +295,7 @@ impl Pen<'_> {
         let r = l.filter_regex();
         self.fill(r, if f.regex { t.select } else { t.panel });
         self.frame(r, if f.regex { t.accent } else { t.select });
-        self.centered("Regex", r, if f.regex { t.accent } else { t.dim });
+        self.centered(".*", r, if f.regex { t.accent } else { t.dim });
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
 
@@ -299,14 +312,14 @@ impl Pen<'_> {
             self.gfx.d2d.PopAxisAlignedClip();
         }
         if let Some(r) = s.admin {
-            self.button(r, if r.w < ADMIN_W { "Admin" } else { "Run as administrator" }, t);
+            self.button(r, "\u{E83D}", t); // shield
         }
         if let Some(text) = s.banner {
             let b = l.banner_strip();
             self.fill(b, t.panel);
             self.text(text, Rect { x: b.x + 8.0, y: b.y, w: b.w - RESCAN_RESERVED, h: b.h }, t.fg, false);
             let r = l.rescan_button();
-            self.button(r, "Rescan", t);
+            self.button(r, "\u{E72C}", t); // refresh
         }
         self.filter_bar(s);
         let h = l.header();
@@ -341,21 +354,20 @@ impl Pen<'_> {
         self.text(s.adapter, right, t.dim, true);
         if l.cancel {
             let r = l.cancel_button();
-            self.button(r, "Cancel", t);
+            self.button(r, "\u{E711}", t); // cancel
         }
     }
 
-    /// A framed button: the frame and label in the accent color on the selection tint.
-    fn button(&self, r: Rect, label: &str, t: &Theme) {
+    /// A framed icon button: the frame and glyph in the accent color on the selection tint.
+    fn button(&self, r: Rect, glyph: &str, t: &Theme) {
         self.fill(r, t.select);
         self.frame(r, t.accent);
-        self.centered(label, r, t.accent);
+        self.draw_text(glyph, &self.painter.glyph, r, t.accent);
     }
 
-    /// `s` centred horizontally in `r` (and vertically, as `text` always is).
+    /// `s` centred in `r`, both ways.
     fn centered(&self, s: &str, r: Rect, c: D2D1_COLOR_F) {
-        let x = r.x + ((r.w - self.text_width(s)) / 2.0).max(0.0);
-        self.text(s, Rect { x, w: r.x + r.w - x, ..r }, c, false);
+        self.draw_text(s, &self.painter.center, r, c);
     }
 
     /// The shell's icon for `name` (or for a folder) in a 16-DIP square at `x`, `y`; a small drawn

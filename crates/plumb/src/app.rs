@@ -345,6 +345,19 @@ impl App {
         self.col_drag.is_some() || matches!(self.layout.hit(x, y, self.drives.len()), Hit::Divider(_))
     }
 
+    /// The tooltip for the icon button at (x, y), if there is one there: these buttons carry no label.
+    pub fn tip_at(&self, x: f32, y: f32) -> Option<&'static str> {
+        if self.can_elevate && self.layout.admin_button().contains(x, y) {
+            return Some("Run as administrator");
+        }
+        match self.layout.hit(x, y, self.drives.len()) {
+            Hit::Rescan => Some("Rescan"),
+            Hit::Cancel => Some("Cancel scan"),
+            Hit::FilterRegex => Some("Regular expression"),
+            _ => None,
+        }
+    }
+
     /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
     /// it: the picker bar, away from the drive chips and the administrator button.
     pub fn is_caption(&self, x: f32, y: f32) -> bool {
@@ -823,6 +836,18 @@ mod tests {
         assert_eq!(a.unscanned(), Some(50));
         a.progress(1, 1, 751);
         assert_eq!(a.unscanned(), None, "the scan counted more than the drive says is used");
+    }
+
+    #[test]
+    fn the_icon_buttons_have_tooltips_and_nothing_else_does() {
+        let mut a = app();
+        a.can_elevate = true;
+        let (admin, regex) = (a.layout.admin_button(), a.layout.filter_regex());
+        assert_eq!(a.tip_at(admin.x + 5.0, admin.y + 5.0), Some("Run as administrator"));
+        assert_eq!(a.tip_at(regex.x + 5.0, regex.y + 5.0), Some("Regular expression"));
+        assert_eq!(a.tip_at(a.layout.chip(0).x + 5.0, 10.0), None, "a labelled chip needs none");
+        a.can_elevate = false;
+        assert_eq!(a.tip_at(admin.x + 5.0, admin.y + 5.0), None, "a hidden button has none");
     }
 
     #[test]

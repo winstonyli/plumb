@@ -33,7 +33,6 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1Bitmap1, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
 };
 use windows::Win32::Graphics::Dwm::{DwmDefWindowProc, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
 };
@@ -61,7 +60,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{w, Interface, Result, BOOL, PCWSTR};
+use windows::Win32::UI::Controls::{
+    InitCommonControlsEx, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, MARGINS, NMHDR, NMTTDISPINFOW, TOOLTIPS_CLASSW, TTF_IDISHWND,
+    TTM_ADDTOOLW, TTM_POP, TTM_RELAYEVENT, TTN_GETDISPINFOW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
+};
+use windows::core::{w, Interface, Result, BOOL, PCWSTR, PWSTR};
 
 const WM_SCAN_DONE: u32 = WM_APP + 1;
 const WM_JOURNAL: u32 = WM_APP + 2;
@@ -273,6 +276,10 @@ struct Win {
     timers: [bool; 3],
     /// A parked drive is swapped in for one operation (`in_slot`): timers and the filter stay as they are.
     borrowed: bool,
+    /// The tooltip control, the icon button it last described, and the text it reads from (`tip_text`).
+    tooltip: HWND,
+    tip: Option<&'static str>,
+    tip_buf: Vec<u16>,
 }
 
 thread_local! {
@@ -380,9 +387,43 @@ impl Win {
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
             parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false,
+            tooltip: Self::make_tooltip(hwnd), tip: None, tip_buf: Vec::new(),
         };
         win.apply_title_theme();
         Ok(win)
+    }
+
+    /// A tooltip control over the whole window, asking for its text (`WM_NOTIFY`) when the pointer rests.
+    fn make_tooltip(hwnd: HWND) -> HWND {
+        unsafe {
+            let _ = InitCommonControlsEx(&INITCOMMONCONTROLSEX { dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32, dwICC: ICC_WIN95_CLASSES });
+            let tip = CreateWindowExW(
+                WS_EX_TOPMOST, TOOLTIPS_CLASSW, PCWSTR::null(), WS_POPUP | WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
+                0, 0, 0, 0, Some(hwnd), None, None, None,
+            )
+            .unwrap_or_default();
+            let tool = TTTOOLINFOW {
+                // The size without `lParam` and `lpReserved`, which version 5 of comctl32 insists on.
+                cbSize: std::mem::offset_of!(TTTOOLINFOW, lParam) as u32,
+                uFlags: TTF_IDISHWND, // mouse messages are relayed by hand (`WM_MOUSEMOVE`)
+                hwnd,
+                uId: hwnd.0 as usize,
+                lpszText: PWSTR(usize::MAX as *mut u16), // LPSTR_TEXTCALLBACK
+                ..Default::default()
+            };
+            SendMessageW(tip, TTM_ADDTOOLW, None, Some(LPARAM(&tool as *const _ as isize)));
+            tip
+        }
+    }
+
+    /// The tooltip text under the pointer, as the wide string the control reads; empty for none.
+    fn tip_text(&mut self) -> *const u16 {
+        let mut p = POINT::default();
+        let tip = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(self.hwnd, &mut p).as_bool() }
+            .then(|| self.app.tip_at(p.x as f32 * 96.0 / self.dpi, p.y as f32 * 96.0 / self.dpi))
+            .flatten();
+        self.tip_buf = tip.unwrap_or("").encode_utf16().chain([0]).collect();
+        self.tip_buf.as_ptr()
     }
 
     fn apply_title_theme(&self) {
@@ -1311,6 +1352,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     if w.app.hover != before {
                         w.invalidate();
                     }
+                    // Moving onto another icon button (or off one) hides the old tip so the next rest asks again.
+                    let tip = w.app.tip_at(x, y);
+                    if tip != w.tip {
+                        w.tip = tip;
+                        unsafe { SendMessageW(w.tooltip, TTM_POP, None, None) };
+                    }
+                    let msg = MSG { hwnd, message: WM_MOUSEMOVE, wParam: wp, lParam: lp, ..Default::default() };
+                    unsafe { SendMessageW(w.tooltip, TTM_RELAYEVENT, None, Some(LPARAM(&msg as *const _ as isize))) };
                 });
             }
             LRESULT(0)
@@ -1329,6 +1378,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             } else {
                 unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
             }
+        }
+        WM_NOTIFY if unsafe { (*(lp.0 as *const NMHDR)).code } == TTN_GETDISPINFOW => {
+            let text = with(|w| w.tip_text());            if let Some(text) = text {
+                unsafe { (*(lp.0 as *mut NMTTDISPINFOW)).lpszText = PWSTR(text as *mut u16) };
+            }
+            LRESULT(0)
         }
         WM_MOUSELEAVE => {
             with(|w| {
