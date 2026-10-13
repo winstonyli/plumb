@@ -145,6 +145,34 @@ fn bench_filter(c: &mut Criterion) {
         let hits = names.scan(&sub, &cancel, 1).unwrap();
         g.bench_function(format!("keep_{n}"), |b| b.iter(|| black_box(Keep::build(&tree, &hits))));
     }
+    // Deep tree, broad query: about a fifth of the names match, so most folders are kept.
+    let tree = kary_builder(2_000_000, 3).finish().unwrap();
+    let broad = Query { text: "1".into(), regex: false }.compile().unwrap().unwrap();
+    let names = Names::of(&tree);
+    let hits = names.scan(&broad, &AtomicU64::new(1), 1).unwrap();
+    g.bench_function("keep_broad_deep_2000000", |b| b.iter(|| black_box(Keep::build(&tree, &hits))));
+    let keep = std::rc::Rc::new(Keep::build(&tree, &hits));
+    eprintln!("broad deep query: {} hits", keep.matches());
+    g.bench_function("rows_filtered_broad_deep_2000000", |b| {
+        b.iter_batched_ref(
+            || RowModel::new(&tree),
+            |m| {
+                m.set_filter(&tree, Some(keep.clone()));
+                black_box(m.rows().len());
+            },
+            BatchSize::LargeInput,
+        )
+    });
+    // The same rebuild with the sorted child lists already cached: what a live refresh pays.
+    let mut warm = RowModel::new(&tree);
+    warm.set_filter(&tree, Some(keep.clone()));
+    eprintln!("broad deep query: {} rows", warm.rows().len());
+    g.bench_function("rows_refiltered_warm_broad_deep_2000000", |b| {
+        b.iter(|| {
+            warm.set_filter(&tree, Some(keep.clone()));
+            black_box(warm.rows().len())
+        })
+    });
     g.finish();
 }
 
