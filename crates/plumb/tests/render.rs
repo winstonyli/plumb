@@ -60,8 +60,65 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
             out.extend_from_slice(std::slice::from_raw_parts(m.bits.add(y * m.pitch as usize), W as usize * 4));
         }
         cpu.Unmap().unwrap();
+        // PLUMB_SHOT_DIR=<dir> keeps the frames as PNGs.
+        if let Some(dir) = std::env::var_os("PLUMB_SHOT_DIR") {
+            let name = format!("plumb-{}{}.png", if dark { "dark" } else { "light" }, if error { "-error" } else { "" });
+            write_png(&std::path::Path::new(&dir).join(name), &out);
+        }
         out
     }
+}
+
+/// Writes `buf` (BGRA) as an uncompressed PNG, for looking at a frame by eye.
+fn write_png(path: &std::path::Path, buf: &[u8]) {
+    fn crc(data: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for &b in data {
+            c ^= b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend((data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend(data);
+        out.extend(&body);
+        out.extend(crc(&body).to_be_bytes());
+    }
+    let mut raw = Vec::new();
+    for y in 0..H as usize {
+        raw.push(0);
+        for x in 0..W as usize {
+            let i = (y * W as usize + x) * 4;
+            raw.extend([buf[i + 2], buf[i + 1], buf[i]]);
+        }
+    }
+    let mut z = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (k, b) in blocks.iter().enumerate() {
+        z.push((k + 1 == blocks.len()) as u8);
+        z.extend((b.len() as u16).to_le_bytes());
+        z.extend((!(b.len() as u16)).to_le_bytes());
+        z.extend(*b);
+    }
+    let (mut a, mut d) = (1u32, 0u32);
+    for &b in &raw {
+        a = (a + b as u32) % 65521;
+        d = (d + a) % 65521;
+    }
+    z.extend(((d << 16) | a).to_be_bytes());
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = Vec::new();
+    ihdr.extend(W.to_be_bytes());
+    ihdr.extend(H.to_be_bytes());
+    ihdr.extend([8, 2, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &z);
+    chunk(&mut out, b"IEND", &[]);
+    std::fs::write(path, out).unwrap();
 }
 
 fn pixel(buf: &[u8], x: u32, y: u32) -> [u8; 3] {

@@ -7,6 +7,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 ### Added
 - `plumb`: a running scan can be cancelled with the Cancel button in the status bar or Esc. A cancelled first scan leaves no tree; a cancelled background rescan keeps the old one. `plumb-scan`: `Progress::cancel` and `ScanError::Cancelled`; both scanners stop within one directory or one read chunk.
 
+### Fixed
+- `plumb`: the sorted column's header showed the literal text `{25BC}` instead of an arrow.
+
 ### Changed
 - `plumb`: picking another drive no longer cancels the scan or discards the finished tree. Each drive keeps its tree, selection, live watch and any scan in flight (up to three trees at once); coming back is instant. A small square on a drive's chip marks it: blue for a kept tree, bright for a scan running in the background.
 - `plumb`: while a scan runs, sizes and file counts carry a leading ≥ (they are what has been found so far).

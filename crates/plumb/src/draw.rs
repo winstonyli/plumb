@@ -264,7 +264,7 @@ impl Pen<'_> {
         self.fill(h, t.panel);
         for (c, name) in ["Name", "Size", "% of parent", "Items"].iter().enumerate() {
             let (x, w) = l.column(c);
-            let arrow = if s.sort.0 == c { if s.sort.1 { " {25BC}" } else { " {25B2}" } } else { "" };
+            let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BC}" } else { " \u{25B2}" } } else { "" };
             let (label, color) = (format!("{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
             self.text(&label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, c == 1 || c == 3);
         }
