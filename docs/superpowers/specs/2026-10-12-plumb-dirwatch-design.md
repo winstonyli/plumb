@@ -1,6 +1,6 @@
 # plumb: live updates without admin (directory watch)
 
-Status: draft for review, 2026-10-12. Builds on `2026-10-12-plumb-live-updates-design.md` (tree mutation, `Pacer`, `RescanPolicy`, the stale banner), `2026-10-12-plumb-partial-tree-design.md` and the filter design. The live-updates spec parked this as "different mechanism and lower fidelity; after this".
+Status: implemented, 2026-10-12 (plan: `docs/superpowers/plans/2026-10-12-plumb-dirwatch.md`). Builds on `2026-10-12-plumb-live-updates-design.md` (tree mutation, `Pacer`, `RescanPolicy`, the stale banner), `2026-10-12-plumb-partial-tree-design.md` and the filter design. The live-updates spec parked this as "different mechanism and lower fidelity; after this".
 
 ## Goal
 
@@ -76,6 +76,14 @@ Two threads per watch, both at below-normal priority.
 - **Event storms.** Browser caches and temp directories churn constantly. The dirty map coalesces per directory, so the cost is directories per window, not events. If the spike shows tens of thousands per window, the lister needs a time budget per cycle and a skip list for directories re-listed every cycle.
 - **Memory.** The dirty map is capped by `TooMany`; listings are transient.
 - **Gap between scan and listing.** A directory the walker listed early in a long scan can change before the scan ends; the watcher's dirty set covers it. The reverse (a change the walker saw and the watcher also reports) re-lists harmlessly.
+
+## Amendments made while implementing
+
+1. `Entry` and `Listing` live in a portable module `plumb_scan::listing`, so the applier is tested without Windows APIs. `Stop::Requested` is dropped from the directory watcher.
+2. The reader is synchronous: one blocking `ReadDirectoryChangesW` per loop (the kernel buffers changes between calls); `stop()` cancels with `CancelIoEx` in a retry loop. The root is canonicalized to the verbatim form.
+3. A reparse-point directory is never listed deep (the walker does not descend into them either).
+4. The overflow, `TooMany` and hold logic is one pure function (`cycle`), unit-tested without a real watch.
+5. The window holds one `Watch` with a `Source::{Journal, Dir}`; a pending held watcher lives in `Win::dir_pending` from scan start until install.
 
 ## Out of scope
 
