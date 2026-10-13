@@ -235,3 +235,14 @@ fn random_mutations_match_a_fresh_build() {
     }
     assert_eq!(t.dead(), o.alive.iter().filter(|a| !**a).count());
 }
+
+#[test]
+fn reserve_prevents_reallocation_while_growing() {
+    let mut t = sample();
+    t.reserve(1000, 5000);
+    let (p, n) = (t.parent.as_ptr(), t.pool.as_ptr());
+    for i in 0..1000 {
+        t.add_child(NodeId(0), &u(&format!("n{i}")), 1, NodeFlags::empty());
+    }
+    assert_eq!((t.parent.as_ptr(), t.pool.as_ptr()), (p, n));
+}

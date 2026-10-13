@@ -128,6 +128,21 @@ impl Tree {
         id
     }
 
+    /// Makes room for `nodes` more nodes and `pool_units` more name units, so a tree that is
+    /// grown during a scan does not reallocate every array mid-way.
+    pub fn reserve(&mut self, nodes: usize, pool_units: usize) {
+        self.parent.reserve(nodes);
+        self.first_child.reserve(nodes);
+        self.next_sibling.reserve(nodes);
+        self.size.reserve(nodes);
+        self.subtree_size.reserve(nodes);
+        self.subtree_files.reserve(nodes);
+        self.flags.reserve(nodes);
+        self.name_off.reserve(nodes);
+        self.name_len.reserve(nodes);
+        self.pool.reserve(pool_units);
+    }
+
     /// Changes a node's own size and fixes the sums above it. Ignored for dead nodes.
     pub fn set_size(&mut self, id: NodeId, new: u64) {
         if self.flags[id].contains(NodeFlags::DEAD) {
