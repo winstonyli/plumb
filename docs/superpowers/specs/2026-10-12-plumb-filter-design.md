@@ -1,6 +1,6 @@
 # plumb: name filter design (milestone M3, part 1)
 
-Status: draft for review, 2026-10-12. Builds on `2026-10-11-plumb-disk-design.md` (search and filter were parked "after v1") and on the live-updates design, whose tree mutation, `RowModel::refresh` and `restore` module this reuses.
+Status: implemented (plans A and B), 2026-10-12. Builds on `2026-10-11-plumb-disk-design.md` (search and filter were parked "after v1") and on the live-updates design, whose tree mutation, `RowModel::refresh` and `restore` module this reuses.
 
 ## Goal
 
@@ -36,7 +36,7 @@ Type part of a name and see only the files and folders that match, with the fold
 ## Worker and threading (`plumb`)
 
 - One worker thread per query run, spawned on each change of the query (after a 100 ms quiet period, so a burst of keystrokes starts one run). Starting a run bumps `generation`; an older run sees the mismatch and returns early.
-- The worker posts `WM_FILTER` (a new `WM_APP` message, same posted-flag handshake as `WM_JOURNAL`) with a `Box<(generation, Hits)>`. The handler drops results whose generation is stale, otherwise installs them and refreshes the rows.
+- The worker posts `WM_FILTER` (a new `WM_APP` message, a plain `PostMessage` after each send) through an mpsc channel as `(generation, Hits)`. The handler drops results whose generation is stale, otherwise installs them and refreshes the rows.
 - While a run is in flight the strip shows "searching..." and the old rows stay. A tree swap (rescan) bumps the generation and restarts the run for the current query.
 - Cost of the snapshot is paid on the UI thread per run. If the benchmark shows it matters (more than about 30 ms at 5M nodes), the fallback is sharing the pool as `Arc` chunks, which is a larger `Tree` change and is not part of this spec.
 
@@ -45,7 +45,7 @@ Type part of a name and see only the files and folders that match, with the fold
 - `RowModel` stores an optional `Rc<Keep>` (the keep bitset plus the strict-ancestor set derived from it), set with `set_filter(tree, Some(keep))` / `set_filter(tree, None)`; every row-building method reads it, so expand, collapse and sort all respect the filter. `Filter` itself (matcher, hits) stays in `App`.
 - While active, `push_children` skips any child not in the keep set. A node is shown expanded if it is a *strict ancestor of a hit* (its keep bit is set and it is not itself a leaf hit), tracked in a separate `filter_expanded` set so the user's `expanded` bitset is untouched. A user-opened hit folder uses the normal `expanded` bit; its non-kept children are included and marked `Row.dim = true`. A matching folder that also contains matches is an ancestor and shows only kept children; the dimmed view appears only under a leaf match or below a hidden node. Below a non-kept node everything is unfiltered and dim (opening a dim folder shows all its children, dim).
 - If the selected node is not kept when the filter is installed or changes, the nearest kept ancestor is selected (the same rule `refresh` uses for removed nodes); if none, the selection is cleared.
-- Turning the filter on records a `restore::Snapshot` (expansion, selection, scroll, by path); turning it off applies it. Selection that was changed while filtering is kept if the node still exists.
+- Turning the filter on saves the scroll position; turning it off calls `set_filter(None)` and restores that scroll. The user's own `expanded` bits are never touched, so nothing else needs restoring. `restore::Snapshot` is used only for tree swaps. Selection changed while filtering is kept if the node still exists.
 - `Row` gains `dim: bool`; `draw` draws dim rows at reduced text alpha.
 - The sort cache keeps the unfiltered sorted children; filtering is a skip during `push_children`, so sort changes and size changes behave as before.
 
@@ -70,6 +70,16 @@ Type part of a name and see only the files and folders that match, with the fold
 - Live: random add/rename/remove under an active filter equals a fresh filter on the final tree (the `refresh_matches_a_fresh_model` pattern).
 - `plumb` tests: text-box editing (a pure `FilterUi` reducer), stale generation dropped, strip layout, WARP render test with the strip and an error tint.
 - Benchmark (criterion): snapshot, scan and keep-set build at 1M and 5M nodes, substring and a realistic regex.
+
+## Amendments made while implementing
+
+1. Up/Down/PageUp/PageDown always go to the tree, even while the box has focus (Home/End/Left/Right edit the text).
+2. A click puts the caret at the end of the text; Ctrl+F selects the existing text.
+3. Ctrl+C is unchanged: it copies the selected row's path.
+4. The match count lives in the strip only; the status line is unchanged.
+5. A channel plus a plain `PostMessage` replaces the Box-in-LPARAM and posted-flag handshake.
+6. No `restore::Snapshot` on filter-on; clearing is `set_filter(None)` plus the saved scroll. `Snapshot` is used only for tree swaps (the rows are unfiltered first so it sees the user's own expansion). No `RowModel::user_expanded`.
+7. Text wider than the box is clipped, not scrolled.
 
 ## Risks and open questions
 
