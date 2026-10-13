@@ -1,7 +1,7 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
 use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, Parked};
-use crate::draw::Painter;
+use crate::draw::{Mark, Painter};
 use crate::filter_ui::{push_utf16, Edit};
 use crate::gfx::Gfx;
 use crate::layout::Layout;
@@ -494,6 +494,7 @@ impl Win {
         } else {
             d.discard();
         }
+        self.sync_marks();
     }
 
     /// Brings the state kept for `drive` on screen, if any. Call with nothing on screen.
@@ -501,6 +502,7 @@ impl Win {
         let Some(mut d) = self.parked.get_mut(drive).and_then(Option::take) else { return false };
         self.swap_drive(&mut d);
         self.app.active = Some(drive);
+        self.sync_marks();
         self.apply_live(); // what changed while it was away
         if self.app.filter_dirty() {
             self.run_filter();
@@ -539,7 +541,20 @@ impl Win {
         self.swap_window_fields(&mut d);
         self.borrowed = false;
         self.parked[drive] = Some(d);
+        self.sync_marks();
         Some(r)
+    }
+
+    /// Updates the chip marks from what the other drives hold.
+    fn sync_marks(&mut self) {
+        let marks = (0..self.app.drives.len())
+            .map(|i| match self.parked.get(i).and_then(Option::as_ref) {
+                Some(d) if d.rx.is_some() => Mark::Scanning,
+                Some(d) if d.app.has_tree() => Mark::Kept,
+                _ => Mark::None,
+            })
+            .collect();
+        self.app.marks = marks;
     }
 
     /// Starts and stops the progress, preview and live timers to match the drive on screen.
@@ -1541,6 +1556,9 @@ pub fn selftest_watch() -> Result<String> {
         let root2 = || dir2.to_string_lossy().into_owned();
         with(|w| w.open(j, root2()));
         wait("the second drive's scan", 60, &|w| w.watch.is_some() && size_at(w, "x.bin") == Some(8192))?;
+        if with(|w| w.app.marks.get(i) == Some(&Mark::Kept)) != Some(true) {
+            return Err(fail("the drive that is away is not marked as kept".into()));
+        }
         std::fs::write(dir.join("h.bin"), vec![1u8; 2 << 20]).map_err(io)?;
         let away = |w: &mut Win, rel: &str| w.parked.get(i).and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).and_then(|t| size_in(t, rel));
         wait("the change to reach the drive that is away", 20, &|w| away(w, "h.bin") == Some(2 << 20))?;
@@ -1557,6 +1575,7 @@ pub fn selftest_watch() -> Result<String> {
             w.watch.is_some()
                 && size_at(w, "x.bin") == Some(8192)
                 && w.parked.get(i).and_then(|d| d.as_ref()).is_some_and(|d| d.rx.is_some())
+                && w.app.marks.get(i) == Some(&Mark::Scanning)
         });
         if kept != Some(true) {
             return Err(fail("the scan did not keep running while another drive was shown".into()));

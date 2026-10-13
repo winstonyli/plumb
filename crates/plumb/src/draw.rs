@@ -59,10 +59,22 @@ impl Theme {
     }
 }
 
+/// What a drive that is not on screen is holding.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Mark {
+    #[default]
+    None,
+    /// A tree is kept: coming back is instant.
+    Kept,
+    /// A scan is running in the background.
+    Scanning,
+}
+
 pub struct Chip {
     pub label: String,
     /// Fraction of the drive in use, 0..=1.
     pub used: f32,
+    pub mark: Mark,
 }
 
 /// What the filter strip shows: the text box state plus the count text.
@@ -281,6 +293,14 @@ impl Pen<'_> {
             self.fill(r, if s.active_chip == Some(i) { t.select } else { t.panel });
             self.fill(Rect { x: r.x, y: r.y + r.h - 3.0, w: r.w * chip.used.clamp(0.0, 1.0), h: 3.0 }, t.accent);
             self.text(&chip.label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h - 3.0 }, t.fg, false);
+            let dot = match chip.mark {
+                Mark::None => None,
+                Mark::Kept => Some(t.bar),
+                Mark::Scanning => Some(t.accent),
+            };
+            if let Some(c) = dot {
+                self.fill(Rect { x: r.x + r.w - 10.0, y: r.y + 4.0, w: 6.0, h: 6.0 }, c);
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 #![cfg(windows)]
 //! Draws a fixed small tree through a WARP (software) device into an offscreen bitmap.
 //! Opens no window and never touches the physical GPU.
-use plumb::draw::{Chip, FilterBar, Painter, Scene, Theme, View};
+use plumb::draw::{Chip, FilterBar, Mark, Painter, Scene, Theme, View};
 use plumb::gfx::Gfx;
 use plumb::layout::Layout;
 use plumb_core::rows::RowModel;
@@ -35,7 +35,7 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
     let root = model.rows()[0].id;
     model.expand(&tree, root);
     model.select(model.rows()[1].id);
-    let chips = [Chip { label: "C:  123 GB free".into(), used: 0.7 }, Chip { label: "D:  1 TB free".into(), used: 0.2 }];
+    let chips = [Chip { label: "C:  123 GB free".into(), used: 0.7, mark: Mark::Kept }, Chip { label: "D:  1 TB free".into(), used: 0.2, mark: Mark::Scanning }];
     let scene = Scene {
         layout: Layout::new(W as f32, H as f32),
         theme: Theme::new(dark),

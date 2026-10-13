@@ -2,7 +2,7 @@
 //! input changes it. No Win32 types, so the whole interaction model tests anywhere.
 mod filter;
 
-use crate::draw::{Chip, Scene, Theme, View};
+use crate::draw::{Chip, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
 use crate::layout::{Hit, Layout};
@@ -115,6 +115,8 @@ pub struct App {
     pub layout: Layout,
     pub drives: Vec<DriveInfo>,
     pub active: Option<usize>,
+    /// What each drive off screen holds, shown on its chip; set by the window.
+    pub marks: Vec<Mark>,
     pub tree: Option<Tree>,
     pub model: Option<RowModel>,
     pub scroll: usize,
@@ -139,7 +141,7 @@ pub struct App {
 impl App {
     pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
         Self {
-            layout, drives, adapter, active: None, tree: None, model: None, scroll: 0,
+            layout, drives, adapter, active: None, marks: Vec::new(), tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
@@ -450,9 +452,11 @@ impl App {
     pub fn chips(&self) -> Vec<Chip> {
         self.drives
             .iter()
-            .map(|d| Chip {
+            .enumerate()
+            .map(|(i, d)| Chip {
                 label: format!("{}:  {} free", d.letter, fmt::size(d.free)),
                 used: 1.0 - fmt::fraction(d.free, d.total),
+                mark: if self.active == Some(i) { Mark::None } else { self.marks.get(i).copied().unwrap_or_default() },
             })
             .collect()
     }
@@ -628,6 +632,16 @@ mod tests {
         assert_eq!(a.handle(Input::Click(x, y)), Effect::None);
         a.can_elevate = true;
         assert_eq!(a.handle(Input::Click(x, y)), Effect::Elevate);
+    }
+
+    #[test]
+    fn a_chip_shows_what_its_drive_holds_unless_it_is_on_screen() {
+        let mut a = app();
+        a.marks = vec![Mark::Kept, Mark::Scanning];
+        let m = |a: &App| a.chips().iter().map(|c| c.mark).collect::<Vec<_>>();
+        assert_eq!(m(&a)[..2], [Mark::Kept, Mark::Scanning]);
+        a.active = Some(0);
+        assert_eq!(m(&a)[..2], [Mark::None, Mark::Scanning]);
     }
 
     #[test]
