@@ -53,7 +53,7 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
         filter: FilterBar { text: "txt", caret: 3, regex: true, focus: true, error, count: "12 matches", ..Default::default() },
     };
     let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
-    Painter::new(&gfx).unwrap().paint(&gfx, &target, 96.0, &scene).expect("EndDraw");
+    Painter::new(&gfx).unwrap().paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
     let cpu = bitmap(&gfx, D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW);
     unsafe {
         cpu.CopyFromBitmap(None, &target, None).unwrap();

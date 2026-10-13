@@ -243,6 +243,8 @@ struct Win {
     comp: Comp,
     target: Option<ID2D1Bitmap1>,
     dpi: f32,
+    /// DIPs of the client area's top that overhang the screen (a maximized window's frame); 0 otherwise.
+    inset: f32,
     dark: bool,
     progress: Arc<Progress>,
     rx: Option<Receiver<ScanResult>>,
@@ -382,7 +384,7 @@ impl Win {
         let dark = dark_mode();
         let (filter_tx, filter_rx) = channel();
         let win = Self {
-            hwnd, app, gfx, painter, swap, comp, target: None, dpi, dark, progress: Arc::default(), rx: None,
+            hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, progress: Arc::default(), rx: None,
             background: false, watch: None, dir_pending: None, dir_failed: None, policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
@@ -420,7 +422,7 @@ impl Win {
     fn tip_text(&mut self) -> *const u16 {
         let mut p = POINT::default();
         let tip = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(self.hwnd, &mut p).as_bool() }
-            .then(|| self.app.tip_at(p.x as f32 * 96.0 / self.dpi, p.y as f32 * 96.0 / self.dpi))
+            .then(|| self.app.tip_at(p.x as f32 * 96.0 / self.dpi, p.y as f32 * 96.0 / self.dpi - self.inset))
             .flatten();
         self.tip_buf = tip.unwrap_or("").encode_utf16().chain([0]).collect();
         self.tip_buf.as_ptr()
@@ -436,7 +438,7 @@ impl Win {
         let bg: u32 = if self.dark { 0x1e1e1e } else { 0xffffff };
         let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_CAPTION_COLOR, &bg as *const _ as *const _, 4) };
         let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_BORDER_COLOR, &bg as *const _ as *const _, 4) };
-        let bar = (PICKER_H * self.dpi / 96.0).ceil() as i32;
+        let bar = ((PICKER_H + self.inset) * self.dpi / 96.0).ceil() as i32;
         let margins = MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: bar, cyBottomHeight: 0 };
         let _ = unsafe { DwmExtendFrameIntoClientArea(self.hwnd, &margins) };
     }
@@ -477,7 +479,7 @@ impl Win {
 
     fn try_render(&mut self) -> Result<()> {
         let target = self.target()?;
-        self.app.with_scene(self.dark, |s| self.painter.paint(&self.gfx, &target, self.dpi, s))?;
+        self.app.with_scene(self.dark, |s| self.painter.paint(&self.gfx, &target, self.dpi, self.inset, s))?;
         let hr = unsafe { self.swap.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0)) };
         if hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET {
             return Err(hr.into());
@@ -501,13 +503,21 @@ impl Win {
         let _ = unsafe {
             self.swap.ResizeBuffers(0, w, h, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SWAP_CHAIN_FLAG(0))
         };
-        self.app.handle(Input::Resize(w as f32 * 96.0 / self.dpi, h as f32 * 96.0 / self.dpi));
+        // A maximized window overhangs the screen by its frame. The client area must still start at the
+        // window's top (DWM places the caption buttons only then), so the content sits `inset` below it.
+        let inset = if unsafe { IsZoomed(self.hwnd) }.as_bool() { frame_px(self.hwnd) as f32 * 96.0 / self.dpi } else { 0.0 };
+        if inset != self.inset {
+            self.inset = inset;
+            self.apply_title_theme();
+        }
+        self.app.handle(Input::Resize(w as f32 * 96.0 / self.dpi, h as f32 * 96.0 / self.dpi - inset));
     }
 
+    /// A client point in DIPs, measured from the top of the content (below the overhang).
     fn dip(&self, lparam: LPARAM) -> (f32, f32) {
         let x = (lparam.0 & 0xffff) as i16 as f32;
         let y = ((lparam.0 >> 16) & 0xffff) as i16 as f32;
-        (x * 96.0 / self.dpi, y * 96.0 / self.dpi)
+        (x * 96.0 / self.dpi, y * 96.0 / self.dpi - self.inset)
     }
 
     fn invalidate(&self) {
@@ -1259,7 +1269,7 @@ fn hit_test(hwnd: HWND, lp: LPARAM) -> LRESULT {
     let _ = unsafe { ScreenToClient(hwnd, &mut p) };
     let caption = with(|w| {
         let k = 96.0 / w.dpi;
-        w.app.is_caption(p.x as f32 * k, p.y as f32 * k)
+        w.app.is_caption(p.x as f32 * k, p.y as f32 * k - w.inset)
     })
     .unwrap_or(false);
     LRESULT(if caption { HTCAPTION } else { HTCLIENT } as isize)
@@ -1278,10 +1288,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             let top = params.rgrc[0].top;
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) };
             params.rgrc[0].top = top;
-            if unsafe { IsZoomed(hwnd) }.as_bool() {
-                // A maximized window overhangs the screen by its frame; keep the content on it.
-                params.rgrc[0].top += frame_px(hwnd);
-            }
             LRESULT(0)
         }
         WM_NCHITTEST => hit_test(hwnd, lp),

@@ -188,15 +188,18 @@ impl Painter {
         })
     }
 
-    /// Draws `scene` into `target` (a Direct2D target bitmap) at `dpi`.
-    pub fn paint(&self, gfx: &Gfx, target: &ID2D1Bitmap1, dpi: f32, scene: &Scene) -> Result<()> {
+    /// Draws `scene` into `target` (a Direct2D target bitmap) at `dpi`, `inset` DIPs down from its top
+    /// (the part of a maximized window's client area that overhangs the screen).
+    pub fn paint(&self, gfx: &Gfx, target: &ID2D1Bitmap1, dpi: f32, inset: f32, scene: &Scene) -> Result<()> {
         let ctx = &gfx.d2d;
         unsafe {
             ctx.SetTarget(target);
             ctx.SetDpi(dpi, dpi);
             ctx.BeginDraw();
+            ctx.SetTransform(&windows_numerics::Matrix3x2::translation(0.0, inset));
             let brush = ctx.CreateSolidColorBrush(&scene.theme.bg, None)?;
             Pen { gfx, brush, painter: self, large: dpi >= 144.0 }.draw(scene);
+            ctx.SetTransform(&windows_numerics::Matrix3x2::identity());
             let r = ctx.EndDraw(None, None);
             ctx.SetTarget(None);
             r
@@ -304,7 +307,7 @@ impl Pen<'_> {
             self.frame(r, t.accent);
         }
         // The line box centres the text, but `.*` sits low in it (a period on the baseline and a raised star).
-        self.centered(".*", Rect { y: r.y - 3.0, ..r },if f.regex { t.accent } else if hot { t.fg } else { t.dim });
+        self.centered(".*", Rect { y: r.y - 1.5, ..r },if f.regex { t.accent } else if hot { t.fg } else { t.dim });
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
 
