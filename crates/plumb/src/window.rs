@@ -4,7 +4,7 @@ use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, Parked};
 use crate::draw::{Mark, Painter};
 use crate::filter_ui::{push_utf16, Edit};
 use crate::gfx::Gfx;
-use crate::layout::Layout;
+use crate::layout::{Layout, PICKER_H};
 use crate::preview::Preview;
 use crate::live::{needs_compaction, Live, Pacer, RescanPolicy, REPAINT};
 use plumb_core::filter::Hits;
@@ -25,17 +25,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_IGNORE, D2D1_PIXEL_FORMAT};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT};
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+};
 use windows::Win32::Graphics::Direct2D::{
     ID2D1Bitmap1, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
 };
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows::Win32::Graphics::Dwm::{DwmDefWindowProc, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter, IDXGIDevice, IDXGIFactory1, IDXGIFactory2, IDXGISurface,
-    IDXGISwapChain1, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_SCALING_NONE,
+    IDXGISwapChain1, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_SCALING_STRETCH,
     DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 use windows::Win32::Graphics::Gdi::{
@@ -48,7 +52,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
-use windows::Win32::UI::HiDpi::{
+use windows::Win32::UI::HiDpi::{GetSystemMetricsForDpi, 
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -233,6 +237,7 @@ struct Win {
     gfx: Gfx,
     painter: Painter,
     swap: IDXGISwapChain1,
+    comp: Comp,
     target: Option<ID2D1Bitmap1>,
     dpi: f32,
     dark: bool,
@@ -319,7 +324,16 @@ fn client_px(hwnd: HWND) -> (u32, u32) {
     ((r.right - r.left).max(1) as u32, (r.bottom - r.top).max(1) as u32)
 }
 
-fn make_swapchain(gfx: &Gfx, hwnd: HWND) -> Result<IDXGISwapChain1> {
+/// The DirectComposition objects that put the swap chain on the window; they must outlive it.
+struct Comp {
+    _device: IDCompositionDevice,
+    _target: IDCompositionTarget,
+    _visual: IDCompositionVisual,
+}
+
+/// A swap chain with per-pixel alpha, shown through DirectComposition: an HWND swap chain cannot be
+/// transparent, and the system's caption buttons (drawn by DWM under the window) need a transparent corner.
+fn make_swapchain(gfx: &Gfx, hwnd: HWND) -> Result<(IDXGISwapChain1, Comp)> {
     let (width, height) = client_px(hwnd);
     let dxgi: IDXGIDevice = gfx.d3d.cast()?;
     let factory: IDXGIFactory2 = unsafe { dxgi.GetAdapter()?.GetParent()? };
@@ -331,18 +345,27 @@ fn make_swapchain(gfx: &Gfx, hwnd: HWND) -> Result<IDXGISwapChain1> {
         SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
         BufferCount: 2,
-        Scaling: DXGI_SCALING_NONE,
+        Scaling: DXGI_SCALING_STRETCH,
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+        AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
         Flags: 0,
     };
-    unsafe { factory.CreateSwapChainForHwnd(&gfx.d3d, hwnd, &desc, None, None) }
+    unsafe {
+        let swap = factory.CreateSwapChainForComposition(&gfx.d3d, &desc, None)?;
+        let device: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
+        let target = device.CreateTargetForHwnd(hwnd, true)?;
+        let visual = device.CreateVisual()?;
+        visual.SetContent(&swap)?;
+        target.SetRoot(&visual)?;
+        device.Commit()?;
+        Ok((swap, Comp { _device: device, _target: target, _visual: visual }))
+    }
 }
 
 impl Win {
     fn new(hwnd: HWND, drives: Vec<DriveInfo>) -> Result<Self> {
         let gfx = Gfx::hardware(adapter_for(hwnd).as_ref())?;
-        let swap = make_swapchain(&gfx, hwnd)?;
+        let (swap, comp) = make_swapchain(&gfx, hwnd)?;
         let painter = Painter::new(&gfx)?;
         let dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
         let (pw, ph) = client_px(hwnd);
@@ -352,7 +375,7 @@ impl Win {
         let dark = dark_mode();
         let (filter_tx, filter_rx) = channel();
         let win = Self {
-            hwnd, app, gfx, painter, swap, target: None, dpi, dark, progress: Arc::default(), rx: None,
+            hwnd, app, gfx, painter, swap, comp, target: None, dpi, dark, progress: Arc::default(), rx: None,
             background: false, watch: None, dir_pending: None, dir_failed: None, policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
@@ -367,6 +390,14 @@ impl Win {
         let _ = unsafe {
             DwmSetWindowAttribute(self.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const _ as *const _, 4)
         };
+        // The caption buttons are drawn by DWM on the frame behind a transparent corner of our picker bar
+        // (see `draw`): colour that frame like the bar, and extend it over the bar's whole height.
+        let bg: u32 = if self.dark { 0x1e1e1e } else { 0xffffff };
+        let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_CAPTION_COLOR, &bg as *const _ as *const _, 4) };
+        let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_BORDER_COLOR, &bg as *const _ as *const _, 4) };
+        let bar = (PICKER_H * self.dpi / 96.0).ceil() as i32;
+        let margins = MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: bar, cyBottomHeight: 0 };
+        let _ = unsafe { DwmExtendFrameIntoClientArea(self.hwnd, &margins) };
     }
 
     fn target(&mut self) -> Result<ID2D1Bitmap1> {
@@ -375,7 +406,7 @@ impl Win {
         }
         let surface: IDXGISurface = unsafe { self.swap.GetBuffer(0)? };
         let props = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_IGNORE },
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
             dpiX: 96.0,
             dpiY: 96.0,
             bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
@@ -416,7 +447,7 @@ impl Win {
     fn recreate_device(&mut self) -> Result<()> {
         self.target = None;
         let gfx = Gfx::hardware(adapter_for(self.hwnd).as_ref())?;
-        self.swap = make_swapchain(&gfx, self.hwnd)?;
+        (self.swap, self.comp) = make_swapchain(&gfx, self.hwnd)?;
         self.painter = Painter::new(&gfx)?;
         self.app.adapter = gfx.adapter.clone();
         self.gfx = gfx;
@@ -1153,14 +1184,81 @@ fn key_of(vk: u16) -> Option<Key> {
     })
 }
 
+/// Width of the invisible resize border around the window, in pixels at its DPI.
+fn frame_px(hwnd: HWND) -> i32 {
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    unsafe { GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) }
+}
+
+/// What the window frame is at screen point `lp`, for a window whose title bar is drawn by us: the
+/// resize edges and corners (the top border is client area, so Windows no longer reports it), the
+/// empty part of the picker bar as caption, anything else as client.
+fn hit_test(hwnd: HWND, lp: LPARAM) -> LRESULT {
+    let mut p = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
+    let mut wr = RECT::default();
+    let _ = unsafe { GetWindowRect(hwnd, &mut wr) };
+    if !unsafe { IsZoomed(hwnd) }.as_bool() {
+        let b = frame_px(hwnd);
+        let (l, r, t, d) = (p.x < wr.left + b, p.x >= wr.right - b, p.y < wr.top + b, p.y >= wr.bottom - b);
+        let code = match (l, r, t, d) {
+            (true, _, true, _) => HTTOPLEFT,
+            (_, true, true, _) => HTTOPRIGHT,
+            (true, _, _, true) => HTBOTTOMLEFT,
+            (_, true, _, true) => HTBOTTOMRIGHT,
+            (_, _, true, _) => HTTOP,
+            (_, _, _, true) => HTBOTTOM,
+            (true, ..) => HTLEFT,
+            (_, true, ..) => HTRIGHT,
+            _ => 0,
+        };
+        if code != 0 {
+            return LRESULT(code as isize);
+        }
+    }
+    let _ = unsafe { ScreenToClient(hwnd, &mut p) };
+    let caption = with(|w| {
+        let k = 96.0 / w.dpi;
+        w.app.is_caption(p.x as f32 * k, p.y as f32 * k)
+    })
+    .unwrap_or(false);
+    LRESULT(if caption { HTCAPTION } else { HTCLIENT } as isize)
+}
+
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    // The system's caption buttons are drawn over our client area; DWM answers for them.
+    let mut dwm = LRESULT(0);
+    if unsafe { DwmDefWindowProc(hwnd, msg, wp, lp, &mut dwm) }.as_bool() {
+        return dwm;
+    }
     match msg {
+        // The client area starts at the top of the window: the title bar is ours to draw.
+        WM_NCCALCSIZE if wp.0 != 0 => {
+            let params = unsafe { &mut *(lp.0 as *mut NCCALCSIZE_PARAMS) };
+            let top = params.rgrc[0].top;
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) };
+            params.rgrc[0].top = top;
+            if unsafe { IsZoomed(hwnd) }.as_bool() {
+                // A maximized window overhangs the screen by its frame; keep the content on it.
+                params.rgrc[0].top += frame_px(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_NCHITTEST => hit_test(hwnd, lp),
         WM_PAINT => {
             let _ = unsafe { ValidateRect(Some(hwnd), None) };
             with(|w| w.render());
             LRESULT(0)
         }
-        WM_ERASEBKGND => LRESULT(1),
+        // Black in the extended frame is what DWM turns into glass (the backdrop under the caption buttons).
+        WM_ERASEBKGND => {
+            let mut r = RECT::default();
+            let _ = unsafe { GetClientRect(hwnd, &mut r) };
+            unsafe {
+                use windows::Win32::Graphics::Gdi::{FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC};
+                FillRect(HDC(wp.0 as _), &r, HBRUSH(GetStockObject(BLACK_BRUSH).0));
+            }
+            LRESULT(1)
+        }
         WM_SIZE => {
             if wp.0 != SIZE_MINIMIZED as usize {
                 with(|w| {
@@ -1172,7 +1270,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_DPICHANGED => {
             let r = unsafe { &*(lp.0 as *const RECT) };
-            with(|w| w.dpi = (wp.0 & 0xffff) as f32);
+            with(|w| {
+                w.dpi = (wp.0 & 0xffff) as f32;
+                w.apply_title_theme();
+            });
             let _ = unsafe {
                 SetWindowPos(hwnd, None, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE)
             };
@@ -1332,7 +1433,7 @@ fn create_window(visible: bool) -> Result<HWND> {
         )?;
         // Scale the default size once the window's monitor DPI is known.
         let dpi = GetDpiForWindow(hwnd);
-        let _ = SetWindowPos(hwnd, None, 0, 0, (1100 * dpi / 96) as i32, (760 * dpi / 96) as i32, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        let _ = SetWindowPos(hwnd, None, 0, 0, (1100 * dpi / 96) as i32, (760 * dpi / 96) as i32, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         if visible {
             let _ = ShowWindow(hwnd, SW_SHOW);
         }

@@ -22,6 +22,9 @@ pub const SCROLLBAR_W: f32 = 12.0;
 pub const CHIP_W: f32 = 104.0;
 pub const CHIP_GAP: f32 = 8.0;
 pub const ADMIN_W: f32 = 168.0;
+/// Room kept at the right end of the picker bar for the system's minimize, maximize and close buttons,
+/// which Windows draws over the top of the window (the title bar is part of the client area).
+pub const CAPTION_RESERVE: f32 = 150.0;
 pub const BANNER_H: f32 = 28.0;
 pub const RESCAN_W: f32 = 80.0;
 pub const FILTER_H: f32 = 32.0;
@@ -141,7 +144,7 @@ impl Layout {
 
     /// "Run as administrator", right-aligned in the picker bar.
     pub fn admin_button(&self) -> Rect {
-        Rect { x: (self.w - 8.0 - ADMIN_W).max(0.0), y: 6.0, w: ADMIN_W, h: PICKER_H - 12.0 }
+        Rect { x: (self.w - CAPTION_RESERVE - 8.0 - ADMIN_W).max(0.0), y: 6.0, w: ADMIN_W, h: PICKER_H - 12.0 }
     }
 
     pub fn header(&self) -> Rect {
@@ -298,6 +301,13 @@ mod tests {
         assert_eq!(l.column(2).1, MIN_COL_W);
         l.set_col_w(2, 10_000.0);
         assert!(l.column(0).1 >= MIN_NAME_W);
+    }
+
+    #[test]
+    fn the_admin_button_stays_clear_of_the_system_caption_buttons() {
+        let l = Layout::new(800.0, 600.0);
+        let b = l.admin_button();
+        assert!(b.x + b.w <= l.w - CAPTION_RESERVE);
     }
 
     #[test]

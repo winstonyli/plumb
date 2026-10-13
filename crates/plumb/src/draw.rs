@@ -2,7 +2,7 @@
 use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
-use crate::layout::{Layout, Rect, CANCEL_W, FILTER_CLEAR_W, INDENT, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_CLEAR_W, INDENT, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{
@@ -292,6 +292,13 @@ impl Pen<'_> {
         let l = &s.layout;
         unsafe { self.gfx.d2d.Clear(Some(&t.bg)) };
         self.picker(s);
+        // The system's caption buttons are drawn by DWM beneath the window: leave their corner transparent.
+        let corner = Rect { x: l.w - CAPTION_RESERVE, y: 0.0, w: CAPTION_RESERVE, h: PICKER_H };
+        unsafe {
+            self.gfx.d2d.PushAxisAlignedClip(&rc(corner), D2D1_ANTIALIAS_MODE_ALIASED);
+            self.gfx.d2d.Clear(Some(&D2D1_COLOR_F::default()));
+            self.gfx.d2d.PopAxisAlignedClip();
+        }
         if let Some(r) = s.admin {
             self.button(r, "Run as administrator", t);
         }

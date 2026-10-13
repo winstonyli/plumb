@@ -5,7 +5,7 @@ mod filter;
 use crate::draw::{Chip, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{Hit, Layout, INDENT};
+use crate::layout::{Hit, Layout, INDENT, PICKER_H};
 use crate::restore::Snapshot;
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::{NodeId, Tree};
@@ -342,6 +342,14 @@ impl App {
     /// Whether the pointer is on a column edge in the header (or one is being dragged), for the resize cursor.
     pub fn over_divider(&self, x: f32, y: f32) -> bool {
         self.col_drag.is_some() || matches!(self.layout.hit(x, y, self.drives.len()), Hit::Divider(_))
+    }
+
+    /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
+    /// it: the picker bar, away from the drive chips and the administrator button.
+    pub fn is_caption(&self, x: f32, y: f32) -> bool {
+        y < PICKER_H
+            && !matches!(self.layout.hit(x, y, self.drives.len()), Hit::Chip(_))
+            && !(self.can_elevate && self.layout.admin_button().contains(x, y))
     }
 
     fn row_at(&self, i: usize) -> Option<NodeId> {
@@ -811,6 +819,20 @@ mod tests {
         assert_eq!(a.unscanned(), Some(50));
         a.progress(1, 1, 751);
         assert_eq!(a.unscanned(), None, "the scan counted more than the drive says is used");
+    }
+
+    #[test]
+    fn only_empty_picker_bar_space_is_title_bar() {
+        let mut a = app();
+        a.can_elevate = true;
+        let chip = a.layout.chip(0);
+        let admin = a.layout.admin_button();
+        assert!(!a.is_caption(chip.x + 5.0, chip.y + 5.0), "a drive chip is a control");
+        assert!(!a.is_caption(admin.x + 5.0, admin.y + 5.0), "so is the administrator button");
+        assert!(a.is_caption(a.layout.chip(5).x, 3.0), "past the chips the bar is draggable");
+        assert!(!a.is_caption(300.0, PICKER_H + 5.0), "below the bar is content");
+        a.can_elevate = false;
+        assert!(a.is_caption(admin.x + 5.0, admin.y + 5.0), "no button, no control");
     }
 
     #[test]
