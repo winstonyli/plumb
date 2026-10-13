@@ -407,7 +407,7 @@ impl App {
         let (message, status, banner) = (self.message(), self.status(), self.banner());
         let count = self.filter_count();
         let view = match (&self.tree, &self.model) {
-            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll }),
+            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }) }),
             _ => None,
         };
         f(&Scene {

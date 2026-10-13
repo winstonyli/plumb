@@ -85,6 +85,8 @@ pub struct View<'a> {
     pub tree: &'a Tree,
     pub model: &'a RowModel,
     pub scroll: usize,
+    /// The scan is still running, so sizes and counts are what has been found so far.
+    pub partial: bool,
 }
 
 pub struct Scene<'a> {
@@ -299,12 +301,13 @@ impl Pen<'_> {
             let indent = row.depth as f32 * INDENT;
             self.text(&name, Rect { x: nx + 8.0 + indent, y: r.y, w: (nw - 16.0 - indent).max(0.0), h: r.h }, fg, false);
             let (sx, sw) = l.column(1);
-            self.text(&fmt::size(v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
+            let lower = if v.partial { "\u{2265} " } else { "" };
+            self.text(&format!("{lower}{}", fmt::size(v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
             let (px, pw) = l.column(2);
             self.fill(Rect { x: px + 4.0, y: r.y + 3.0, w: (pw - 8.0) * frac, h: r.h - 6.0 }, t.bar);
             self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (ix, iw) = l.column(3);
-            self.text(&fmt::count(v.tree.subtree_files[id] as u64), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, fg, true);
+            self.text(&format!("{lower}{}", fmt::count(v.tree.subtree_files[id] as u64)), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, fg, true);
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {
             self.fill(l.scrollbar(), t.panel);

@@ -4,6 +4,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Changed
+- `plumb`: while a scan runs, sizes and file counts carry a leading ≥ (they are what has been found so far).
+
 ## [0.3.0] - 2026-10-12
 
 Name filter, partial tree while a scan runs, and live updates without admin.

@@ -43,7 +43,7 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
         active_chip: Some(0),
         sort: (1, true),
         admin: Some(plumb::layout::Layout::new(W as f32, H as f32).admin_button()),
-        view: Some(View { tree: &tree, model: &model, scroll: 0 }),
+        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false }),
         message: "",
         status: "MFT scan: 200 files",
         banner: None,
