@@ -303,14 +303,17 @@ impl Pen<'_> {
         self.filter_bar(s);
         let h = l.header();
         self.fill(h, t.panel);
+        let partial = s.view.as_ref().is_some_and(|v| v.partial);
         for (c, name) in ["Name", "Size", "% of parent", "Items"].iter().enumerate() {
             let (x, w) = l.column(c);
-            let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BC}" } else { " \u{25B2}" } } else { "" };
-            let (label, color) = (format!("{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
+            let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
+            // During a scan the sums are what has been found so far: "at least", said once here.
+            let atleast = if partial && (c == 1 || c == 3) { "\u{2265} " } else { "" };
+            let (label, color) = (format!("{atleast}{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
             self.text(&label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, c == 1 || c == 3);
             if c > 0 {
                 // The grip for resizing: a hairline at the column's left edge.
-                self.fill(Rect { x, y: h.y + 5.0, w: 1.0, h: h.h - 10.0 }, t.bg);
+                self.fill(Rect { x, y: h.y + 5.0, w: 1.0, h: h.h - 10.0 }, D2D1_COLOR_F { a: 0.5, ..t.dim });
             }
         }
         match &s.view {
@@ -357,13 +360,13 @@ impl Pen<'_> {
 
     /// A small triangle centred on `cx`, `cy`, inlaid on a folder: pointing right when closed, down when open.
     fn chevron(&self, cx: f32, cy: f32, open: bool) {
-        let c = D2D1_COLOR_F { r: 0.30, g: 0.22, b: 0.05, a: 0.9 };
-        for k in 0..4 {
-            let (n, k) = (7.0 - 2.0 * k as f32, k as f32);
+        let c = D2D1_COLOR_F { r: 0.40, g: 0.29, b: 0.07, a: 0.75 };
+        for k in 0..3 {
+            let (n, k) = (5.0 - 2.0 * k as f32, k as f32);
             let r = if open {
-                Rect { x: cx - n / 2.0, y: cy - 2.0 + k, w: n, h: 1.0 }
+                Rect { x: cx - n / 2.0, y: cy - 1.0 + k, w: n, h: 1.0 }
             } else {
-                Rect { x: cx - 2.0 + k, y: cy - n / 2.0, w: 1.0, h: n }
+                Rect { x: cx - 1.0 + k, y: cy - n / 2.0, w: 1.0, h: n }
             };
             self.fill(r, c);
         }
@@ -420,6 +423,7 @@ impl Pen<'_> {
             let id = row.id;
             if v.model.selected() == Some(id) {
                 self.fill(r, t.select);
+                self.fill(Rect { x: r.x, y: r.y, w: 3.0, h: r.h - 1.0 }, t.accent);
             } else if v.hover == Some(i) {
                 self.fill(r, t.hover);
             }
@@ -445,13 +449,15 @@ impl Pen<'_> {
             }
             self.text(&name, Rect { x: ax + 22.0, y: r.y, w: (nw - 16.0 - indent - 22.0).max(0.0), h: r.h }, fg, false);
             let (sx, sw) = l.column(1);
-            let lower = if v.partial { "\u{2265} " } else { "" };
-            self.text(&format!("{lower}{}", fmt::size(v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
+            self.text(&fmt::size(v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
             let (px, pw) = l.column(2);
             let (bx, bw) = (px + 4.0, pw - 8.0);
-            self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
+            // A root is always all of itself, so it gets no bar.
+            if !parent.is_none() {
+                self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
+            }
             // While scanning, the share could still grow: at most to where all the unscanned bytes land in this row.
-            if let Some(rest) = v.unscanned.filter(|_| v.partial) {
+            if let Some(rest) = v.unscanned.filter(|_| v.partial && !parent.is_none()) {
                 let (s, p, rest) = (v.tree.subtree_size[id] as f64, denom as f64, rest as f64);
                 let high = (((s + rest) / (p + rest)) as f32).min(1.0);
                 if high > frac {
@@ -460,7 +466,7 @@ impl Pen<'_> {
             }
             self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (ix, iw) = l.column(3);
-            self.text(&format!("{lower}{}", fmt::count(v.tree.subtree_files[id] as u64)), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
+            self.text(&fmt::count(v.tree.subtree_files[id] as u64), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {
             self.fill(l.scrollbar(), t.panel);
