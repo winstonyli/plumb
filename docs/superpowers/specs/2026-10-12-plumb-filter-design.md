@@ -43,7 +43,7 @@ Type part of a name and see only the files and folders that match, with the fold
 ## Row model (`plumb-core`)
 
 - `RowModel` stores an optional `Rc<Keep>` (the keep bitset plus the strict-ancestor set derived from it), set with `set_filter(tree, Some(keep))` / `set_filter(tree, None)`; every row-building method reads it, so expand, collapse and sort all respect the filter. `Filter` itself (matcher, hits) stays in `App`.
-- While active, `push_children` skips any child not in the keep set. A node is shown expanded if it is a *strict ancestor of a hit* (its keep bit is set and it is not itself a leaf hit), tracked in a separate `filter_expanded` set so the user's `expanded` bitset is untouched. A user-opened hit folder uses the normal `expanded` bit; its non-kept children are included and marked `Row.dim = true`. Below a non-kept node everything is unfiltered and dim (opening a dim folder shows all its children, dim).
+- While active, `push_children` skips any child not in the keep set. A node is shown expanded if it is a *strict ancestor of a hit* (its keep bit is set and it is not itself a leaf hit), tracked in a separate `filter_expanded` set so the user's `expanded` bitset is untouched. A user-opened hit folder uses the normal `expanded` bit; its non-kept children are included and marked `Row.dim = true`. A matching folder that also contains matches is an ancestor and shows only kept children; the dimmed view appears only under a leaf match or below a hidden node. Below a non-kept node everything is unfiltered and dim (opening a dim folder shows all its children, dim).
 - If the selected node is not kept when the filter is installed or changes, the nearest kept ancestor is selected (the same rule `refresh` uses for removed nodes); if none, the selection is cleared.
 - Turning the filter on records a `restore::Snapshot` (expansion, selection, scroll, by path); turning it off applies it. Selection that was changed while filtering is kept if the node still exists.
 - `Row` gains `dim: bool`; `draw` draws dim rows at reduced text alpha.
@@ -73,7 +73,7 @@ Type part of a name and see only the files and folders that match, with the fold
 
 ## Risks and open questions
 
-- **Snapshot cost and memory** at 5M nodes (about 200 MB transient). Measured first; fallback described above.
+- **Snapshot cost and memory** at 5M nodes (about 200 MB transient). Measured 2026-10-12 (criterion, flat tree, machine at ~37% CPU, Defender real-time off): snapshot 3.0 ms at 1M and 17.9 ms at 5M nodes (under the 30 ms bar, so no shared-pool change); substring scan 27 ms / 182 ms; regex `^n9\d*7$` 33 ms / 170 ms; keep-set build 77 µs / 185 µs for about 11k hits (grows with hits plus kept ancestors). Scans run on the worker, so only the snapshot blocks the UI.
 - **Text input is the largest new UI piece.** IME composition (`WM_IME_*`) is out of scope; `WM_CHAR` covers direct input only. Known gap, recorded in the changelog.
 - **Per-keystroke thread spawn:** one short-lived thread per run is simple; a long-lived worker with a channel is the alternative if spawn cost shows up.
 - Match count counts hits (not kept ancestors).

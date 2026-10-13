@@ -4,6 +4,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+- `plumb-core`: `filter` module (case-insensitive substring or regex name matching with the `regex` crate, a name snapshot for worker threads, hits and the keep set) and `RowModel::set_filter`, which shows matches and their ancestors and dims rows under a leaf match. Not yet wired into the window.
+
 ## [0.2.0] - 2026-10-12
 
 Live updates (milestone M2). Design: `docs/superpowers/specs/2026-10-12-plumb-live-updates-design.md`.

@@ -1,5 +1,7 @@
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use plumb_core::{NodeFlags, NodeId};
+use plumb_core::filter::{Keep, Names, Query};
+use std::sync::atomic::AtomicU64;
 use plumb_core::mft::{ParsedRecord, parse_record};
 use plumb_core::rows::RowModel;
 use plumb_core::synth::{RECORD_SIZE, RecordBuilder, flat_tree, kary_builder};
@@ -128,5 +130,23 @@ fn bench_refresh(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_parse, bench_sums, bench_rows, bench_mutation, bench_refresh);
+fn bench_filter(c: &mut Criterion) {
+    let mut g = c.benchmark_group("filter");
+    g.sample_size(10);
+    for n in [1_000_000u32, 5_000_000] {
+        let tree = flat_tree(n);
+        let sub = Query { text: "n99".into(), regex: false }.compile().unwrap().unwrap();
+        let re = Query { text: r"^n9\d*7$".into(), regex: true }.compile().unwrap().unwrap();
+        let names = Names::of(&tree);
+        let cancel = AtomicU64::new(1);
+        g.bench_function(format!("snapshot_{n}"), |b| b.iter(|| black_box(Names::of(&tree))));
+        g.bench_function(format!("scan_substring_{n}"), |b| b.iter(|| black_box(names.scan(&sub, &cancel, 1))));
+        g.bench_function(format!("scan_regex_{n}"), |b| b.iter(|| black_box(names.scan(&re, &cancel, 1))));
+        let hits = names.scan(&sub, &cancel, 1).unwrap();
+        g.bench_function(format!("keep_{n}"), |b| b.iter(|| black_box(Keep::build(&tree, &hits))));
+    }
+    g.finish();
+}
+
+criterion_group!(benches, bench_parse, bench_sums, bench_rows, bench_mutation, bench_refresh, bench_filter);
 criterion_main!(benches);
