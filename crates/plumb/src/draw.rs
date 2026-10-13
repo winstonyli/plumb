@@ -460,12 +460,10 @@ impl Pen<'_> {
             self.text(&fmt::size(v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
             let (px, pw) = l.column(2);
             let (bx, bw) = (px + 4.0, pw - 8.0);
-            // A root is always all of itself, so it gets no bar.
-            if !parent.is_none() {
-                self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
-            }
+            self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
             // While scanning, the share could still grow: at most to where all the unscanned bytes land in this row.
-            if let Some(rest) = v.unscanned.filter(|_| v.partial && !parent.is_none()) {
+            // (A root is already all of itself, so `high` never exceeds `frac` there and it gets no fade.)
+            if let Some(rest) = v.unscanned.filter(|_| v.partial) {
                 let (s, p, rest) = (v.tree.subtree_size[id] as f64, denom as f64, rest as f64);
                 let high = (((s + rest) / (p + rest)) as f32).min(1.0);
                 if high > frac {
