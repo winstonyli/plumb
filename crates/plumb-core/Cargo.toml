@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bitflags.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

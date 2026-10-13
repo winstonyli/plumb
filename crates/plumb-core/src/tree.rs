@@ -84,6 +84,16 @@ impl Tree {
         std::mem::take(&mut self.touched)
     }
 
+    /// Ids changed since the last [`Tree::take_touched`], without consuming them.
+    pub fn touched(&self) -> &[NodeId] {
+        &self.touched
+    }
+
+    /// The three name arrays, for [`crate::filter::Names`].
+    pub(crate) fn name_arrays(&self) -> (&[u32], &[u16], &[u16]) {
+        (&self.name_off, &self.name_len, &self.pool)
+    }
+
     /// Adds (or subtracts) `size` bytes and `files` files to `from` and every ancestor.
     fn bump(&mut self, mut from: NodeId, size: u64, files: u32, add: bool) {
         while !from.is_none() {
