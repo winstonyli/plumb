@@ -1,6 +1,7 @@
 //! `WalkScanner`: lists directories with `GetFileInformationByHandleEx`; works on any volume
 //! without admin rights. It cannot see hard links, so linked files are counted once per link.
 
+use crate::listing::Entry;
 use crate::preview::PreviewMsg;
 use crate::{Progress, ScanError, Scanner};
 use plumb_core::{NodeFlags, NodeId, TreeBuilder};
@@ -34,14 +35,6 @@ impl Default for WalkScanner {
     }
 }
 
-struct Entry {
-    name: Vec<u16>,
-    alloc: u64,
-    is_dir: bool,
-    /// A symlink or junction: listed, never followed.
-    reparse: bool,
-}
-
 struct Job {
     id: NodeId,
     path: Vec<u16>,
@@ -66,7 +59,7 @@ impl Drop for Handle {
 
 /// Lists one directory. `dir` is a `\\?\`-style wide path without a trailing NUL.
 /// Bytes per cluster of the volume holding `path` (a wide path without NUL); 0 if unknown.
-fn cluster_size(path: &[u16]) -> u64 {
+pub(crate) fn cluster_size(path: &[u16]) -> u64 {
     let mut p = path.to_vec();
     p.push(0);
     let mut volume = [0u16; 261];
@@ -83,7 +76,7 @@ fn cluster_size(path: &[u16]) -> u64 {
 }
 
 /// `cluster` is the volume's cluster size (0 = unknown).
-fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec<Entry>, ()> {
+pub(crate) fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec<Entry>, ()> {
     let mut p = dir.to_vec();
     p.push(0);
     let h = unsafe {

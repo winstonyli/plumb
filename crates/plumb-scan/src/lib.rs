@@ -3,6 +3,7 @@
 pub mod journal;
 #[cfg(windows)]
 pub mod journal_win;
+pub mod listing;
 pub mod merge;
 pub mod mft_scan;
 pub mod preview;
