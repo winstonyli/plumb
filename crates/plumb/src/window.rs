@@ -1488,7 +1488,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_IME_STARTCOMPOSITION if with(|w| w.app.filter_ui().focus).unwrap_or(false) => {
             // A selection is replaced by what is composed, as with typing.
-            send(hwnd, Input::Edit(Edit::Backspace));
+            if with(|w| w.app.filter_ui().selection().is_some()).unwrap_or(false) {
+                send(hwnd, Input::Edit(Edit::Backspace));
+            }
             with(|w| {
                 w.place_ime();
                 w.invalidate();

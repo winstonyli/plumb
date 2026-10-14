@@ -298,7 +298,8 @@ impl Pen<'_> {
         } else {
             if let Some((a, e)) = f.sel {
                 let (x0, x1) = (self.text_width(&f.text[..a]).min(inner.w), self.text_width(&f.text[..e]).min(inner.w));
-                self.fill(Rect { x: inner.x + x0, y: b.y + 4.0, w: x1 - x0, h: b.h - 8.0 }, t.select);
+                // The same tint as the part of a name the filter matched.
+                self.fill(Rect { x: inner.x + x0, y: b.y + 4.0, w: x1 - x0, h: b.h - 8.0 }, D2D1_COLOR_F { a: 0.35, ..t.accent });
             }
             if composing {
                 let tail = f.text.get(f.caret..).unwrap_or("");

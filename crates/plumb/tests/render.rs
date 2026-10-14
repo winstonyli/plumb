@@ -165,9 +165,11 @@ fn a_selection_and_an_input_method_composition_are_drawn_in_the_box() {
     let differs = |a: &[u8], c: &[u8]| (b.x as u32..(b.x + b.w) as u32).any(|x| (b.y as u32..(b.y + b.h) as u32).any(|y| pixel(a, x, y) != pixel(c, x, y)));
     assert!(differs(&plain, &selected), "the selection highlight changes the box");
     assert!(differs(&plain, &composing), "the composition changes the box");
-    // The highlight's colour appears inside the box when selected, and nowhere when not.
-    let want = [to8(t.select.r), to8(t.select.g), to8(t.select.b)];
-    let has = |buf: &[u8]| (b.x as u32 + 9..(b.x + b.w) as u32).any(|x| pixel(buf, x, (b.y + b.h / 2.0) as u32) == want);
+    // The match tint appears inside the box when selected, and nowhere when not.
+    let mix = |p: f32, a: f32| to8(p * 0.65 + a * 0.35);
+    let want = [mix(t.panel.r, t.accent.r), mix(t.panel.g, t.accent.g), mix(t.panel.b, t.accent.b)];
+    let near = |p: [u8; 3]| p.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 3);
+    let has = |buf: &[u8]| (b.x as u32 + 9..(b.x + b.w) as u32).any(|x| near(pixel(buf, x, (b.y + b.h / 2.0) as u32)));
     assert!(has(&selected) && !has(&plain));
     // The underline sits under the composed text: the bottom rows gain foreground pixels only when composing.
     let uy = (b.y + b.h - 6.0) as u32;
