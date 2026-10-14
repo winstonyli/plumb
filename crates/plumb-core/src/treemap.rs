@@ -160,7 +160,7 @@ impl Ctx<'_> {
         let t = self.tree;
         let total = t.subtree_size[dir].saturating_sub(t.size[dir]);
         let a = area.area();
-        if total == 0 || !(a > 0.0) {
+        if total == 0 || a.is_nan() || a <= 0.0 {
             return;
         }
         // One O(k) pass: the children big enough to get MIN_PX2 are kept, the rest are summed.
@@ -248,8 +248,8 @@ fn squarify(weights: &[f64], area: Box64) -> Vec<Box64> {
         let edge = if j == n { far } else { (near + sum / side).min(far) };
         let (o0, o1) = if wide { (rest.y0, rest.y1) } else { (rest.x0, rest.x1) };
         let (mut prev, mut acc) = (o0, 0.0);
-        for k in i..j {
-            acc += weights[k] * scale;
+        for (k, w) in weights.iter().enumerate().take(j).skip(i) {
+            acc += w * scale;
             let next = if k + 1 == j { o1 } else { o0 + (o1 - o0) * (acc / sum) };
             out.push(if wide {
                 Box64 { x0: near, x1: edge, y0: prev, y1: next }

@@ -1,5 +1,6 @@
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use plumb_core::{NodeFlags, NodeId};
+use plumb_core::{NodeFlags, NodeId, Rect};
+use plumb_core::treemap::{hit, layout};
 use plumb_core::filter::{Keep, Names, Query};
 use std::sync::atomic::AtomicU64;
 use plumb_core::mft::{ParsedRecord, parse_record};
@@ -176,5 +177,19 @@ fn bench_filter(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_parse, bench_sums, bench_rows, bench_mutation, bench_refresh, bench_filter);
+fn bench_treemap(c: &mut Criterion) {
+    let tree = kary_builder(5_000_000, 8).finish().unwrap();
+    let mut g = c.benchmark_group("treemap");
+    g.sample_size(20);
+    for (name, w, h) in [("800x600", 800.0f32, 600.0f32), ("3840x2160", 3840.0, 2160.0)] {
+        let rect = Rect { x: 0.0, y: 0.0, w, h };
+        g.bench_function(format!("layout_root_{name}"), |b| b.iter(|| black_box(layout(&tree, NodeId(0), rect, 1.0))));
+        g.bench_function(format!("layout_folder_{name}"), |b| b.iter(|| black_box(layout(&tree, NodeId(9), rect, 1.0))));
+    }
+    let tiles = layout(&tree, NodeId(0), Rect { x: 0.0, y: 0.0, w: 3840.0, h: 2160.0 }, 1.0);
+    g.bench_function(format!("hit_{}_tiles", tiles.len()), |b| b.iter(|| black_box(hit(&tiles, black_box(1921.5), black_box(1080.5)))));
+    g.finish();
+}
+
+criterion_group!(benches, bench_parse, bench_sums, bench_rows, bench_mutation, bench_refresh, bench_filter, bench_treemap);
 criterion_main!(benches);
