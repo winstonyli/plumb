@@ -31,6 +31,21 @@ fn classification_by_last_extension_ignores_case_and_defaults_to_other() {
 }
 
 #[test]
+fn class_bytes_sums_file_tiles_per_class_largest_first() {
+    let tile = |class, kind, bytes| Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class, kind, bytes, count: 1 };
+    let tiles = [
+        tile(Class::Video, Kind::File, 10),
+        tile(Class::Code, Kind::File, 30),
+        tile(Class::Video, Kind::File, 25),
+        tile(Class::Other, Kind::Rest, 999),
+        tile(Class::Audio, Kind::File, 0),
+        tile(Class::Image, Kind::Frame, 50),
+    ];
+    assert_eq!(class_bytes(&tiles), vec![(Class::Video, 35), (Class::Code, 30)]);
+    assert!(class_bytes(&[]).is_empty());
+}
+
+#[test]
 fn all_lists_every_class_in_index_order() {
     for (i, c) in Class::ALL.iter().enumerate() {
         assert_eq!(c.index(), i);

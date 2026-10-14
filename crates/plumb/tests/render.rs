@@ -231,6 +231,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
         layout.map_on = true;
         let area = layout.map().expect("800 DIPs is wide enough");
         let tiles = map_layout(&tree, root, area, 1.0);
+        let classes = plumb_core::treemap::class_bytes(&tiles);
         let theme = Theme::new(dark);
         let video = tiles.iter().position(|t| t.kind == Kind::File && t.bytes == 900_000).unwrap();
         let plain = tiles.iter().position(|t| t.kind == Kind::File && t.bytes == 100_000).unwrap();
@@ -239,7 +240,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None }),
                 message: "", status: "", banner: None, filter: FilterBar::default(),
-                map: Some(MapView { tiles: &tiles, generation: 1, selected, hover: None, classes: [true; plumb_core::treemap::Class::COUNT] }),
+                map: Some(MapView { tiles: &tiles, generation: 1, selected, hover: None, classes: &classes }),
             };
             render_scene(&gfx, &scene, stem)
         };
@@ -271,12 +272,13 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     let mut layout = Layout::new(W as f32, H as f32);
     layout.map_on = true;
     let tiles = map_layout(&tree, root, layout.map().unwrap(), 1.0);
+    let classes = plumb_core::treemap::class_bytes(&tiles);
     let painter = Painter::new(&gfx).unwrap();
     let frame = |generation: u64, selected: Option<usize>| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
             view: None, message: "", status: "", banner: None, filter: FilterBar::default(),
-            map: Some(MapView { tiles: &tiles, generation, selected, hover: None, classes: [true; plumb_core::treemap::Class::COUNT] }),
+            map: Some(MapView { tiles: &tiles, generation, selected, hover: None, classes: &classes }),
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
         painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");

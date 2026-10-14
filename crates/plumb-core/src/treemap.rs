@@ -70,6 +70,17 @@ pub fn classify(name: &[u16]) -> Class {
     }
 }
 
+/// Bytes of the file tiles per class, largest first (ties in `Class::ALL` order); classes with none are left out.
+pub fn class_bytes(tiles: &[Tile]) -> Vec<(Class, u64)> {
+    let mut by = [0u64; Class::COUNT];
+    for t in tiles.iter().filter(|t| t.kind == Kind::File) {
+        by[t.class.index()] += t.bytes;
+    }
+    let mut v: Vec<_> = Class::ALL.into_iter().map(|c| (c, by[c.index()])).filter(|&(_, b)| b > 0).collect();
+    v.sort_by_key(|&(_, b)| std::cmp::Reverse(b));
+    v
+}
+
 /// Deepest nesting of folder frames; the tree can be deeper (a stack guard).
 pub const MAX_DEPTH: u8 = 24;
 /// A child with less area than this many physical pixels is merged into its folder's `Rest` tile.

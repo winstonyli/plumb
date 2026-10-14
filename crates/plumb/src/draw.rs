@@ -145,8 +145,8 @@ pub struct MapView<'a> {
     pub selected: Option<usize>,
     /// Index of the tile under the pointer.
     pub hover: Option<usize>,
-    /// Which classes occur among the tiles, for the legend.
-    pub classes: [bool; Class::COUNT],
+    /// Bytes per class among the tiles, largest first, for the legend.
+    pub classes: &'a [(Class, u64)],
 }
 
 pub struct Scene<'a> {
@@ -508,13 +508,24 @@ impl Pen<'_> {
         self.draw_text(glyph, &self.painter.glyph, r, c);
     }
 
-    /// The map's class legend, right-aligned in `r`: as many of the classes present as fit in `max` DIPs.
+    /// The map's class legend, right-aligned in `r`: each class present with its share of the drawn files, largest
+    /// first, as many as fit in `max` DIPs (the smallest drop off).
     /// Returns the width used (0 when there is no map or nothing fits).
     fn legend(&self, s: &Scene, r: Rect, max: f32) -> f32 {
         let Some(m) = &s.map else { return 0.0 };
-        let entries: Vec<(Class, f32)> = Class::ALL.into_iter().filter(|c| m.classes[c.index()]).map(|c| (c, self.text_width(c.label()))).collect();
+        let total: u64 = m.classes.iter().map(|&(_, b)| b).sum();
+        let entries: Vec<(Class, String, f32)> = m
+            .classes
+            .iter()
+            .map(|&(c, b)| {
+                let share = b * 100 / total.max(1);
+                let label = if share == 0 { format!("{} <1%", c.label()) } else { format!("{} {share}%", c.label()) };
+                let w = self.text_width(&label);
+                (c, label, w)
+            })
+            .collect();
         let (mut used, mut n) = (0.0, 0);
-        for &(_, w) in &entries {
+        for &(_, _, w) in &entries {
             if used + 14.0 + w > max {
                 break;
             }
@@ -526,9 +537,10 @@ impl Pen<'_> {
         }
         used -= 12.0;
         let mut x = r.x + r.w - used;
-        for &(c, w) in &entries[..n] {
+        for (c, label, w) in &entries[..n] {
+            let w = *w;
             self.fill(Rect { x, y: r.y + (r.h - 10.0) / 2.0, w: 10.0, h: 10.0 }, s.theme.class[c.index()]);
-            self.text(c.label(), Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
+            self.text(label, Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
             x += 14.0 + w + 12.0;
         }
         used
