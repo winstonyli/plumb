@@ -56,6 +56,10 @@ use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_R
 use windows::Win32::UI::HiDpi::{GetSystemMetricsForDpi, 
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
+use windows::Win32::UI::Input::Ime::{
+    ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext, ImmSetCandidateWindow, ImmSetCompositionWindow, CANDIDATEFORM, CFS_CANDIDATEPOS,
+    CFS_POINT, COMPOSITIONFORM, GCS_COMPSTR, GCS_RESULTSTR, IME_COMPOSITION_STRING,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
     VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
@@ -544,6 +548,24 @@ impl Win {
         self.app.handle(Input::Edit(if double { Edit::Word(at) } else { Edit::Place { at, extend: shift } }));
         self.filter_drag = true;
         self.invalidate();
+    }
+
+    /// Puts the input method's composition and candidate windows under the filter caret.
+    fn place_ime(&self) {
+        let u = self.app.filter_ui();
+        let x = self.app.filter_origin() + self.painter.text_width(&self.gfx, &format!("{}{}", &u.text[..u.caret], u.preedit));
+        let b = self.app.filter_box();
+        let (px, py) = ((x * self.dpi / 96.0) as i32, ((b.y + b.h + self.inset) * self.dpi / 96.0) as i32);
+        unsafe {
+            let himc = ImmGetContext(self.hwnd);
+            if himc.0.is_null() {
+                return;
+            }
+            let at = POINT { x: px, y: py };
+            let _ = ImmSetCompositionWindow(himc, &COMPOSITIONFORM { dwStyle: CFS_POINT, ptCurrentPos: at, rcArea: RECT::default() });
+            let _ = ImmSetCandidateWindow(himc, &CANDIDATEFORM { dwIndex: 0, dwStyle: CFS_CANDIDATEPOS, ptCurrentPos: at, rcArea: RECT::default() });
+            let _ = ImmReleaseContext(self.hwnd, himc);
+        }
     }
 
     fn dip(&self, lparam: LPARAM) -> (f32, f32) {
@@ -1227,6 +1249,26 @@ fn paste_text(hwnd: HWND) -> Option<String> {
     }
 }
 
+/// One string of the current IME composition, if `flags` says it changed.
+fn ime_string(hwnd: HWND, which: IME_COMPOSITION_STRING, flags: IME_COMPOSITION_STRING) -> Option<String> {
+    if flags.0 & which.0 == 0 {
+        return None;
+    }
+    unsafe {
+        let himc = ImmGetContext(hwnd);
+        if himc.0.is_null() {
+            return None;
+        }
+        let bytes = ImmGetCompositionStringW(himc, which, None, 0).max(0) as usize;
+        let mut buf = vec![0u16; bytes / 2];
+        if bytes > 0 {
+            ImmGetCompositionStringW(himc, which, Some(buf.as_mut_ptr().cast()), bytes as u32);
+        }
+        let _ = ImmReleaseContext(hwnd, himc);
+        Some(String::from_utf16_lossy(&buf))
+    }
+}
+
 /// The app input a key press stands for. Ctrl+C is handled by the caller.
 fn key_input(vk: u16, ctrl: bool, hwnd: HWND) -> Option<Input> {
     if ctrl {
@@ -1440,6 +1482,35 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             with(|w| {
                 w.last_input = Instant::now();
                 w.app.handle(Input::Wheel(-delta / 120 * 3));
+                w.invalidate();
+            });
+            LRESULT(0)
+        }
+        WM_IME_STARTCOMPOSITION if with(|w| w.app.filter_ui().focus).unwrap_or(false) => {
+            // A selection is replaced by what is composed, as with typing.
+            send(hwnd, Input::Edit(Edit::Backspace));
+            with(|w| {
+                w.place_ime();
+                w.invalidate();
+            });
+            LRESULT(0)
+        }
+        WM_IME_COMPOSITION if with(|w| w.app.filter_ui().focus).unwrap_or(false) => {
+            let flags = IME_COMPOSITION_STRING(lp.0 as u32);
+            let (done, composing) = (ime_string(hwnd, GCS_RESULTSTR, flags), ime_string(hwnd, GCS_COMPSTR, flags));
+            with(|w| w.app.set_preedit(composing.clone().unwrap_or_default()));
+            if let Some(s) = done.filter(|s| !s.is_empty()) {
+                send(hwnd, Input::Edit(Edit::Paste(s)));
+            }
+            with(|w| {
+                w.place_ime();
+                w.invalidate();
+            });
+            LRESULT(0)
+        }
+        WM_IME_ENDCOMPOSITION if with(|w| w.app.filter_ui().focus).unwrap_or(false) => {
+            with(|w| {
+                w.app.set_preedit(String::new());
                 w.invalidate();
             });
             LRESULT(0)

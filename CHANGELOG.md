@@ -12,6 +12,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 - `plumb`: drive chips are as wide as their label (measured once at start with DirectWrite) instead of a fixed 104 px, so a long mount-point name fits and short ones take less room; the filter box starts after the last chip. `Layout.chips` is now the list of chip widths, so `Layout` is no longer `Copy`.
 
+- `plumb`: the filter box has a real selection (an anchor and a caret instead of an all-or-nothing flag): click to place the caret, drag or shift+click to select, double-click for a word, shift+Left/Right/Home/End to extend, Ctrl+C / Ctrl+X on the selection, and typing or deleting replaces just the selected part.
+- `plumb`: input methods (Pinyin, Japanese, ...) compose inside the filter box: the in-progress text shows underlined at the caret and the candidate window opens under it, instead of at the window's corner. Adds the `Win32_UI_Input_Ime` feature. Only the drawing is tested; the IME itself has not been tried here.
+
 ### Fixed
 - `plumb`: tooltips are dark in dark mode (they were the light native style).
 - `plumb-scan`: the walker counts a hard-linked file once, as the MFT scanner already did. Directory listings now read each file's id (`FILE_ID_EXTD_DIR_INFO`); later links to a seen id are flagged `HARDLINK` and count 0. Which link carries the bytes depends on thread timing, so per-folder attribution can differ between runs (totals do not). Live updates (`dirsync`) keep an existing `HARDLINK` node at 0 but do not dedup new links, so deleting the counted link undercounts until the next rescan. Alternate data streams are still ignored (measured not worth the cost; see `docs/benchmarks.md`).

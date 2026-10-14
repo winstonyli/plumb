@@ -80,9 +80,18 @@ impl App {
         &self.filter.ui
     }
 
+    /// The input method's in-progress text at the caret (empty when it ends or is cancelled).
+    pub fn set_preedit(&mut self, s: String) {
+        self.filter.ui.preedit = s;
+    }
+
     /// Whether (x, y) is in the filter box.
     pub fn over_filter_box(&self, x: f32, y: f32) -> bool {
         matches!(self.layout.hit(x, y, self.drives.len()), Hit::FilterBox)
+    }
+
+    pub fn filter_box(&self) -> crate::layout::Rect {
+        self.layout.filter_box()
     }
 
     /// Where the filter text starts on screen: the x a click is measured from.
@@ -137,6 +146,7 @@ impl App {
             regex: u.regex,
             focus: u.focus,
             sel: u.selection(),
+            preedit: &u.preedit,
             error: self.filter.error.is_some(),
             count,
         }

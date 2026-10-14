@@ -28,6 +28,10 @@ fn bitmap(gfx: &Gfx, options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OP
 }
 
 fn render(dark: bool, error: bool) -> Vec<u8> {
+    render_with(dark, FilterBar { text: "txt", caret: 3, regex: true, focus: true, error, count: "12 matches", ..Default::default() })
+}
+
+fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
     let gfx = Gfx::warp().expect("WARP device");
     assert!(gfx.adapter.contains("WARP"), "{}", gfx.adapter);
     let tree = kary_builder(200, 4).finish().unwrap();
@@ -52,7 +56,7 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
         status: "MFT scan: 200 files",
         adapter: "WARP",
         banner: None,
-        filter: FilterBar { text: "txt", caret: 3, regex: true, focus: true, error, count: "12 matches", ..Default::default() },
+        filter,
     };
     let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
     Painter::new(&gfx).unwrap().paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
@@ -67,7 +71,7 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
         cpu.Unmap().unwrap();
         // PLUMB_SHOT_DIR=<dir> keeps the frames as PNGs.
         if let Some(dir) = std::env::var_os("PLUMB_SHOT_DIR") {
-            let name = format!("plumb-{}{}.png", if dark { "dark" } else { "light" }, if error { "-error" } else { "" });
+            let name = format!("plumb-{}{}.png", if dark { "dark" } else { "light" }, if filter.error { "-error" } else { "" });
             write_png(&std::path::Path::new(&dir).join(name), &out);
         }
         out
@@ -146,6 +150,30 @@ fn draws_regions_in_both_themes() {
         let drawn = (100..570).any(|y| (0..400).any(|x| pixel(&buf, x, y) != want_bg && pixel(&buf, x, y) != [to8(t.select.r), to8(t.select.g), to8(t.select.b)]));
         assert!(drawn, "no row content (dark={dark})");
     }
+}
+
+#[test]
+fn a_selection_and_an_input_method_composition_are_drawn_in_the_box() {
+    let to8 = |c: f32| (c * 255.0).round() as u8;
+    let t = Theme::new(false);
+    let l = Layout { chips: vec![CHIP_W; 2], ..Layout::new(W as f32, H as f32) };
+    let b = l.filter_box();
+    let bar = FilterBar { text: "abcdef", caret: 6, focus: true, ..Default::default() };
+    let plain = render_with(false, bar);
+    let selected = render_with(false, FilterBar { sel: Some((0, 6)), ..bar });
+    let composing = render_with(false, FilterBar { preedit: "xyz", ..bar });
+    let differs = |a: &[u8], c: &[u8]| (b.x as u32..(b.x + b.w) as u32).any(|x| (b.y as u32..(b.y + b.h) as u32).any(|y| pixel(a, x, y) != pixel(c, x, y)));
+    assert!(differs(&plain, &selected), "the selection highlight changes the box");
+    assert!(differs(&plain, &composing), "the composition changes the box");
+    // The highlight's colour appears inside the box when selected, and nowhere when not.
+    let want = [to8(t.select.r), to8(t.select.g), to8(t.select.b)];
+    let has = |buf: &[u8]| (b.x as u32 + 9..(b.x + b.w) as u32).any(|x| pixel(buf, x, (b.y + b.h / 2.0) as u32) == want);
+    assert!(has(&selected) && !has(&plain));
+    // The underline sits under the composed text: the bottom rows gain foreground pixels only when composing.
+    let uy = (b.y + b.h - 6.0) as u32;
+    let fg = [to8(t.fg.r), to8(t.fg.g), to8(t.fg.b)];
+    let under = |buf: &[u8]| (b.x as u32..(b.x + b.w) as u32).any(|x| pixel(buf, x, uy) == fg);
+    assert!(under(&composing) && !under(&plain));
 }
 
 #[test]

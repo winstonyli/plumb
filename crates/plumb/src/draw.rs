@@ -104,6 +104,8 @@ pub struct FilterBar<'a> {
     pub focus: bool,
     /// The selected byte range of `text`, if any.
     pub sel: Option<(usize, usize)>,
+    /// Text an input method is composing at the caret, drawn underlined.
+    pub preedit: &'a str,
     /// The pattern did not compile: the box is tinted.
     pub error: bool,
     /// "1,240 matches", "searching...", "invalid pattern", or empty.
@@ -287,7 +289,9 @@ impl Pen<'_> {
         self.fill(b, if f.error { t.error } else { t.panel });
         self.frame(b, if f.focus { t.accent } else { t.select });
         let inner = Rect { x: b.x + FILTER_PAD, y: b.y, w: (l.filter_clear().x - b.x - FILTER_PAD).max(0.0), h: b.h };
-        if f.text.is_empty() {
+        let head = f.text.get(..f.caret).unwrap_or(f.text);
+        let composing = !f.preedit.is_empty();
+        if f.text.is_empty() && !composing {
             if !f.focus {
                 self.text("Filter  (Ctrl+F)", inner, t.dim, false);
             }
@@ -296,12 +300,22 @@ impl Pen<'_> {
                 let (x0, x1) = (self.text_width(&f.text[..a]).min(inner.w), self.text_width(&f.text[..e]).min(inner.w));
                 self.fill(Rect { x: inner.x + x0, y: b.y + 4.0, w: x1 - x0, h: b.h - 8.0 }, t.select);
             }
-            self.text(f.text, inner, t.fg, false);
-            let c = l.filter_clear();
-            self.text("\u{00D7}", Rect { w: c.w - 6.0, ..c }, t.dim, true);
+            if composing {
+                let tail = f.text.get(f.caret..).unwrap_or("");
+                self.text(&format!("{head}{}{tail}", f.preedit), inner, t.fg, false);
+                let x0 = self.text_width(head).min(inner.w);
+                let x1 = self.text_width(&format!("{head}{}", f.preedit)).min(inner.w);
+                self.fill(Rect { x: inner.x + x0, y: b.y + b.h - 6.0, w: x1 - x0, h: 1.0 }, t.fg);
+            } else {
+                self.text(f.text, inner, t.fg, false);
+            }
+            if !f.text.is_empty() {
+                let c = l.filter_clear();
+                self.text("\u{00D7}", Rect { w: c.w - 6.0, ..c }, t.dim, true);
+            }
         }
         if f.focus && f.sel.is_none() {
-            let x = inner.x + self.text_width(f.text.get(..f.caret).unwrap_or(f.text));
+            let x = inner.x + self.text_width(&format!("{head}{}", f.preedit));
             if x <= inner.x + inner.w {
                 self.fill(Rect { x, y: b.y + 5.0, w: 1.0, h: b.h - 10.0 }, t.fg);
             }

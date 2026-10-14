@@ -36,6 +36,8 @@ pub struct FilterUi {
     pub anchor: usize,
     pub regex: bool,
     pub focus: bool,
+    /// Text an input method is composing at the caret: shown underlined, not yet part of `text`.
+    pub preedit: String,
 }
 
 impl FilterUi {
