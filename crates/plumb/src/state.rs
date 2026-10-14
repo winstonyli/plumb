@@ -27,6 +27,20 @@ pub struct Sort {
     pub descending: bool,
 }
 
+/// The treemap pane: shown or hidden, and its wanted width in DIPs.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MapState {
+    pub visible: bool,
+    pub width: f32,
+}
+
+impl Default for MapState {
+    fn default() -> Self {
+        Self { visible: true, width: 420.0 }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
@@ -34,6 +48,8 @@ pub struct State {
     /// Widths in DIPs of the Size, % of parent and Items columns.
     pub columns: Option<[f32; 3]>,
     pub sort: Option<Sort>,
+    /// The treemap pane.
+    pub map: MapState,
 }
 
 impl State {
@@ -74,6 +90,7 @@ mod tests {
             window: Some(Placement { x: -20, y: 40, w: 1100, h: 760, maximized: true }),
             columns: Some([120.0, 90.5, 80.0]),
             sort: Some(Sort { column: 3, descending: false }),
+            map: MapState { visible: false, width: 333.5 },
         };
         assert_eq!(State::parse(&s.to_text()), s);
         assert_eq!(State::parse(&State::default().to_text()), State::default());
@@ -86,11 +103,24 @@ mod tests {
         let partial = State::parse("[sort]\ncolumn = 2\ndescending = true\nfuture_key = 1\n");
         assert_eq!(partial.sort, Some(Sort { column: 2, descending: true }));
         assert_eq!((partial.window, partial.columns), (None, None));
+        assert_eq!(partial.map, MapState::default());
     }
 
     #[test]
     fn a_tiny_rectangle_is_not_sane() {
         assert!(Placement { x: 0, y: 0, w: 1100, h: 760, maximized: false }.is_sane());
         assert!(!Placement { x: 0, y: 0, w: 0, h: 0, maximized: false }.is_sane());
+    }
+
+    #[test]
+    fn the_map_defaults_to_shown_and_a_damaged_value_falls_back() {
+        assert_eq!(State::default().map, MapState { visible: true, width: 420.0 });
+        let s = State::parse("[map]
+visible = false
+");
+        assert_eq!(s.map, MapState { visible: false, width: 420.0 }, "a missing key means its default");
+        assert_eq!(State::parse("[map]
+width = \"wide\"
+"), State::default(), "a damaged file means defaults");
     }
 }

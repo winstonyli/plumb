@@ -196,7 +196,7 @@ impl App {
     /// The part of the remembered state the app owns; the window fills in its placement.
     pub fn remembered(&self) -> State {
         let (column, descending) = self.sort;
-        State { window: None, columns: Some(self.layout.col_w), sort: Some(Sort { column, descending }) }
+        State { window: None, columns: Some(self.layout.col_w), sort: Some(Sort { column, descending }), map: Default::default() }
     }
 
     /// Exchanges the per-drive state with `p`. The result is consistent on its own (banner and
@@ -1069,7 +1069,7 @@ mod tests {
         assert_eq!((b.sort(), b.layout.col_w), (a.sort(), a.layout.col_w));
         let mut c = app();
         let before = (c.sort(), c.layout.col_w);
-        c.restore(&State { window: None, columns: Some([f32::NAN, 1.0e9, -5.0]), sort: Some(Sort { column: 9, descending: true }) });
+        c.restore(&State { window: None, columns: Some([f32::NAN, 1.0e9, -5.0]), sort: Some(Sort { column: 9, descending: true }), map: Default::default() });
         assert_eq!(c.sort(), before.0, "an unknown column is ignored");
         assert!(c.layout.col_w.iter().all(|w| w.is_finite() && *w > 0.0), "widths stay clamped");
     }
