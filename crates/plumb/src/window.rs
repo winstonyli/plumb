@@ -498,6 +498,7 @@ impl Win {
 
     fn try_render(&mut self) -> Result<()> {
         let target = self.target()?;
+        self.app.update_map(96.0 / self.dpi);
         self.app.with_scene(self.dark, |s| self.painter.paint(&self.gfx, &target, self.dpi, self.inset, s))?;
         let hr = unsafe { self.swap.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0)) };
         if hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET {
@@ -1282,6 +1283,7 @@ fn key_input(vk: u16, ctrl: bool, hwnd: HWND) -> Option<Input> {
     if ctrl {
         match vk {
             v if v == b'F' as u16 => return Some(Input::Find),
+            v if v == b'M' as u16 => return Some(Input::ToggleMap),
             v if v == b'A' as u16 => return Some(Input::Edit(Edit::SelectAll)),
             v if v == b'V' as u16 => return paste_text(hwnd).map(|s| Input::Edit(Edit::Paste(s))),
             _ => {}
@@ -1439,9 +1441,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let _ = unsafe { TrackMouseEvent(&mut t) }; // asks for WM_MOUSELEAVE
                 with(|w| {
                     let (x, y) = w.dip(lp);
-                    let before = (w.app.hover, w.app.hot);
+                    let before = (w.app.hover, w.app.hot, w.app.map_hover);
                     w.app.handle(Input::Hover(x, y));
-                    if (w.app.hover, w.app.hot) != before {
+                    if (w.app.hover, w.app.hot, w.app.map_hover) != before {
                         w.invalidate();
                     }
                     // Moving onto another icon button (or off one) hides the old tip so the next rest asks again.
@@ -1479,7 +1481,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_MOUSELEAVE => {
             with(|w| {
-                if w.app.hover.take().is_some() | w.app.hot.take().is_some() {
+                if w.app.hover.take().is_some() | w.app.hot.take().is_some() | w.app.map_hover.take().is_some() {
                     w.invalidate();
                 }
             });
