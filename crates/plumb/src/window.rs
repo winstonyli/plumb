@@ -97,6 +97,7 @@ struct Scanned {
     /// The volume and journal position to follow, read before the scan began so changes made
     /// during it are replayed. Present only for elevated NTFS drives.
     journal: Option<(Volume, JournalInfo)>,
+    root: String,
 }
 
 type ScanResult = std::result::Result<Scanned, String>;
@@ -787,7 +788,7 @@ impl Win {
                     ScanError::Cancelled => "cancelled".to_string(),
                 })?;
                 let tree = b.finish().map_err(|e| format!("{e:?}"))?;
-                Ok(Scanned { tree, report, elapsed: t0.elapsed(), journal })
+                Ok(Scanned { tree, report, elapsed: t0.elapsed(), journal, root: root.clone() })
             }));
             let msg = run.unwrap_or_else(|_| Err("the scanner panicked".to_string()));
             let _ = tx.send(msg);
@@ -869,6 +870,11 @@ impl Win {
                     self.drop_watch();
                 } else {
                     self.app.finish_scan(sc.tree, s);
+                }
+                // The MFT scan fell back to the walker, so the journal cannot be followed (it needs the
+                // MFT's records): watch directories instead, from now on.
+                if sc.journal.is_some() && sc.report.mft.is_none() {
+                    self.start_dir_pending(&sc.root, false);
                 }
                 if let (Some((vol, info)), Some(mft)) = (sc.journal, sc.report.mft) {
                     self.drop_pending();
