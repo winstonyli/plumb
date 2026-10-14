@@ -6,7 +6,8 @@
 //! example creates it (plain, empty, tiny, resident-boundary, large, Unicode, long-name,
 //! alternate-stream, compressed, sparse and junction entries), scans it with the walker, scans
 //! the whole volume with the MFT scanner, compares the fixture's subtree in both, and deletes it.
-//! Hard links are deliberately absent: the walker cannot see them.
+//! One hard-linked pair is included. Each scanner counts the file on a different link, so the pair is
+//! compared by its total (the file counted once) rather than link by link.
 
 use plumb_core::{NodeFlags, NodeId, Tree, TreeBuilder};
 use plumb_scan::volume::{MftScanner, is_elevated, is_volume_root};
@@ -36,6 +37,7 @@ fn make_fixture(root: &Path) {
     fs::write(p(&format!("unicode-\u{e9}\u{65e5}\u{672c}\\{}.txt", "n".repeat(200))), b"long name").unwrap();
     fs::write(p("a\\stream.txt"), b"main").unwrap();
     fs::write(p("a\\stream.txt:ads"), vec![9u8; 50_000]).unwrap(); // alternate stream: ignored by both
+    fs::hard_link(p("a\\b\\c\\big.bin"), p("linked.bin")).unwrap();
     // Compressed: 1 MiB of zeros compresses to almost nothing.
     fs::write(p("compressed.bin"), vec![0u8; 1 << 20]).unwrap();
     run("compact", &["/c", &p("compressed.bin").to_string_lossy()]);
@@ -62,6 +64,22 @@ fn collect(t: &Tree, node: NodeId, prefix: &str, out: &mut Entries) {
         );
         collect(t, c, &path, out);
     }
+}
+
+/// The two names of the hard-linked file; the scanners may put its bytes on either.
+const LINKS: [&str; 2] = ["a\\b\\c\\big.bin", "linked.bin"];
+
+/// Replaces the pair's sizes by their total under one key, and checks one link carries nothing.
+fn fold_links(e: &mut Entries, who: &str) -> Option<String> {
+    let sizes: Vec<u64> = LINKS.iter().filter_map(|l| e.get(*l).map(|v| v.0)).collect();
+    if !(sizes.len() == 2 && sizes.contains(&0) && sizes.iter().any(|&s| s >= 100_000)) {
+        return Some(format!("{who}: the hard-linked pair should count once, got {sizes:?}"));
+    }
+    for l in LINKS {
+        e.get_mut(l).unwrap().0 = 0;
+    }
+    e.insert("<hard link total>".into(), (sizes.iter().sum(), false, false));
+    None
 }
 
 fn descend(t: &Tree, from: NodeId, components: &[String]) -> Option<NodeId> {
@@ -106,6 +124,10 @@ fn main() {
         let t = b.finish().unwrap();
         collect(&t, NodeId(0), "", &mut walk_entries);
     }
+    if let Some(m) = fold_links(&mut walk_entries, "walker") {
+        remove_fixture(&fixture);
+        panic!("{m}");
+    }
     println!("walker: {} entries under the fixture", walk_entries.len());
 
     // The MFT on disk can lag the file system cache, so rescan until the two agree or time runs out.
@@ -119,7 +141,9 @@ fn main() {
         if let Some(node) = descend(&t, NodeId(0), &comps) {
             collect(&t, node, "", &mut mft_entries);
         }
-        let d = diff(&walk_entries, &mft_entries);
+        let bad = fold_links(&mut mft_entries, "mft");
+        let mut d = if bad.is_some() { Vec::new() } else { diff(&walk_entries, &mft_entries) };
+        d.extend(bad);
         println!(
             "mft: {} nodes ({} orphans, {} corrupt), stream {:?}, link {:?}; {} differences",
             stats.nodes, stats.orphans, stats.corrupt, timings.stream, timings.link, d.len()
