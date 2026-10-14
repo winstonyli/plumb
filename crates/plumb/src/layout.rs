@@ -1,18 +1,6 @@
 //! Pure geometry in device-independent pixels (DIPs). No Win32 types, so it tests anywhere.
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct Rect {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-}
-
-impl Rect {
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
-    }
-}
+pub use plumb_core::Rect;
 
 pub const PICKER_H: f32 = 44.0;
 pub const HEADER_H: f32 = 24.0;

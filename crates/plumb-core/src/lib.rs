@@ -4,10 +4,12 @@ pub(crate) mod bits;
 pub mod filter;
 pub mod mft;
 pub mod node;
+pub mod rect;
 pub mod rows;
 #[doc(hidden)]
 pub mod synth;
 pub mod tree;
 
 pub use node::{NodeFlags, NodeId};
+pub use rect::Rect;
 pub use tree::{Tree, TreeBuilder, TreeError};
