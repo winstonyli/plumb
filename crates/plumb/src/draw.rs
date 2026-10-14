@@ -484,7 +484,7 @@ impl Pen<'_> {
             let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
             let mut name = v.tree.name_string(id).to_string();
-            let found = v.found.and_then(|m| m.find(&name));
+            let found: Vec<_> = v.found.map(|m| m.find(&name).collect()).unwrap_or_default();
             if v.tree.flags[id].contains(NodeFlags::DENIED) {
                 name.push_str("  (access denied)");
             }
@@ -498,8 +498,8 @@ impl Pen<'_> {
                 self.chevron(ax + 8.0, iy + 9.0, open);
             }
             let cell = Rect { x: ax + 22.0, y: r.y, w: (nw - 16.0 - indent - 22.0).max(0.0), h: r.h };
-            if let Some(span) = found {
-                // A tint behind what the filter matched, clipped to the name's cell.
+            for span in found {
+                // A tint behind each part the filter matched, clipped to the name's cell.
                 let x = cell.x + self.text_width(&name[..span.start]);
                 let w = self.text_width(&name[span.clone()]).min(cell.x + cell.w - x);
                 if w > 0.0 {

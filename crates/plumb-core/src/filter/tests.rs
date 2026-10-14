@@ -20,10 +20,13 @@ fn scan(t: &Tree, m: &Matcher) -> Hits {
 }
 
 #[test]
-fn find_gives_the_span_of_the_first_match_in_the_original_text() {
-    assert_eq!(matcher("FILE", false).find("My file(1).txt"), Some(3..7));
-    assert_eq!(matcher(r"\d+", true).find("a12b345"), Some(1..3));
-    assert_eq!(matcher("zzz", false).find("abc"), None);
+fn find_gives_every_span_in_the_original_text() {
+    let spans = |m: Matcher, s: &str| m.find(s).collect::<Vec<_>>();
+    assert_eq!(spans(matcher("FILE", false), "My file(1).txt"), vec![3..7]);
+    assert_eq!(spans(matcher("a", false), "banana"), [1..2, 3..4, 5..6]);
+    assert_eq!(spans(matcher(r"\d+", true), "a12b345"), [1..3, 4..7]);
+    assert!(spans(matcher("zzz", false), "abc").is_empty());
+    assert!(spans(matcher("x*", true), "abc").is_empty(), "empty matches are not spans");
 }
 
 #[test]

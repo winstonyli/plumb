@@ -53,9 +53,9 @@ impl Matcher {
         self.0.is_match(buf)
     }
 
-    /// Where the first match lies in `name`, as byte offsets into it, for highlighting.
-    pub fn find(&self, name: &str) -> Option<std::ops::Range<usize>> {
-        self.0.find(name).map(|m| m.range())
+    /// Where each non-empty match lies in `name`, as byte offsets into it, for highlighting.
+    pub fn find<'a>(&'a self, name: &'a str) -> impl Iterator<Item = std::ops::Range<usize>> + 'a {
+        self.0.find_iter(name).map(|m| m.range()).filter(|r| !r.is_empty())
     }
 }
 
