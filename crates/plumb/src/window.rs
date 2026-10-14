@@ -769,14 +769,16 @@ impl Win {
             self.preview_dirty = false;
             Arc::new(Progress::with_preview(tx))
         };
-        self.start_dir_pending(&root);
+        // Opened here so the choice of watch is known before the scan starts: a volume whose journal
+        // is off (a fresh one) or cannot be opened is watched by directory instead.
+        let journal = open_journal(&root);
+        self.start_dir_pending(&root, journal.is_some());
         let progress = self.progress.clone();
         let (tx, rx) = channel();
         self.rx = Some(rx);
         let hwnd = self.hwnd.0 as isize;
         std::thread::spawn(move || {
             let t0 = Instant::now();
-            let journal = open_journal(&root);
             let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut b = TreeBuilder::new();
                 let report = scan_auto(Path::new(&root), &mut b, &progress).map_err(|e| match e {
@@ -925,12 +927,12 @@ impl Win {
         let _ = unsafe { PostMessageW(Some(self.hwnd), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
     }
 
-    /// Starts a held directory watch on `root` when the walker will scan it (not an elevated NTFS
-    /// drive, which gets the change journal). A watch that cannot start leaves the tree static.
-    fn start_dir_pending(&mut self, root: &str) {
+    /// Starts a held directory watch on `root` unless the change journal will follow it
+    /// (`journal`). A watch that cannot start leaves the tree static.
+    fn start_dir_pending(&mut self, root: &str, journal: bool) {
         self.drop_pending();
         self.dir_failed = None;
-        if is_elevated() && is_ntfs(Path::new(root)) {
+        if journal {
             return;
         }
         let hwnd = self.hwnd.0 as isize;
