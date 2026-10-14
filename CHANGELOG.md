@@ -4,6 +4,10 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-14
+
+A real selection and IME in the filter box, mount-point drives, remembered window state, a hard-link-aware walker and a watch that no longer misses changes.
+
 ### Added
 - `plumb`: the status bar leads with the selected row's full path, size and (for a folder) item count.
 - `plumb`: remembers the window rectangle (and maximized state), the Size / % of parent / Items column widths and the sort between runs, in `%LOCALAPPDATA%\plumb\state.toml` (written on exit; delete the file to reset). A missing or damaged file means defaults, and a rectangle on a monitor that is gone is moved onto a present one by Windows. Adds `serde` and `toml` to `plumb`.

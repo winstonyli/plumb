@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "plumb"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "plumb-core",
  "plumb-scan",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "plumb-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bitflags",
  "criterion",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "plumb-scan"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "plumb-core",
  "windows",
