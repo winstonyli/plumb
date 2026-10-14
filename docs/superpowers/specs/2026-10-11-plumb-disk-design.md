@@ -123,13 +123,23 @@ These are my estimates, to be measured, not claims:
 | Processes pane | Disk first; needs its own design |
 | Treemap | Folder tree first; the Direct3D 11 path is reserved for it |
 | Saved tree plus journal replay on startup | Fresh scan each launch is simplest |
-| Live updates for non-NTFS / unelevated volumes (`ReadDirectoryChangesW`) | After M2 |
-| Partial tree display while a scan runs | Scan progress only until done; a slow walker scan shows no rows until it finishes |
-| Search and filter | After v1 |
-| Alternate data streams | Rarely large; counted as 0 |
+| ~~Live updates for non-NTFS / unelevated volumes (`ReadDirectoryChangesW`)~~ | Shipped (0.4); also the fallback when the journal is off or unopenable (0.6) |
+| ~~Partial tree display while a scan runs~~ | Shipped (preview, 0.3) |
+| ~~Name filter~~ | Shipped (0.4, regex toggle and match tint); a separate search *view* is still parked |
+| Alternate data streams | Rarely large; counted as 0. Measured 2026-10-14 (`docs/benchmarks.md`): not worth the cost |
 | Delete and cleanup suggestions | Read-only tool by decision |
 | Accessibility (UI Automation) | Custom-drawn UI gap, known |
 | Elevated scanner child process | Single process chosen; scanner stays behind the trait |
+
+## Parked leftovers (as of 0.6.0)
+
+| Item | Why parked |
+|---|---|
+| Mixed-DPI window restore | Needs a second monitor at another scale; same-DPI restore is verified |
+| Wrapped-journal rescan | No tool forces the journal to wrap; the rescan path is only unit-tested |
+| Light-mode tooltip colours, live theme switch | Dark mode verified; light not checked by eye |
+| Live updates when the dir watch starts after the scan | Only after an MFT-to-walker fallback; changes made during that scan are missed |
+| Which hard link carries the bytes (walker) | Depends on thread timing; totals are stable, per-folder attribution is not |
 
 ## Open questions to verify during M1
 
