@@ -48,7 +48,7 @@ Tile { node: NodeId, rect: Rect (f32), depth: u8, class: Class, kind: File | Fra
 ## Colour (`plumb-core::treemap::Class`)
 
 `classify(name: &[u16]) -> Class` by the last extension, case-insensitive, from a static table:
-Video, Audio, Image, Archive, Document, Code, Executable (exe, dll, sys, msi), DiskImage (vhd, vhdx, iso, vmdk, wim), Database and log, Other. No extension is Other.
+Video, Audio, Image, Archive, Document, Code, Executable (exe, dll, sys, msi), DiskImage (vhd, vhdx, iso, vmdk, wim), Database and log, Build output (pdb, rlib, rmeta, o, obj, lib, a, pyc, pyd, node), Other. Generic game-package formats (wad, ucas, pck, asar, bundle) count as Archive, dds as Image. No extension is Other.
 
 `plumb` maps each class to a colour from the theme (`Theme` tokens in light and dark), chosen to stay distinguishable from each other in both. The legend is a one-line strip under the map listing the classes that occur in the current view.
 

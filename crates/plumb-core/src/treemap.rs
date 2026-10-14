@@ -18,13 +18,16 @@ pub enum Class {
     DiskImage,
     /// Databases and logs.
     Database,
+    /// Compiler output: debug info, object files, libraries, bytecode.
+    Build,
     Other,
 }
 
 impl Class {
-    pub const ALL: [Class; 10] = [
+    pub const COUNT: usize = 11;
+    pub const ALL: [Class; Class::COUNT] = [
         Class::Video, Class::Audio, Class::Image, Class::Archive, Class::Document,
-        Class::Code, Class::Executable, Class::DiskImage, Class::Database, Class::Other,
+        Class::Code, Class::Executable, Class::DiskImage, Class::Database, Class::Build, Class::Other,
     ];
 
     /// Position in `ALL` (and in a theme's colour table).
@@ -33,7 +36,7 @@ impl Class {
     }
 
     pub fn label(self) -> &'static str {
-        ["Video", "Audio", "Images", "Archives", "Documents", "Code", "Programs", "Disk images", "Databases and logs", "Other"][self.index()]
+        ["Video", "Audio", "Images", "Archives", "Documents", "Code", "Programs", "Disk images", "Databases and logs", "Build output", "Other"][self.index()]
     }
 }
 
@@ -55,13 +58,14 @@ pub fn classify(name: &[u16]) -> Class {
     match std::str::from_utf8(&buf[..ext.len()]).unwrap_or("") {
         "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "flv" | "mpg" | "mpeg" | "m2ts" => Class::Video,
         "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "wma" | "opus" => Class::Audio,
-        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tif" | "tiff" | "heic" | "avif" | "raw" | "cr2" | "nef" | "psd" | "svg" => Class::Image,
-        "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "cab" | "pak" | "jar" | "apk" | "whl" => Class::Archive,
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tif" | "tiff" | "heic" | "avif" | "raw" | "cr2" | "nef" | "psd" | "svg" | "dds" => Class::Image,
+        "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "cab" | "pak" | "jar" | "apk" | "whl" | "wad" | "ucas" | "pck" | "asar" | "bundle" => Class::Archive,
         "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "md" | "rtf" | "odt" | "csv" | "epub" => Class::Document,
         "rs" | "c" | "h" | "cpp" | "hpp" | "cs" | "js" | "ts" | "jsx" | "tsx" | "py" | "java" | "go" | "rb" | "php" | "html" | "css" | "json" | "toml" | "yaml" | "yml" | "xml" | "sh" | "ps1" | "bat" => Class::Code,
         "exe" | "dll" | "sys" | "msi" | "ocx" | "drv" | "efi" => Class::Executable,
         "vhd" | "vhdx" | "iso" | "vmdk" | "wim" => Class::DiskImage,
         "db" | "sqlite" | "sqlite3" | "mdb" | "accdb" | "mdf" | "ldf" | "log" | "etl" => Class::Database,
+        "pdb" | "rlib" | "rmeta" | "o" | "obj" | "lib" | "a" | "pyc" | "pyd" | "node" => Class::Build,
         _ => Class::Other,
     }
 }

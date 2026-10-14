@@ -240,7 +240,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None }),
                 message: "", status: "", adapter: "WARP", banner: None, filter: FilterBar::default(),
-                map: Some(MapView { tiles: &tiles, generation: 1, selected, hover: None, classes: [true; 10] }),
+                map: Some(MapView { tiles: &tiles, generation: 1, selected, hover: None, classes: [true; plumb_core::treemap::Class::COUNT] }),
             };
             render_scene(&gfx, &scene, stem)
         };
@@ -277,7 +277,7 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
             view: None, message: "", status: "", adapter: "WARP", banner: None, filter: FilterBar::default(),
-            map: Some(MapView { tiles: &tiles, generation, selected, hover: None, classes: [true; 10] }),
+            map: Some(MapView { tiles: &tiles, generation, selected, hover: None, classes: [true; plumb_core::treemap::Class::COUNT] }),
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
         painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");

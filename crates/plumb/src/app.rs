@@ -179,7 +179,7 @@ pub struct App {
     map_dirty: bool,
     /// Bumped whenever `map_tiles` is rebuilt, so the painter knows its cached bitmap is stale.
     map_gen: u64,
-    map_classes: [bool; 10],
+    map_classes: [bool; treemap::Class::COUNT],
     /// The tile under the pointer.
     pub map_hover: Option<usize>,
     /// While dragging the divider: the pointer x and the pane width at the start.
@@ -193,7 +193,7 @@ impl App {
         Self {
             layout, drives, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
-            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_classes: [false; 10], map_hover: None, map_drag: None,
+            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_classes: [false; treemap::Class::COUNT], map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
     }
@@ -618,7 +618,7 @@ impl App {
         let (Some(tree), Some(rect), Some(root)) = (&self.tree, rect, root) else {
             self.map_tiles.clear();
             self.map_key = None;
-            self.map_classes = [false; 10];
+            self.map_classes = [false; treemap::Class::COUNT];
             self.map_hover = None;
             return;
         };
@@ -627,7 +627,7 @@ impl App {
             return;
         }
         self.map_tiles = treemap::layout(tree, root, rect, px);
-        self.map_classes = [false; 10];
+        self.map_classes = [false; treemap::Class::COUNT];
         for t in self.map_tiles.iter().filter(|t| t.kind == Kind::File) {
             self.map_classes[t.class.index()] = true;
         }
@@ -639,7 +639,7 @@ impl App {
         &self.map_tiles
     }
 
-    pub fn map_classes(&self) -> [bool; 10] {
+    pub fn map_classes(&self) -> [bool; treemap::Class::COUNT] {
         self.map_classes
     }
 

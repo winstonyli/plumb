@@ -60,7 +60,7 @@ pub struct Theme {
     /// Box tint for a pattern that does not compile.
     pub error: D2D1_COLOR_F,
     /// Tile fill per file class, indexed by `Class::index()`.
-    pub class: [D2D1_COLOR_F; 10],
+    pub class: [D2D1_COLOR_F; Class::COUNT],
 }
 
 impl Theme {
@@ -71,7 +71,7 @@ impl Theme {
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
                 accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
                 hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
-                class: [0xd0605e, 0xd98c3f, 0x4fae72, 0xb59a3c, 0x5a8fd6, 0x8f6fd0, 0x3fb0b0, 0xb06fa8, 0x7f9fb0, 0x9a8c78].map(rgb),
+                class: [0xd0605e, 0xd98c3f, 0x4fae72, 0xb59a3c, 0x5a8fd6, 0x8f6fd0, 0x3fb0b0, 0xb06fa8, 0x7f9fb0, 0xa5b84a, 0x9a8c78].map(rgb),
             }
         } else {
             Self {
@@ -79,7 +79,7 @@ impl Theme {
                 bg: rgb(0xffffff), panel: rgb(0xf0f0f0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
                 accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), bound: rgb(0xf0b860), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
                 hover: rgb(0xedf3fc), folder: rgb(0xd09a2a),
-                class: [0xc4423f, 0xcf7a22, 0x2f9a58, 0xa08420, 0x2f6fc0, 0x7650c0, 0x1f9696, 0x9a4f92, 0x5f8296, 0xb0a28c].map(rgb),
+                class: [0xc4423f, 0xcf7a22, 0x2f9a58, 0xa08420, 0x2f6fc0, 0x7650c0, 0x1f9696, 0x9a4f92, 0x5f8296, 0x7f9a22, 0xb0a28c].map(rgb),
             }
         }
     }
@@ -146,7 +146,7 @@ pub struct MapView<'a> {
     /// Index of the tile under the pointer.
     pub hover: Option<usize>,
     /// Which classes occur among the tiles, for the legend.
-    pub classes: [bool; 10],
+    pub classes: [bool; Class::COUNT],
 }
 
 pub struct Scene<'a> {
