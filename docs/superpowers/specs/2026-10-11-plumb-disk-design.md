@@ -65,9 +65,9 @@ Both implement `Scanner::scan(root, &mut TreeBuilder, &Progress)`, where `root` 
 - Parent links use the record number of the parent reference and are resolved in a second pass, because a parent can come after its child.
 
 ### `WalkScanner` (any volume, no admin)
-- `GetFileInformationByHandleEx` with `FileFullDirectoryInfo` / `FileFullDirectoryRestartInfo`, 256 KB buffers. Each entry already contains name, attributes, `EndOfFile` and `AllocationSize`; no file is opened. (A documented API, so no ntdll linking.)
+- `GetFileInformationByHandleEx` with `FileIdExtdDirectoryInfo` / `FileIdExtdDirectoryRestartInfo`, 256 KB buffers. Each entry already contains name, attributes, `AllocationSize` and the file id; no file is opened. (A documented API, so no ntdll linking.)
 - A coordinator thread owns the `TreeBuilder` and queues directories on a shared job queue; workers only list directories. Directories count as 0 allocated bytes (the MFT scanner does not count index allocation either).
-- Known limitation: hard links cannot be detected without opening each file, so the walker may double-count them (WinDirStat does the same). Documented, not worked around.
+- Hard links: the listing carries each file's id, so the coordinator counts a file once, on the first link it reaches (the others are flagged `HARDLINK` at 0, as in the MFT scanner). Which link carries the bytes depends on thread timing; totals are stable.
 
 ### Choosing and failing
 - At startup, check whether the token is elevated (the manifest is `asInvoker`; elevation is the user's choice via "Run as administrator"). NTFS volumes use `MftScanner` if elevated, otherwise `WalkScanner`; non-NTFS volumes always use the walker. The status bar shows which scanner ran per volume, and when the walker ran on NTFS it says that running as administrator is faster.
@@ -85,7 +85,7 @@ Both implement `Scanner::scan(root, &mut TreeBuilder, &Progress)`, where `root` 
 - Redraw only on input, resize, or scan progress (throttled to 10 Hz). No timers or animation while idle.
 
 ### Layout
-Drive picker (one chip per drive letter from `GetLogicalDrives`, with used and free space from `GetDiskFreeSpaceEx`; click to scan; folder mount points are parked) at the top, tree view in the middle, status bar at the bottom. The status bar shows scanner used, scan time, file count, skipped-record count and the chosen adapter. During a scan the tree view shows progress; the tree appears when the scan finishes.
+Drive picker (one chip per drive letter from `GetLogicalDrives`, with used and free space from `GetDiskFreeSpaceEx`; click to scan; folder-only mount points get a chip too; a drive is identified by its root path) at the top, tree view in the middle, status bar at the bottom. The status bar shows scanner used, scan time, file count, skipped-record count and the chosen adapter. During a scan the tree view shows progress; the tree appears when the scan finishes.
 
 ### Tree view
 - Columns: Name, Size (allocated), % of parent (bar behind the number), Items.
@@ -97,7 +97,7 @@ Drive picker (one chip per drive letter from `GetLogicalDrives`, with used and f
 ## Testing and benchmarks
 
 - Unit tests in `plumb-core`: hand-built MFT records (fixups, extension records, DOS names, hard links), tree sums, row model (expand, collapse, sort, keyboard selection, visible window for a scroll offset).
-- `scan-compare` (needs an elevated run): both scanners on a fixture directory that has no hard links; the MFT tree is compared on the subtree under that directory, and every path and size must agree.
+- `scan-compare` (needs an elevated run): both scanners on a fixture directory, including one hard-linked pair compared by its total; the MFT tree is compared on the subtree under that directory, and every path and size must agree.
 - Render smoke test: a fixed small tree drawn through a WARP (software) device into an offscreen bitmap; asserts no failing HRESULT. It opens no window and does not touch the physical GPU.
 - Criterion for the pure-CPU paths: MFT record parsing over synthetic records, the bottom-up sum over a synthetic 5M-node tree, sorting 1M children, and row-model expand and visible-window queries. Benchmarks run only when CPU load is under about 20%; load is reported with the numbers.
 - Real-drive scans are not criterion benchmarks (disk cache dominates). The status bar and a run log record wall time per phase (read, parse, link, sum); comparisons against WizTree are on the same drive with a cold-cache note.
