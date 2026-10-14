@@ -8,7 +8,7 @@ use crate::fmt;
 use crate::layout::{Hit, Layout, Rect, INDENT, PICKER_H};
 use crate::restore::Snapshot;
 use plumb_core::rows::{Key, RowModel, SortKey};
-use plumb_core::{NodeId, Tree};
+use plumb_core::{NodeFlags, NodeId, Tree};
 
 pub use filter::FilterJob;
 
@@ -556,6 +556,14 @@ impl App {
         }
     }
 
+    /// The selected row's full path, size and (for a folder) item count, first in the status line.
+    fn selection(&self) -> Option<String> {
+        let (tree, id) = (self.tree.as_ref()?, self.model.as_ref()?.selected()?);
+        let path = fmt::display_path(&tree.path(id));
+        let items = if tree.flags[id].contains(NodeFlags::DIR) { format!(", {} items", fmt::count(tree.subtree_files[id] as u64)) } else { String::new() };
+        Some(format!("{path}  ({}{items})", fmt::size(tree.subtree_size[id])))
+    }
+
     fn status(&self) -> String {
         let head = match &self.scan {
             Scan::Running { .. } => {
@@ -565,7 +573,7 @@ impl App {
             _ if self.summary.is_empty() => "plumb".to_string(),
             _ => self.summary.clone(),
         };
-        let mut parts = vec![head];
+        let mut parts: Vec<String> = self.selection().into_iter().chain([head]).collect();
         match &self.live {
             LiveStatus::Off => {}
             LiveStatus::On { last: None } => parts.push("live".into()),
@@ -640,6 +648,15 @@ mod tests {
         a.begin_scan(0);
         a.finish_scan(kary_builder(300, 3).finish().unwrap(), "done".into());
         a
+    }
+
+    /// The status line minus the selection details that lead it.
+    fn status_tail(a: &App) -> String {
+        let s = a.status();
+        match a.selection() {
+            Some(sel) => s.strip_prefix(&sel).map_or(s.clone(), |t| t.strip_prefix("   |   ").unwrap_or(t).to_string()),
+            None => s,
+        }
     }
 
     fn row_y(i: usize) -> f32 {
@@ -752,7 +769,7 @@ mod tests {
         a.preview_installed();
         assert!(matches!(a.scan, Scan::Running { .. }), "the scan is still running");
         assert!(a.model.as_ref().unwrap().rows().len() > 1, "the root is expanded");
-        assert!(a.status().starts_with("Scanning"));
+        assert!(status_tail(&a).starts_with("Scanning"));
         // The user selects another row, then the exact tree (the same shape) arrives.
         let second = a.model.as_ref().unwrap().rows()[1].id;
         a.model.as_mut().unwrap().select(second);
@@ -761,7 +778,7 @@ mod tests {
         assert!(matches!(a.scan, Scan::Idle));
         let sel = a.model.as_ref().unwrap().selected().unwrap();
         assert_eq!(a.tree.as_ref().unwrap().path(sel), name, "the selection survives by path");
-        assert!(a.status().starts_with("done"));
+        assert!(status_tail(&a).starts_with("done"));
     }
 
     #[test]
@@ -987,14 +1004,29 @@ mod tests {
     }
 
     #[test]
+    fn the_status_line_leads_with_the_selected_rows_path_size_and_items() {
+        let mut a = scanned();
+        let id = a.model.as_ref().unwrap().rows()[1].id;
+        a.model.as_mut().unwrap().select(id);
+        let tree = a.tree.as_ref().unwrap();
+        let want = format!(
+            "{}  ({}, {} items)   |   done",
+            fmt::display_path(&tree.path(id)),
+            fmt::size(tree.subtree_size[id]),
+            fmt::count(tree.subtree_files[id] as u64)
+        );
+        assert_eq!(a.status(), want);
+    }
+
+    #[test]
     fn the_status_line_shows_the_live_marker_and_refreshing() {
         let mut a = scanned();
-        assert_eq!(a.status(), "done");
+        assert_eq!(status_tail(&a), "done");
         a.set_live(LiveStatus::On { last: None });
-        assert_eq!(a.status(), "done   |   live");
+        assert_eq!(status_tail(&a), "done   |   live");
         a.live_changed("12:03:41".into());
         a.refreshing = true;
-        assert_eq!(a.status(), "done   |   live, last change 12:03:41   |   refreshing\u{2026}");
+        assert_eq!(status_tail(&a), "done   |   live, last change 12:03:41   |   refreshing\u{2026}");
         a.set_live(LiveStatus::Stale("x".into()));
         a.live_changed("12:04:00".into());
         assert!(a.status().contains("live updates stopped") && !a.status().contains("12:04"));

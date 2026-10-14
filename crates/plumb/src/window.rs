@@ -3,6 +3,7 @@
 use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, Parked};
 use crate::draw::{Mark, Painter};
 use crate::filter_ui::{push_utf16, Edit};
+use crate::fmt;
 use crate::gfx::Gfx;
 use crate::layout::{Layout, PICKER_H};
 use crate::preview::Preview;
@@ -1001,13 +1002,8 @@ impl Win {
 
     fn selected_path(&self) -> Option<String> {
         let id = self.app.model.as_ref()?.selected()?;
-        Some(display_path(&self.app.tree.as_ref()?.path(id)))
+        Some(fmt::display_path(&self.app.tree.as_ref()?.path(id)))
     }
-}
-
-/// "C:" is the drive's root node; shell calls need "C:\".
-pub fn display_path(p: &str) -> String {
-    if p.ends_with(':') { format!("{p}\\") } else { p.to_string() }
 }
 
 pub fn summary(used: Used, files: u64, elapsed: Duration, corrupt: Option<u64>, note: Option<&str>) -> String {
@@ -1138,7 +1134,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             }
         }
         Effect::Menu(id) => {
-            let path = with(|w| w.app.tree.as_ref().map(|t| display_path(&t.path(id)))).flatten();
+            let path = with(|w| w.app.tree.as_ref().map(|t| fmt::display_path(&t.path(id)))).flatten();
             if let Some(p) = path {
                 context_menu(hwnd, p, at);
             }
@@ -1806,12 +1802,6 @@ mod tests {
         assert_eq!(parse_scan_arg(args("plumb.exe --scan")), None);
         assert_eq!(parse_scan_arg(args("plumb.exe --scan CD")), None);
         assert_eq!(relaunch_args(None), "");
-    }
-
-    #[test]
-    fn drive_root_gets_a_trailing_backslash() {
-        assert_eq!(display_path("C:"), "C:\\");
-        assert_eq!(display_path("C:\\Windows"), "C:\\Windows");
     }
 
     #[test]

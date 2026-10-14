@@ -33,9 +33,20 @@ pub fn fraction(part: u64, whole: u64) -> f32 {
     if whole == 0 { 0.0 } else { (part as f64 / whole as f64) as f32 }
 }
 
+/// A tree path as the shell and the user see it: "C:" is the drive's root node, but they need "C:\".
+pub fn display_path(p: &str) -> String {
+    if p.ends_with(':') { format!("{p}\\") } else { p.to_string() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_root_gets_a_trailing_backslash() {
+        assert_eq!(display_path("C:"), "C:\\");
+        assert_eq!(display_path("C:\\Windows"), "C:\\Windows");
+    }
 
     #[test]
     fn sizes() {
