@@ -7,6 +7,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 ### Added
 - `plumb`: the status bar leads with the selected row's full path, size and (for a folder) item count.
 
+### Fixed
+- `plumb`: tooltips are dark in dark mode (they were the light native style).
+
 ## [0.5.0] - 2026-10-14
 
 The picker bar becomes the title bar, icon buttons with tooltips, filter match highlighting, resizable columns, Explorer icons and a scan upper bound.

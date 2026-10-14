@@ -62,8 +62,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, MARGINS, NMHDR, NMTTDISPINFOW, TOOLTIPS_CLASSW, TTF_IDISHWND,
-    TTM_ADDTOOLW, TTM_POP, TTM_RELAYEVENT, TTN_GETDISPINFOW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
+    InitCommonControlsEx, SetWindowTheme, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, MARGINS, NMHDR, NMTTDISPINFOW, TOOLTIPS_CLASSW, TTF_IDISHWND,
+    TTM_ADDTOOLW, TTM_POP, TTM_RELAYEVENT, TTM_SETTIPBKCOLOR, TTM_SETTIPTEXTCOLOR, TTN_GETDISPINFOW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
 };
 use windows::core::{w, Interface, Result, BOOL, PCWSTR, PWSTR};
 
@@ -439,6 +439,16 @@ impl Win {
         let bg: u32 = if self.dark { 0x1e1e1e } else { 0xffffff };
         let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_CAPTION_COLOR, &bg as *const _ as *const _, 4) };
         let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_BORDER_COLOR, &bg as *const _ as *const _, 4) };
+        // The tooltip control has no dark visual style: without one it takes the colours we set; in light it keeps the default.
+        unsafe {
+            if self.dark {
+                let _ = SetWindowTheme(self.tooltip, w!(""), w!(""));
+                SendMessageW(self.tooltip, TTM_SETTIPBKCOLOR, Some(WPARAM(0x2b2b2b)), None);
+                SendMessageW(self.tooltip, TTM_SETTIPTEXTCOLOR, Some(WPARAM(0xe6e6e6)), None);
+            } else {
+                let _ = SetWindowTheme(self.tooltip, PCWSTR::null(), PCWSTR::null());
+            }
+        }
         let bar = ((PICKER_H + self.inset) * self.dpi / 96.0).ceil() as i32;
         let margins = MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: bar, cyBottomHeight: 0 };
         let _ = unsafe { DwmExtendFrameIntoClientArea(self.hwnd, &margins) };
