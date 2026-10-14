@@ -17,6 +17,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 - `plumb`: tooltips are dark in dark mode (they were the light native style).
+- `plumb-scan`: the directory watch no longer misses changes made right after it starts (or in the gap between two reads). It used one blocking `ReadDirectoryChangesW` call at a time, started on a thread that might not have run yet, so a change in that window was lost (the watch test failed about 1 run in 8). The directory is now opened for overlapped I/O and two reads are always queued before `Watcher::start` returns.
 - `plumb-scan`: the walker counts a hard-linked file once, as the MFT scanner already did. Directory listings now read each file's id (`FILE_ID_EXTD_DIR_INFO`); later links to a seen id are flagged `HARDLINK` and count 0. Which link carries the bytes depends on thread timing, so per-folder attribution can differ between runs (totals do not). Live updates (`dirsync`) keep an existing `HARDLINK` node at 0 but do not dedup new links, so deleting the counted link undercounts until the next rescan. Alternate data streams are still ignored (measured not worth the cost; see `docs/benchmarks.md`).
 
 ## [0.5.0] - 2026-10-14

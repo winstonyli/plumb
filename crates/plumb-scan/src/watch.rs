@@ -19,10 +19,10 @@ use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_LIST_DIRECTORY, FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME,
     FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    GetFileAttributesW, OPEN_EXISTING, ReadDirectoryChangesW,
+    GetFileAttributesW, OPEN_EXISTING, ReadDirectoryChangesW, FILE_FLAG_OVERLAPPED, FILE_NOTIFY_CHANGE,
 };
-use windows::Win32::System::IO::CancelIoEx;
-use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+use windows::Win32::System::Threading::{CreateEventW, GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
 use windows::core::PCWSTR;
 
 /// The network limit; plenty locally (the spike's busiest call used 630 bytes).
@@ -144,53 +144,113 @@ fn is_real_dir(root: &[u16], rel: &[u16]) -> bool {
     a != u32::MAX && a & FILE_ATTRIBUTE_DIRECTORY.0 != 0 && a & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0
 }
 
-fn read_loop(handle: isize, root: Vec<u16>, sh: Arc<Shared>) {
-    let filter = FILE_NOTIFY_CHANGE_FILE_NAME
-        | FILE_NOTIFY_CHANGE_DIR_NAME
-        | FILE_NOTIFY_CHANGE_ATTRIBUTES
-        | FILE_NOTIFY_CHANGE_SIZE
-        | FILE_NOTIFY_CHANGE_LAST_WRITE;
-    let mut buf = vec![0u64; BUF_BYTES / 8];
-    loop {
+const FILTER: FILE_NOTIFY_CHANGE = FILE_NOTIFY_CHANGE(
+    FILE_NOTIFY_CHANGE_FILE_NAME.0
+        | FILE_NOTIFY_CHANGE_DIR_NAME.0
+        | FILE_NOTIFY_CHANGE_ATTRIBUTES.0
+        | FILE_NOTIFY_CHANGE_SIZE.0
+        | FILE_NOTIFY_CHANGE_LAST_WRITE.0,
+);
+const ERROR_OPERATION_ABORTED: u32 = 995;
+
+/// One read request and the buffer the kernel fills for it. The kernel writes into both until the
+/// request completes, so a slot must outlive its request: see `drain`.
+struct Slot {
+    buf: Vec<u64>,
+    ov: Box<OVERLAPPED>,
+    pending: bool,
+}
+
+// The event handle and the buffer are only touched by whichever thread owns the slot.
+unsafe impl Send for Slot {}
+
+impl Slot {
+    fn new() -> windows::core::Result<Slot> {
+        let event = unsafe { CreateEventW(None, true, false, PCWSTR::null())? };
+        Ok(Slot { buf: vec![0u64; BUF_BYTES / 8], ov: Box::new(OVERLAPPED { hEvent: event, ..Default::default() }), pending: false })
+    }
+
+    /// Queues a read; it completes when something in the tree changes.
+    fn arm(&mut self, handle: HANDLE) -> windows::core::Result<()> {
+        *self.ov = OVERLAPPED { hEvent: self.ov.hEvent, ..Default::default() };
+        unsafe { ReadDirectoryChangesW(handle, self.buf.as_mut_ptr().cast(), BUF_BYTES as u32, true, FILTER, None, Some(&mut *self.ov), None)? };
+        self.pending = true;
+        Ok(())
+    }
+
+    /// Waits for the read to finish: the bytes it returned, or its error.
+    fn wait(&mut self, handle: HANDLE) -> windows::core::Result<u32> {
         let mut got = 0u32;
-        let r = unsafe {
-            ReadDirectoryChangesW(HANDLE(handle as *mut _), buf.as_mut_ptr().cast(), BUF_BYTES as u32, true, filter, Some(&mut got), None, None)
-        };
+        let r = unsafe { GetOverlappedResult(handle, &*self.ov, &mut got, true) };
+        self.pending = false;
+        r.map(|()| got)
+    }
+
+    /// Cancels the read if one is queued and waits until the kernel is done with the buffer.
+    fn drain(&mut self, handle: HANDLE) {
+        if self.pending {
+            unsafe {
+                let _ = CancelIoEx(handle, Some(&*self.ov));
+            }
+            let _ = self.wait(handle);
+        }
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.ov.hEvent);
+        }
+    }
+}
+
+/// Two reads are always queued, so the gap between one completing and the next being issued
+/// never leaves the directory unwatched; the finished one is copied out and re-queued at once.
+fn read_loop(handle: isize, root: Vec<u16>, sh: Arc<Shared>, mut slots: [Slot; 2]) {
+    let h = HANDLE(handle as *mut _);
+    let mut i = 0;
+    let end = loop {
+        let r = slots[i].wait(h);
         if sh.stop.load(Ordering::Acquire) {
-            return;
+            break None;
         }
-        match r {
-            Err(e) => {
-                let mut d = sh.dirty.lock().unwrap();
-                if e.code().0 as u32 & 0xFFFF == ERROR_NOTIFY_ENUM_DIR {
-                    d.overflow = true;
-                } else {
-                    d.failed = Some(format!("the directory watch failed: {e}"));
-                }
-                sh.cv.notify_all();
-                return;
-            }
-            Ok(()) if got == 0 => {
-                sh.dirty.lock().unwrap().overflow = true;
-                sh.cv.notify_all();
-                return;
-            }
-            Ok(()) => {
-                let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), got as usize) };
-                // The attribute check is a system call: do it before taking the lock.
-                let recs: Vec<(Vec<u16>, bool)> = parse_notify(bytes)
-                    .into_iter()
-                    .map(|(action, name)| {
-                        let new_dir = matches!(action, ACTION_ADDED | ACTION_RENAMED_NEW) && is_real_dir(&root, &name);
-                        (name, new_dir)
-                    })
-                    .collect();
-                let mut d = sh.dirty.lock().unwrap();
-                for (name, new_dir) in recs {
-                    d.record(&name, new_dir);
-                }
-            }
+        let got = match r {
+            Ok(0) => break Some(None),
+            Ok(n) => n as usize,
+            Err(e) if e.code().0 as u32 & 0xFFFF == ERROR_OPERATION_ABORTED => break None,
+            Err(e) => break Some(Some(e)),
+        };
+        let bytes = unsafe { std::slice::from_raw_parts(slots[i].buf.as_ptr().cast::<u8>(), got) }.to_vec();
+        if let Err(e) = slots[i].arm(h) {
+            break Some(Some(e));
         }
+        i = 1 - i;
+        // The attribute check is a system call: do it before taking the lock.
+        let recs: Vec<(Vec<u16>, bool)> = parse_notify(&bytes)
+            .into_iter()
+            .map(|(action, name)| {
+                let new_dir = matches!(action, ACTION_ADDED | ACTION_RENAMED_NEW) && is_real_dir(&root, &name);
+                (name, new_dir)
+            })
+            .collect();
+        let mut d = sh.dirty.lock().unwrap();
+        for (name, new_dir) in recs {
+            d.record(&name, new_dir);
+        }
+    };
+    if let Some(e) = end {
+        let mut d = sh.dirty.lock().unwrap();
+        match e {
+            // A read that returns nothing means the kernel buffer overflowed.
+            None => d.overflow = true,
+            Some(e) if e.code().0 as u32 & 0xFFFF == ERROR_NOTIFY_ENUM_DIR => d.overflow = true,
+            Some(e) => d.failed = Some(format!("the directory watch failed: {e}")),
+        }
+        sh.cv.notify_all();
+    }
+    for s in &mut slots {
+        s.drain(h);
     }
 }
 
@@ -303,7 +363,7 @@ impl Watcher {
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
                 None,
             )
         }
@@ -314,11 +374,23 @@ impl Watcher {
             stop: AtomicBool::new(false),
             held: AtomicBool::new(true),
         });
+        // Both reads are queued before this returns, so nothing that happens afterwards is missed.
+        let slots = (|| Ok::<_, windows::core::Error>([Slot::new()?, Slot::new()?]))()
+            .and_then(|mut s| s.iter_mut().try_for_each(|s| s.arm(h)).map(|()| s));
+        let slots = match slots {
+            Ok(s) => s,
+            Err(e) => {
+                unsafe {
+                    let _ = CloseHandle(h);
+                }
+                return Err(format!("cannot watch {}: {e}", root.display()));
+            }
+        };
         let (tx, events) = mpsc::channel();
         let handle = h.0 as isize;
         let reader = {
             let (root, sh) = (wide.clone(), shared.clone());
-            std::thread::spawn(move || read_loop(handle, root, sh))
+            std::thread::spawn(move || read_loop(handle, root, sh, slots))
         };
         let lister = {
             let sh = shared.clone();
@@ -337,8 +409,8 @@ impl Watcher {
         self.shared.cv.notify_all();
     }
 
-    /// Stops both threads and closes the directory. Blocks for a few milliseconds (a read that
-    /// has not started yet is cancelled again until it exits); call it off the UI thread.
+    /// Stops both threads and closes the directory. Blocks for a few milliseconds (the reads are cancelled
+    /// until the reader exits); call it off the UI thread.
     pub fn stop(mut self) {
         self.shutdown();
     }
