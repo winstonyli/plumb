@@ -54,7 +54,6 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref() }),
         message: "",
         status: "MFT scan: 200 files",
-        adapter: "WARP",
         banner: None,
         filter,
         map: None,
@@ -239,7 +238,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
             let scene = Scene {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None }),
-                message: "", status: "", adapter: "WARP", banner: None, filter: FilterBar::default(),
+                message: "", status: "", banner: None, filter: FilterBar::default(),
                 map: Some(MapView { tiles: &tiles, generation: 1, selected, hover: None, classes: [true; plumb_core::treemap::Class::COUNT] }),
             };
             render_scene(&gfx, &scene, stem)
@@ -276,7 +275,7 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     let frame = |generation: u64, selected: Option<usize>| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", status: "", adapter: "WARP", banner: None, filter: FilterBar::default(),
+            view: None, message: "", status: "", banner: None, filter: FilterBar::default(),
             map: Some(MapView { tiles: &tiles, generation, selected, hover: None, classes: [true; plumb_core::treemap::Class::COUNT] }),
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);

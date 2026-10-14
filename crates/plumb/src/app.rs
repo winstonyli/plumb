@@ -448,7 +448,8 @@ impl App {
     }
 
     pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
-        self.button_at(x, y).map(|b| b.1).or_else(|| {
+        self.button_at(x, y).map(|b| b.1).or_else(|| self.layout.status().contains(x, y).then(|| format!("{}
+{}", self.status(), self.adapter))).or_else(|| {
             let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map))?)?;
             Some(tile_tip(self.tree.as_ref()?, t))
         })
@@ -745,15 +746,21 @@ impl App {
         }
     }
 
-    /// The selected row's full path, size and (for a folder) item count, first in the status line.
-    fn selection(&self) -> Option<String> {
+    /// The selected row's size and (for a folder) item count, led by its full path when `full`; first in the status line.
+    fn selection(&self, full: bool) -> Option<String> {
         let (tree, id) = (self.tree.as_ref()?, self.model.as_ref()?.selected()?);
         let path = fmt::display_path(&tree.path(id));
         let items = if tree.flags[id].contains(NodeFlags::DIR) { format!(", {} items", fmt::count(tree.subtree_files[id] as u64)) } else { String::new() };
-        Some(format!("{path}  ({}{items})", fmt::size(tree.subtree_size[id])))
+        let size = format!("{}{items}", fmt::size(tree.subtree_size[id]));
+        Some(if full { format!("{path}  ({size})") } else { size })
     }
 
+    /// The whole status line (the status bar's tooltip carries it): the compact line has no path and no time of the last change.
     fn status(&self) -> String {
+        self.status_line(true)
+    }
+
+    fn status_line(&self, full: bool) -> String {
         let head = match &self.scan {
             Scan::Running { .. } => {
                 let paused = if self.preview_paused { "   (preview paused)" } else { "" };
@@ -762,11 +769,12 @@ impl App {
             _ if self.summary.is_empty() => "plumb".to_string(),
             _ => self.summary.clone(),
         };
-        let mut parts: Vec<String> = self.selection().into_iter().chain([head]).collect();
+        let mut parts: Vec<String> = self.selection(full).into_iter().chain([head]).collect();
         match &self.live {
             LiveStatus::Off => {}
             LiveStatus::On { last: None } => parts.push("live".into()),
-            LiveStatus::On { last: Some(t) } => parts.push(format!("live, last change {t}")),
+            LiveStatus::On { last: Some(t) } if full => parts.push(format!("live, last change {t}")),
+            LiveStatus::On { last: Some(_) } => parts.push("live".into()),
             LiveStatus::Stale(_) => parts.push("live updates stopped".into()),
         }
         if self.refreshing {
@@ -794,7 +802,7 @@ impl App {
     /// Builds the scene for `dark` and passes it to `f`; the scene borrows locals made here.
     pub fn with_scene<R>(&self, dark: bool, f: impl FnOnce(&Scene) -> R) -> R {
         let chips = self.chips();
-        let (message, status, banner) = (self.message(), self.status(), self.banner());
+        let (message, status, banner) = (self.message(), self.status_line(false), self.banner());
         let count = self.filter_count();
         let view = match (&self.tree, &self.model) {
             (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher() }),
@@ -812,7 +820,6 @@ impl App {
             view,
             message: &message,
             status: &status,
-            adapter: &self.adapter,
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),
             map,
@@ -864,7 +871,7 @@ mod tests {
     /// The status line minus the selection details that lead it.
     fn status_tail(a: &App) -> String {
         let s = a.status();
-        match a.selection() {
+        match a.selection(true) {
             Some(sel) => s.strip_prefix(&sel).map_or(s.clone(), |t| t.strip_prefix("   |   ").unwrap_or(t).to_string()),
             None => s,
         }
@@ -1259,6 +1266,23 @@ mod tests {
     }
 
     #[test]
+    fn the_status_bar_shows_a_compact_line_and_its_tooltip_the_whole_one_and_the_adapter() {
+        let mut a = scanned();
+        let id = a.model.as_ref().unwrap().rows()[1].id;
+        a.model.as_mut().unwrap().select(id);
+        a.set_live(LiveStatus::On { last: None });
+        a.live_changed("12:03:41".into());
+        let tree = a.tree.as_ref().unwrap();
+        let size = format!("{}, {} items", fmt::size(tree.subtree_size[id]), fmt::count(tree.subtree_files[id] as u64));
+        assert_eq!(a.status_line(false), format!("{size}   |   done   |   live"), "no path, no time of the last change");
+        assert!(a.status().contains("12:03:41") && a.status().contains(&fmt::display_path(&tree.path(id))));
+        a.adapter = "Test GPU".into();
+        let bar = a.layout.status();
+        assert_eq!(a.tip_at(bar.x + 40.0, bar.y + 5.0), Some(format!("{}
+Test GPU", a.status())));
+    }
+
+    #[test]
     fn a_rescanned_tree_keeps_sort_expansion_selection_and_screen_row() {
         let mut a = scanned();
         a.handle(Input::Click(5.0, PICKER_H + 2.0)); // sort by Name ascending
@@ -1405,7 +1429,7 @@ mod tests {
         a.handle(Input::Drag(-10_000.0, 0.0));
         assert!(a.layout.column(0).1 >= crate::layout::MIN_NAME_W, "the tree keeps its minimum");
         a.handle(Input::Drag(10_000.0, 0.0));
-        assert_eq!(a.layout.map_pane().unwrap().w, crate::layout::MAP_MIN_W, "and the pane keeps its own");
+        assert_eq!(a.layout.map().unwrap().w, crate::layout::MAP_MIN_W, "and the pane keeps its own");
         a.handle(Input::Release);
         let before = a.layout.map_w;
         a.handle(Input::Drag(0.0, 0.0));

@@ -42,7 +42,6 @@ const GRIP: f32 = 4.0;
 pub const DIVIDER_W: f32 = 5.0;
 pub const MAP_MIN_W: f32 = 160.0;
 pub const MAP_W: f32 = 420.0;
-pub const LEGEND_H: f32 = 22.0;
 pub const MAP_BTN_W: f32 = 32.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -130,18 +129,9 @@ impl Layout {
         (self.h - self.top() - STATUS_H).max(0.0)
     }
 
-    /// The whole pane, beside the header and rows.
-    pub fn map_pane(&self) -> Option<Rect> {
-        self.map_shown().then(|| Rect { x: self.tree_w() + DIVIDER_W, y: self.top(), w: self.map_pane_w(), h: self.body_h() })
-    }
-
-    /// Where the tiles go: the pane above its legend strip.
+    /// The whole pane, beside the header and rows: the tiles fill it (the legend is in the status bar).
     pub fn map(&self) -> Option<Rect> {
-        self.map_pane().map(|p| Rect { h: (p.h - LEGEND_H).max(0.0), ..p })
-    }
-
-    pub fn map_legend(&self) -> Option<Rect> {
-        self.map_pane().map(|p| Rect { y: p.y + (p.h - LEGEND_H).max(0.0), h: LEGEND_H.min(p.h), ..p })
+        self.map_shown().then(|| Rect { x: self.tree_w() + DIVIDER_W, y: self.top(), w: self.map_pane_w(), h: self.body_h() })
     }
 
     /// The strip between the tree and the pane, where a drag resizes the pane.
@@ -460,19 +450,16 @@ mod tests {
         let mut l = Layout::new(1200.0, 600.0);
         assert!(l.map().is_none() && l.tree_w() == 1200.0, "off by default");
         l.map_on = true;
-        let (pane, div, area, leg) = (l.map_pane().unwrap(), l.map_divider().unwrap(), l.map().unwrap(), l.map_legend().unwrap());
+        let (pane, div) = (l.map().unwrap(), l.map_divider().unwrap());
         assert_eq!((div.x, pane.x), (l.tree_w(), l.tree_w() + DIVIDER_W));
         assert_eq!(pane.x + pane.w, 1200.0);
-        assert_eq!((area.y, leg.y), (pane.y, area.y + area.h));
-        assert_eq!(leg.y + leg.h, pane.y + pane.h);
         assert_eq!(pane.y + pane.h + STATUS_H, 600.0);
         assert_eq!(l.rows_area().w, l.tree_w() - SCROLLBAR_W);
         assert_eq!(l.header().w, l.tree_w());
         let y = PICKER_H + 5.0;
         assert_eq!(l.hit(5.0, y, 0), Hit::Header(0));
         assert_eq!(l.hit(div.x + 1.0, y, 0), Hit::MapDivider);
-        assert_eq!(l.hit(area.x + 5.0, area.y + 5.0, 0), Hit::Map);
-        assert_eq!(l.hit(leg.x + 5.0, leg.y + 5.0, 0), Hit::None);
+        assert_eq!(l.hit(pane.x + 5.0, pane.y + 5.0, 0), Hit::Map);
         assert_eq!(l.hit(l.tree_w() - 5.0, 200.0, 0), Hit::Scrollbar);
         let b = l.map_button();
         assert_eq!(l.hit(b.x + 2.0, b.y + 2.0, 0), Hit::MapButton);
@@ -487,9 +474,9 @@ mod tests {
         let mut l = Layout::new(1000.0, 600.0);
         l.map_on = true;
         l.set_map_w(10.0);
-        assert_eq!(l.map_pane().unwrap().w, MAP_MIN_W);
+        assert_eq!(l.map().unwrap().w, MAP_MIN_W);
         l.set_map_w(5000.0);
         assert!(l.tree_w() >= l.tree_min(), "{} < {}", l.tree_w(), l.tree_min());
-        assert!(l.map_pane().unwrap().w >= MAP_MIN_W);
+        assert!(l.map().unwrap().w >= MAP_MIN_W);
     }
 }

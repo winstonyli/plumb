@@ -36,7 +36,7 @@ impl Class {
     }
 
     pub fn label(self) -> &'static str {
-        ["Video", "Audio", "Images", "Archives", "Documents", "Code", "Programs", "Disk images", "Databases and logs", "Build output", "Other"][self.index()]
+        ["Video", "Audio", "Images", "Archives", "Documents", "Code", "Programs", "Disks", "Data", "Build", "Other"][self.index()]
     }
 }
 

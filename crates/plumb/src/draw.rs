@@ -164,8 +164,6 @@ pub struct Scene<'a> {
     pub view: Option<View<'a>>,
     pub message: &'a str,
     pub status: &'a str,
-    /// Shown at the right of the status bar.
-    pub adapter: &'a str,
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
     pub banner: Option<&'a str>,
     pub filter: FilterBar<'a>,
@@ -475,10 +473,10 @@ impl Pen<'_> {
         self.fill(st, t.panel);
         let reserved = MAP_BTN_W + 8.0 + if l.cancel { CANCEL_W + 4.0 } else { 0.0 };
         let right = Rect { x: st.x + 8.0, y: st.y, w: (st.w - 16.0 - reserved).max(0.0), h: st.h };
-        let left_w = (right.w - self.text_width(s.adapter) - 24.0).max(0.0);
         self.fill(Rect { h: 1.0, ..st }, t.select);
-        self.text(s.status, Rect { w: left_w, ..right }, t.dim, false);
-        self.text(s.adapter, right, t.dim, true);
+        let legend_w = self.legend(s, right, right.w * 0.6);
+        let text_w = if legend_w > 0.0 { right.w - legend_w - 24.0 } else { right.w };
+        self.text(s.status, Rect { w: text_w.max(0.0), ..right }, t.dim, false);
         if l.cancel {
             let r = l.cancel_button();
             self.button(r, "\u{E711}", s); // cancel
@@ -510,10 +508,37 @@ impl Pen<'_> {
         self.draw_text(glyph, &self.painter.glyph, r, c);
     }
 
-    /// The treemap pane: tiles, then the selection and hover outlines over them, then the legend.
+    /// The map's class legend, right-aligned in `r`: as many of the classes present as fit in `max` DIPs.
+    /// Returns the width used (0 when there is no map or nothing fits).
+    fn legend(&self, s: &Scene, r: Rect, max: f32) -> f32 {
+        let Some(m) = &s.map else { return 0.0 };
+        let entries: Vec<(Class, f32)> = Class::ALL.into_iter().filter(|c| m.classes[c.index()]).map(|c| (c, self.text_width(c.label()))).collect();
+        let (mut used, mut n) = (0.0, 0);
+        for &(_, w) in &entries {
+            if used + 14.0 + w > max {
+                break;
+            }
+            used += 14.0 + w + 12.0;
+            n += 1;
+        }
+        if n == 0 {
+            return 0.0;
+        }
+        used -= 12.0;
+        let mut x = r.x + r.w - used;
+        for &(c, w) in &entries[..n] {
+            self.fill(Rect { x, y: r.y + (r.h - 10.0) / 2.0, w: 10.0, h: 10.0 }, s.theme.class[c.index()]);
+            self.text(c.label(), Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
+            x += 14.0 + w + 12.0;
+        }
+        used
+    }
+
+    /// The treemap pane: tiles, then the selection and hover outlines over them.
     fn map(&self, s: &Scene) {
         let (t, l) = (&s.theme, &s.layout);
-        let (Some(pane), Some(area), Some(legend)) = (l.map_pane(), l.map(), l.map_legend()) else { return };
+        let Some(pane) = l.map() else { return };
+        let area = pane;
         if let Some(d) = l.map_divider() {
             self.fill(Rect { x: d.x + d.w / 2.0 - 0.5, w: 1.0, ..d }, t.select);
         }
@@ -536,17 +561,6 @@ impl Pen<'_> {
             }
         }
         unsafe { self.gfx.d2d.PopAxisAlignedClip() };
-        self.fill(legend, t.panel);
-        let mut x = legend.x + 8.0;
-        for c in Class::ALL.into_iter().filter(|c| m.classes[c.index()]) {
-            let w = self.text_width(c.label());
-            if x + 14.0 + w > legend.x + legend.w {
-                break;
-            }
-            self.fill(Rect { x, y: legend.y + (legend.h - 10.0) / 2.0, w: 10.0, h: 10.0 }, t.class[c.index()]);
-            self.text(c.label(), Rect { x: x + 14.0, y: legend.y, w: w + 2.0, h: legend.h }, t.dim, false);
-            x += 14.0 + w + 12.0;
-        }
     }
 
     fn tile(&self, tile: &Tile, t: &Theme) {

@@ -68,7 +68,7 @@ use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEI
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, MARGINS, NMHDR, NMTTDISPINFOW, TOOLTIPS_CLASSW, TTF_IDISHWND,
-    TTM_ADDTOOLW, TTM_POP, TTM_RELAYEVENT, TTM_SETTIPBKCOLOR, TTM_SETTIPTEXTCOLOR, TTN_GETDISPINFOW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
+    TTM_ADDTOOLW, TTM_POP, TTM_RELAYEVENT, TTM_SETMAXTIPWIDTH, TTM_SETTIPBKCOLOR, TTM_SETTIPTEXTCOLOR, TTN_GETDISPINFOW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
 };
 use windows::core::{w, Interface, Result, BOOL, PCWSTR, PWSTR};
 
@@ -423,6 +423,8 @@ impl Win {
                 ..Default::default()
             };
             SendMessageW(tip, TTM_ADDTOOLW, None, Some(LPARAM(&tool as *const _ as isize)));
+            // Wraps a long path, and lets the status tooltip's line break through.
+            SendMessageW(tip, TTM_SETMAXTIPWIDTH, None, Some(LPARAM(640)));
             tip
         }
     }
