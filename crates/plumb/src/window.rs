@@ -1,9 +1,10 @@
-//! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
+﻿//! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
 use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, Parked};
 use crate::draw::{Mark, Painter};
 use crate::filter_ui::{push_utf16, Edit};
 use crate::fmt;
+use crate::state::Placement;
 use crate::gfx::Gfx;
 use crate::layout::{Layout, PICKER_H};
 use crate::preview::Preview;
@@ -1471,7 +1472,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         WM_DESTROY => {
-            with(|w| w.shutdown());
+            with(|w| {
+                crate::state::save(&crate::state::State { window: placement_of(hwnd), ..w.app.remembered() });
+                w.shutdown();
+            });
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
@@ -1479,7 +1483,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     }
 }
 
-fn create_window(visible: bool) -> Result<HWND> {
+/// A hidden window at the default size; `run` shows it where it was last left.
+fn create_window() -> Result<HWND> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let inst: HMODULE = GetModuleHandleW(None)?;
@@ -1501,19 +1506,46 @@ fn create_window(visible: bool) -> Result<HWND> {
         // Scale the default size once the window's monitor DPI is known.
         let dpi = GetDpiForWindow(hwnd);
         let _ = SetWindowPos(hwnd, None, 0, 0, (1100 * dpi / 96) as i32, (760 * dpi / 96) as i32, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-        if visible {
-            let _ = ShowWindow(hwnd, SW_SHOW);
-        }
         Ok(hwnd)
     }
 }
 
+/// Shows the window in the remembered rectangle (Windows moves it onto a monitor that still exists), else at the default.
+fn show_window(hwnd: HWND, saved: Option<Placement>) {
+    unsafe {
+        let Some(p) = saved.filter(Placement::is_sane) else {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            return;
+        };
+        let wp = WINDOWPLACEMENT {
+            length: size_of::<WINDOWPLACEMENT>() as u32,
+            showCmd: if p.maximized { SW_SHOWMAXIMIZED } else { SW_SHOWNORMAL }.0 as u32,
+            rcNormalPosition: RECT { left: p.x, top: p.y, right: p.x + p.w, bottom: p.y + p.h },
+            ..Default::default()
+        };
+        let _ = SetWindowPlacement(hwnd, &wp);
+    }
+}
+
+/// The window's restored rectangle, even while it is maximized or minimized.
+fn placement_of(hwnd: HWND) -> Option<Placement> {
+    let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+    unsafe { GetWindowPlacement(hwnd, &mut wp).ok()? };
+    let r = wp.rcNormalPosition;
+    let maximized = wp.showCmd == SW_SHOWMAXIMIZED.0 as u32 || wp.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0;
+    Some(Placement { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top, maximized })
+}
+
 /// Runs the app until the window closes.
 pub fn run() -> Result<()> {
-    let hwnd = create_window(true)?;
+    let hwnd = create_window()?;
     let win = Win::new(hwnd, crate::drives::list())?;
     eprintln!("plumb: {}", win.gfx.adapter);
     STATE.with(|s| *s.borrow_mut() = Some(win));
+    // Placement first: the column widths clamp to the window they land in.
+    let saved = crate::state::load();
+    show_window(hwnd, saved.window);
+    with(|w| w.app.restore(&saved));
     if let Some(letter) = parse_scan_arg(std::env::args()) {
         with(|w| {
             if let Some(i) = w.app.drives.iter().position(|d| d.letter == letter) {
@@ -1563,7 +1595,7 @@ pub fn selftest() -> Result<String> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).ok();
     std::fs::write(dir.join("sub").join("f.bin"), vec![1u8; 100_000]).ok();
-    let hwnd = create_window(false)?;
+    let hwnd = create_window()?;
     let win = Win::new(hwnd, crate::drives::list())?;
     STATE.with(|s| *s.borrow_mut() = Some(win));
     with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned(), false));
@@ -1610,7 +1642,7 @@ pub fn selftest_live() -> Result<String> {
     let dir = dir.join(format!("plumb-live-{}", std::process::id()));
     let shown = dir.to_string_lossy().trim_start_matches(r"\\?\").to_string();
     let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
-    let hwnd = create_window(false)?;
+    let hwnd = create_window()?;
     let win = Win::new(hwnd, crate::drives::list())?;
     STATE.with(|s| *s.borrow_mut() = Some(win));
     unsafe { SetTimer(Some(hwnd), 99, 50, None) }; // wakes the message wait so deadlines are checked
@@ -1682,7 +1714,7 @@ pub fn selftest_watch() -> Result<String> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).map_err(|e| fail(e.to_string()))?;
     std::fs::write(dir.join("sub").join("seed.bin"), vec![1u8; 4096]).map_err(|e| fail(e.to_string()))?;
-    let hwnd = create_window(false)?;
+    let hwnd = create_window()?;
     let win = Win::new(hwnd, crate::drives::list())?;
     STATE.with(|s| *s.borrow_mut() = Some(win));
     unsafe { SetTimer(Some(hwnd), 99, 50, None) }; // wakes the message wait so deadlines are checked

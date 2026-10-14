@@ -7,6 +7,7 @@ use crate::filter_ui::Edit;
 use crate::fmt;
 use crate::layout::{Hit, Layout, Rect, INDENT, PICKER_H};
 use crate::restore::Snapshot;
+use crate::state::{Sort, State};
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::{NodeFlags, NodeId, Tree};
 
@@ -159,6 +160,24 @@ impl App {
     /// The header column the rows are sorted by, and whether descending.
     pub fn sort(&self) -> (usize, bool) {
         self.sort
+    }
+
+    /// Takes the remembered column widths and sort (before any scan, so the first tree is sorted by it).
+    pub fn restore(&mut self, s: &State) {
+        if let Some(Sort { column, descending }) = s.sort.filter(|s| s.column < 4) {
+            self.sort = (column, descending);
+        }
+        if let Some(cols) = s.columns {
+            for (i, w) in cols.into_iter().enumerate().filter(|(_, w)| w.is_finite()) {
+                self.layout.set_col_w(i + 1, w);
+            }
+        }
+    }
+
+    /// The part of the remembered state the app owns; the window fills in its placement.
+    pub fn remembered(&self) -> State {
+        let (column, descending) = self.sort;
+        State { window: None, columns: Some(self.layout.col_w), sort: Some(Sort { column, descending }) }
     }
 
     /// Exchanges the per-drive state with `p`. The result is consistent on its own (banner and
@@ -1001,6 +1020,21 @@ mod tests {
         assert!(a.layout.banner, "a resize keeps the banner");
         a.set_live(LiveStatus::Off);
         assert!(!a.layout.banner && a.banner().is_none());
+    }
+
+    #[test]
+    fn remembered_columns_and_sort_come_back_and_nonsense_is_ignored() {
+        let mut a = app();
+        a.layout.set_col_w(2, 140.0);
+        a.sort = (3, false);
+        let mut b = app();
+        b.restore(&a.remembered());
+        assert_eq!((b.sort(), b.layout.col_w), (a.sort(), a.layout.col_w));
+        let mut c = app();
+        let before = (c.sort(), c.layout.col_w);
+        c.restore(&State { window: None, columns: Some([f32::NAN, 1.0e9, -5.0]), sort: Some(Sort { column: 9, descending: true }) });
+        assert_eq!(c.sort(), before.0, "an unknown column is ignored");
+        assert!(c.layout.col_w.iter().all(|w| w.is_finite() && *w > 0.0), "widths stay clamped");
     }
 
     #[test]
