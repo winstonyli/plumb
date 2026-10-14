@@ -8,6 +8,8 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 - `plumb`: while a scan runs, the % of parent bar fades out in amber past its solid part to the most that row could still grow, estimated from the drive's used space less what the scan has found. The fade is hidden once the scan has counted more than the drive reports used (hard links and placeholders can do that). See `docs/superpowers/specs/2026-10-13-plumb-scan-bounds-design.md`.
 - `plumb`: drag a column edge in the header to resize the Size, % of parent and Items columns (Name keeps at least 120 px; the pointer becomes a resize cursor over an edge). Clicking a folder's icon expands or collapses it.
 
+- `plumb`: the filter highlights what it matched: the first matching span in each matching name gets an accent tint behind it. The span comes from the installed filter's pattern, found on the visible rows at draw time (`plumb-core`: `Matcher::find`), so nothing extra is stored and it follows live updates and sorting.
+
 ### Fixed
 - `plumb`: after maximizing, the minimize, maximize and close buttons did nothing. DWM answers for them only when the client area starts at the window's top, and we had moved that down by the frame; the client area now keeps the window's top and the content is drawn and hit-tested below the overhang.
 - `plumb`: button labels (Regex, Admin, Rescan, Cancel) were left-aligned with a fixed inset; they are now centred in the button.

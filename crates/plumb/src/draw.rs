@@ -2,6 +2,7 @@
 use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
+use plumb_core::filter::Matcher;
 use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, INDENT, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use std::cell::RefCell;
@@ -120,6 +121,8 @@ pub struct View<'a> {
     pub unscanned: Option<u64>,
     /// The visible row under the mouse.
     pub hover: Option<usize>,
+    /// The name filter's pattern: the part of a name it matched is highlighted.
+    pub found: Option<&'a Matcher>,
 }
 
 pub struct Scene<'a> {
@@ -481,6 +484,7 @@ impl Pen<'_> {
             let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
             let mut name = v.tree.name_string(id).to_string();
+            let found = v.found.and_then(|m| m.find(&name));
             if v.tree.flags[id].contains(NodeFlags::DENIED) {
                 name.push_str("  (access denied)");
             }
@@ -493,7 +497,16 @@ impl Pen<'_> {
             if dir && v.tree.has_children(id) {
                 self.chevron(ax + 8.0, iy + 9.0, open);
             }
-            self.text(&name, Rect { x: ax + 22.0, y: r.y, w: (nw - 16.0 - indent - 22.0).max(0.0), h: r.h }, fg, false);
+            let cell = Rect { x: ax + 22.0, y: r.y, w: (nw - 16.0 - indent - 22.0).max(0.0), h: r.h };
+            if let Some(span) = found {
+                // A tint behind what the filter matched, clipped to the name's cell.
+                let x = cell.x + self.text_width(&name[..span.start]);
+                let w = self.text_width(&name[span.clone()]).min(cell.x + cell.w - x);
+                if w > 0.0 {
+                    self.fill(Rect { x, y: r.y + 3.0, w, h: r.h - 6.0 }, D2D1_COLOR_F { a: 0.35, ..t.accent });
+                }
+            }
+            self.text(&name, cell, fg, false);
             let (sx, sw) = l.column(1);
             self.text(&fmt::size(v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
             let (px, pw) = l.column(2);

@@ -88,6 +88,11 @@ impl App {
         self.filter.installed.is_some()
     }
 
+    /// The pattern of the result on screen, for highlighting what it matched in the names.
+    pub(super) fn filter_matcher(&self) -> Option<&Matcher> {
+        self.filter.installed.as_ref().map(|i| &i.matcher)
+    }
+
     /// "1,240 matches", "searching…", "invalid pattern", or empty.
     pub(super) fn filter_count(&self) -> String {
         let f = &self.filter;

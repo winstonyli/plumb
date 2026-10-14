@@ -20,6 +20,13 @@ fn scan(t: &Tree, m: &Matcher) -> Hits {
 }
 
 #[test]
+fn find_gives_the_span_of_the_first_match_in_the_original_text() {
+    assert_eq!(matcher("FILE", false).find("My file(1).txt"), Some(3..7));
+    assert_eq!(matcher(r"\d+", true).find("a12b345"), Some(1..3));
+    assert_eq!(matcher("zzz", false).find("abc"), None);
+}
+
+#[test]
 fn substring_mode_escapes_the_text_and_ignores_case() {
     let mut buf = String::new();
     let m = matcher("c++", false);

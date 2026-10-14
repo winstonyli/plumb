@@ -52,6 +52,11 @@ impl Matcher {
         buf.extend(char::decode_utf16(name.iter().copied()).map(|c| c.unwrap_or('\u{FFFD}')));
         self.0.is_match(buf)
     }
+
+    /// Where the first match lies in `name`, as byte offsets into it, for highlighting.
+    pub fn find(&self, name: &str) -> Option<std::ops::Range<usize>> {
+        self.0.find(name).map(|m| m.range())
+    }
 }
 
 /// A copy of the tree's name storage that another thread can own while the tree keeps changing.

@@ -37,6 +37,7 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
     model.select(model.rows()[1].id);
     let chips = [Chip { label: "C:  123 GB free".into(), used: 0.7, mark: Mark::Kept }, Chip { label: "D:  1 TB free".into(), used: 0.2, mark: Mark::Scanning }];
     let layout = Layout { chips: chips.len(), ..Layout::new(W as f32, H as f32) };
+    let found = plumb_core::filter::Query { text: "n1".into(), regex: false }.compile().unwrap();
     let scene = Scene {
         layout,
         theme: Theme::new(dark),
@@ -45,7 +46,7 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
         sort: (1, true),
         admin: Some(layout.admin_button()),
         hot: None,
-        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2) }),
+        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref() }),
         message: "",
         status: "MFT scan: 200 files",
         adapter: "WARP",
