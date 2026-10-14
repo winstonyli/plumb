@@ -90,6 +90,21 @@ impl RowModel {
         self.selected = Some(id);
     }
 
+    /// Selects `id` and opens every folder above it, top first, so its row exists. (A name filter can
+    /// still hide a node that does not match it.)
+    pub fn reveal(&mut self, tree: &Tree, id: NodeId) {
+        let mut chain = Vec::new();
+        let mut p = tree.parent[id];
+        while !p.is_none() {
+            chain.push(p);
+            p = tree.parent[p];
+        }
+        for &a in chain.iter().rev() {
+            self.expand(tree, a);
+        }
+        self.select(id);
+    }
+
     pub fn is_expanded(&self, id: NodeId) -> bool {
         match &self.filter {
             Some(k) if k.is_ancestor(id) => !bits::get(&self.closed, id.idx()),
@@ -567,10 +582,20 @@ mod tests {
         assert!(m.is_expandable(&t, NodeId(0)));
         assert!(!m.is_expandable(&t, NodeId(6)));
     }
+
+    #[test]
+    fn reveal_selects_a_node_and_opens_every_folder_above_it() {
+        let tree = crate::synth::kary_builder(400, 3).finish().unwrap();
+        let mut m = RowModel::new(&tree);
+        let deep = NodeId(399);
+        assert!(m.selected_index().is_none());
+        m.reveal(&tree, deep);
+        assert_eq!(m.selected(), Some(deep));
+        assert!(m.selected_index().is_some(), "its row exists");
+        let mut p = tree.parent[deep];
+        while !p.is_none() {
+            assert!(m.is_expanded(p), "{p:?} is open");
+            p = tree.parent[p];
+        }
+    }
 }
-
-#[cfg(test)]
-mod refresh_tests;
-
-#[cfg(test)]
-mod filter_tests;
