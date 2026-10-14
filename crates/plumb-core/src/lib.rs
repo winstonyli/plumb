@@ -8,6 +8,7 @@ pub mod rect;
 pub mod rows;
 #[doc(hidden)]
 pub mod synth;
+pub mod treemap;
 pub mod tree;
 
 pub use node::{NodeFlags, NodeId};
