@@ -1,6 +1,6 @@
 # plumb: treemap pane design
 
-Status: draft for review, 2026-10-14. Extends `2026-10-11-plumb-disk-design.md` (the treemap was parked there).
+Status: implemented, 2026-10-14 (unreleased; the real window has not been looked at yet). Extends `2026-10-11-plumb-disk-design.md` (the treemap was parked there).
 
 ## Decisions (from the brainstorm)
 
@@ -55,7 +55,7 @@ Video, Audio, Image, Archive, Document, Code, Executable (exe, dll, sys, msi), D
 ## Rendering (`plumb`)
 
 - Painted by the existing Direct2D painter into the pane rectangle, clipped. Filled rectangles with a 1 px darker edge on file tiles, a 1 px frame on `Frame` tiles.
-- **Redraw cost.** The app repaints the whole scene on any input, including hover, so a naive map redraws up to 100k rectangles on every mouse move. The first version draws directly and **measures** (WARP in the render test; the real adapter on this machine). If the map's draw exceeds about 4 ms, the map is rendered into an offscreen `ID2D1Bitmap1` when the layout, size or theme changes, and each frame blits it and draws only the selection and hover outline on top. The overlay design (selection and hover are never baked in) is part of the first version, so this is a drop-in change.
+- **Redraw cost.** The app repaints the whole scene on any input, including hover, so drawing the tiles directly costs up to 32 ms per mouse move at 4K (measured, see Performance). The tiles are therefore drawn into an offscreen `ID2D1Bitmap1` when the layout, size, scale or palette changes, and each frame blits it and draws only the selection and hover outlines and the legend on top. Selection and hover are never baked into the bitmap.
 - **Tooltip.** `App::tip_at` already returns a string for the control under the pointer and the window compares it to show or pop the tip; the map adds the tile under the pointer to it: full path and size, or "N smaller items, SIZE" for `Rest`.
 - **Cursor and focus.** The map takes the mouse only; keyboard focus stays where it was. Arrow keys still move the tree selection, which moves the map.
 
@@ -74,18 +74,32 @@ Video, Audio, Image, Archive, Document, Code, Executable (exe, dll, sys, msi), D
 - Criterion: `layout` on a synthetic 5M-node tree for the root and for a mid-size folder, at 800x600 and 3840x2160; `hit` over a 100k-tile result. Run at CPU load under about 20%.
 - Manual: dark and light, a 4K and a small window, live changes while the map is visible, a scan in progress.
 
-## Performance targets (estimates, to be measured)
+## Performance (measured 2026-10-14)
 
-- Layout of any folder: under 30 ms at 3840x2160 for the root of a 5M-node tree (the worst case is walking every child of the visited folders, a linked list); under 5 ms for typical folders. If the root misses, the fix is caching per-folder sorted children, not changing the algorithm.
-- Hit test under 0.2 ms.
-- Map paint under 4 ms (else add the cached bitmap).
-- Idle cost: none (no timers; repaint on input only).
+Release build, a synthetic 5M-node 8-ary tree for layout and a 3M-node one for paint, machine load 38-59% (above the 20% the plan asks for, so read the numbers as upper bounds), Defender real-time protection off, AMD Radeon 780M (the system default adapter; the eGPU was not selected).
+
+| What | Target | Measured |
+|---|---|---|
+| Layout, root of 5M nodes, 3840x2160 | under 30 ms | 20.7 ms (20-22) |
+| Layout, root, 800x600 | | 0.62 ms |
+| Layout, a mid-size folder (node 9), 3840x2160 | under 5 ms typical | 30 ms (it holds 1/8 of the tree: not typical) |
+| Hit test over 181k tiles | under 0.2 ms | 23 us |
+| Direct paint of the tiles, 1280x800 at 100% (5.9k tiles) | under 4 ms | 4.4 ms |
+| Direct paint of the tiles, 3840x2160 (47k tiles) | under 4 ms | 32 ms (WARP: 81 ms) |
+| Cached bitmap blit plus overlays, same two cases | under 4 ms | 0.35 ms and 0.40 ms (WARP: 0.4 and 1.05 ms) |
+
+Direct painting missed the target, so the tiles are drawn into an offscreen bitmap once per layout (a generation counter on `MapView`, the pane size, the scale and the palette are its key) and each frame blits it and draws only the outlines and legend. A layout change (selection, resize, divider drag, live change) still pays the direct cost once, so dragging the divider at 4K runs at roughly 25-30 frames a second. Idle cost: none.
 
 ## Open questions
 
 - Is 9 px² the right floor, or should tiles under about 4 px on a side merge sooner for legibility? Decide on screen at 100% and 200% DPI.
 - Is full nesting (up to the cap) readable, or should the default stop at two or three levels? The cap is one constant; the brainstorm's wording was "one or two levels", so decide by looking at a real drive.
 - Does selecting through the filter (rows only partly visible) confuse the map? The map ignores the filter by decision; revisit if it does.
+
+## Parked
+
+- A cheaper rebuild during a divider drag (the tiles are redrawn on every move; about 25-30 frames a second at 4K).
+- Per-folder cached sorted children, if the layout of a very large folder ever matters (a node holding 1/8 of 5M nodes takes 30 ms at 4K).
 
 ## Milestones
 

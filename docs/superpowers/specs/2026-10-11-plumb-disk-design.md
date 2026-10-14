@@ -121,7 +121,7 @@ These are my estimates, to be measured, not claims:
 | Item | Why parked |
 |---|---|
 | Processes pane | Disk first; needs its own design |
-| Treemap | Folder tree first; the Direct3D 11 path is reserved for it |
+| ~~Treemap~~ | Shipped (see `2026-10-14-plumb-treemap-design.md`): a Direct2D split pane; the Direct3D 11 path stays unused |
 | Saved tree plus journal replay on startup | Fresh scan each launch is simplest |
 | ~~Live updates for non-NTFS / unelevated volumes (`ReadDirectoryChangesW`)~~ | Shipped (0.4); also the fallback when the journal is off or unopenable (0.6) |
 | ~~Partial tree display while a scan runs~~ | Shipped (preview, 0.3) |
