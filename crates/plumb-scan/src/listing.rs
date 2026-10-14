@@ -9,6 +9,9 @@ pub struct Entry {
     pub is_dir: bool,
     /// A symlink or junction: listed, never followed.
     pub reparse: bool,
+    /// The file's id on its volume, the same for every hard link to it (the 128-bit id folded to 64 bits;
+    /// NTFS ids fit in 64). Only meaningful for files.
+    pub id: u64,
 }
 
 /// A directory and its entries, or `Err` if it could not be listed (it is gone, or not readable).

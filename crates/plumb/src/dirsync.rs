@@ -44,6 +44,8 @@ fn apply_one(tree: &mut Tree, l: &Listing) -> usize {
         let size = if e.is_dir { 0 } else { e.alloc };
         match have.remove(&fold(&e.name)) {
             Some(id) if tree.flags[id] & mask == want => {
+                // A hard link the scan counted as 0 stays 0 (the file's other links hold its space).
+                let size = if tree.flags[id].contains(NodeFlags::HARDLINK) { 0 } else { size };
                 if tree.size[id] != size {
                     tree.set_size(id, size);
                     changes += 1;

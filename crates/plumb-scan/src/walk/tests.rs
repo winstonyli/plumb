@@ -83,6 +83,32 @@ fn sizes_are_allocated_bytes() {
 }
 
 #[test]
+fn a_hard_linked_file_is_counted_once_on_whichever_link_is_reached_first() {
+    let f = fixture("links");
+    let (a, b) = (f.0.join("a").join("big.bin"), f.0.join("b").join("c").join("big-link.bin"));
+    fs::hard_link(&a, &b).unwrap();
+    let plain = scan(&f.0, 1).0.subtree_size[NodeId(0)];
+    // A second link adds nothing: the total equals the tree without it.
+    let big = fs::metadata(&a).unwrap().len();
+    assert!(big >= 100_000);
+    for threads in [1, 3] {
+        let (t, p) = scan(&f.0, threads);
+        let (x, y) = (find(&t, "a\\big.bin"), find(&t, "b\\c\\big-link.bin"));
+        let (hx, hy) = (t.flags[x].contains(NodeFlags::HARDLINK), t.flags[y].contains(NodeFlags::HARDLINK));
+        assert!(hx != hy, "exactly one link is flagged ({threads} threads)");
+        let (linked, primary) = if hx { (x, y) } else { (y, x) };
+        assert_eq!(t.size[linked], 0);
+        assert!(t.size[primary] >= 100_000);
+        assert_eq!(t.subtree_size[NodeId(0)], plain, "the total does not depend on thread timing");
+        assert_eq!(p.snapshot().2, plain, "progress counts the bytes once too");
+    }
+    // Without the extra link the same tree is bigger by exactly that file.
+    fs::remove_file(&b).unwrap();
+    let without = scan(&f.0, 1).0.subtree_size[NodeId(0)];
+    assert_eq!(plain, without, "a second link adds nothing");
+}
+
+#[test]
 fn thread_count_does_not_change_the_result() {
     let f = fixture("threads");
     let (a, _) = scan(&f.0, 1);

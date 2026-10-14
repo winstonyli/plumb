@@ -14,6 +14,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 - `plumb`: tooltips are dark in dark mode (they were the light native style).
+- `plumb-scan`: the walker counts a hard-linked file once, as the MFT scanner already did. Directory listings now read each file's id (`FILE_ID_EXTD_DIR_INFO`); later links to a seen id are flagged `HARDLINK` and count 0. Which link carries the bytes depends on thread timing, so per-folder attribution can differ between runs (totals do not). Live updates (`dirsync`) keep an existing `HARDLINK` node at 0 but do not dedup new links, so deleting the counted link undercounts until the next rescan. Alternate data streams are still ignored (measured not worth the cost; see `docs/benchmarks.md`).
 
 ## [0.5.0] - 2026-10-14
 

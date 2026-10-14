@@ -9,11 +9,11 @@ fn u(s: &str) -> Vec<u16> {
 }
 
 fn file(name: &str, alloc: u64) -> Entry {
-    Entry { name: u(name), alloc, is_dir: false, reparse: false }
+    Entry { name: u(name), alloc, is_dir: false, reparse: false, id: 0 }
 }
 
 fn dir(name: &str) -> Entry {
-    Entry { name: u(name), alloc: 0, is_dir: true, reparse: false }
+    Entry { name: u(name), alloc: 0, is_dir: true, reparse: false, id: 0 }
 }
 
 fn listing(d: &str, entries: Vec<Entry>) -> Listing {
@@ -56,6 +56,17 @@ fn adds_removes_and_resizes_match_a_tree_built_from_the_final_state() {
     b.push_str(r, "c.txt", 16384, NodeFlags::empty());
     b.push_str(r, "d.txt", 100, NodeFlags::empty());
     assert_eq!(snap(&t), snap(&b.finish().unwrap()));
+}
+
+#[test]
+fn a_hard_link_counted_as_zero_stays_zero_when_its_folder_is_listed_again() {
+    let mut b = TreeBuilder::new();
+    let r = b.push_str(NodeId::NONE, "R", 0, NodeFlags::DIR);
+    b.push_str(r, "first", 8192, NodeFlags::empty());
+    b.push_str(r, "second", 0, NodeFlags::HARDLINK);
+    let mut t = b.finish().unwrap();
+    run(&mut t, vec![listing("", vec![file("first", 8192), file("second", 8192)])]);
+    assert_eq!(snap(&t)["R"].0, 8192, "the file is still counted once");
 }
 
 #[test]
