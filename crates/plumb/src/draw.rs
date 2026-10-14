@@ -440,7 +440,11 @@ impl Pen<'_> {
         let t = &s.theme;
         for (i, chip) in s.chips.iter().enumerate() {
             let r = s.layout.chip(i);
-            self.fill(r, if s.active_chip == Some(i) { t.select } else { t.panel });
+            let hot = s.hot == Some(r);
+            self.fill(r, if s.active_chip == Some(i) || hot { t.select } else { t.panel });
+            if hot {
+                self.frame(r, t.dim);
+            }
             self.fill(Rect { x: r.x, y: r.y + r.h - 3.0, w: r.w * chip.used.clamp(0.0, 1.0), h: 3.0 }, t.accent);
             self.text(&chip.label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h - 3.0 }, t.fg, false);
             // A strip along the top edge: neutral for a kept tree, the accent for a running scan.

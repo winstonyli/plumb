@@ -347,28 +347,27 @@ impl App {
         self.col_drag.is_some() || matches!(self.layout.hit(x, y, self.drives.len()), Hit::Divider(_))
     }
 
-    /// The icon button at (x, y), if there is one there, with its tooltip: these buttons carry no label.
-    fn button_at(&self, x: f32, y: f32) -> Option<(Rect, &'static str)> {
+    /// The button at (x, y), if there is one there, with its tooltip: an icon button carries no label, and a
+    /// drive chip's label shows only the free size, to fit. These are what light up under the pointer.
+    fn button_at(&self, x: f32, y: f32) -> Option<(Rect, String)> {
         let l = &self.layout;
         if self.can_elevate && l.admin_button().contains(x, y) {
-            return Some((l.admin_button(), "Run as administrator"));
+            return Some((l.admin_button(), "Run as administrator".into()));
         }
         match l.hit(x, y, self.drives.len()) {
-            Hit::Rescan => Some((l.rescan_button(), "Rescan")),
-            Hit::Cancel => Some((l.cancel_button(), "Cancel scan")),
-            Hit::FilterRegex => Some((l.filter_regex(), "Regular expression")),
+            Hit::Chip(i) => {
+                let d = self.drives.get(i)?;
+                Some((l.chip(i), format!("{}: {} free of {}", d.letter, fmt::size(d.free), fmt::size(d.total))))
+            }
+            Hit::Rescan => Some((l.rescan_button(), "Rescan".into())),
+            Hit::Cancel => Some((l.cancel_button(), "Cancel scan".into())),
+            Hit::FilterRegex => Some((l.filter_regex(), "Regular expression".into())),
             _ => None,
         }
     }
 
-    /// The tooltip at (x, y): an icon button's name, or a drive chip's full free space (its label shows
-    /// only the free size, to fit).
     pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
-        if let Hit::Chip(i) = self.layout.hit(x, y, self.drives.len()) {
-            let d = self.drives.get(i)?;
-            return Some(format!("{}: {} free of {}", d.letter, fmt::size(d.free), fmt::size(d.total)));
-        }
-        self.button_at(x, y).map(|b| b.1.to_string())
+        self.button_at(x, y).map(|b| b.1)
     }
 
     /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
@@ -874,6 +873,8 @@ mod tests {
         a.handle(Input::Hover(admin.x + 5.0, admin.y + 5.0));
         assert_eq!(a.hot, Some(admin));
         a.handle(Input::Hover(a.layout.chip(0).x + 5.0, 10.0));
+        assert_eq!(a.hot, Some(a.layout.chip(0)), "a drive chip lights up too");
+        a.handle(Input::Hover(5.0, a.layout.header().y + 5.0));
         assert_eq!(a.hot, None);
     }
 
