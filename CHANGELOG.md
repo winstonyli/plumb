@@ -4,10 +4,13 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-14
+
+The picker bar becomes the title bar, icon buttons with tooltips, filter match highlighting, resizable columns, Explorer icons and a scan upper bound.
+
 ### Added
 - `plumb`: while a scan runs, the % of parent bar fades out in amber past its solid part to the most that row could still grow, estimated from the drive's used space less what the scan has found. The fade is hidden once the scan has counted more than the drive reports used (hard links and placeholders can do that). See `docs/superpowers/specs/2026-10-13-plumb-scan-bounds-design.md`.
 - `plumb`: drag a column edge in the header to resize the Size, % of parent and Items columns (Name keeps at least 120 px; the pointer becomes a resize cursor over an edge). Clicking a folder's icon expands or collapses it.
-
 - `plumb`: the filter highlights what it matched: every matching span in each matching name gets an accent tint behind it (empty regex matches are skipped). The span comes from the installed filter's pattern, found on the visible rows at draw time (`plumb-core`: `Matcher::find`), so nothing extra is stored and it follows live updates and sorting.
 
 ### Fixed
