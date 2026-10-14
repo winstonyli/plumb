@@ -299,15 +299,9 @@ impl Pen<'_> {
             }
         }
         let r = l.filter_regex();
-        let hot = s.hot == Some(r);
-        if f.regex || hot {
-            self.fill(r, t.select);
-        }
-        if f.regex {
-            self.frame(r, t.accent);
-        }
+        let c = self.state(r, f.regex, s);
         // The line box centres the text, but `.*` sits low in it (a period on the baseline and a raised star).
-        self.centered(".*", Rect { y: r.y - 1.5, ..r },if f.regex { t.accent } else if hot { t.fg } else { t.dim });
+        self.centered(".*", Rect { y: r.y - 1.5, ..r }, c);
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
 
@@ -370,13 +364,23 @@ impl Pen<'_> {
         }
     }
 
-    /// A framed icon button: quiet until the pointer is over it, then lit on the selection tint.
+    /// What a control looks like when it is on (accent frame and text) or the pointer is over it
+    /// (gray frame, bright text), over whatever idle look was drawn first. Returns the text colour.
+    fn state(&self, r: Rect, active: bool, s: &Scene) -> D2D1_COLOR_F {
+        let (t, hot) = (&s.theme, s.hot == Some(r));
+        if active || hot {
+            self.fill(r, t.select);
+            self.frame(r, if active { t.accent } else { t.dim });
+        }
+        if active { t.accent } else if hot { t.fg } else { t.dim }
+    }
+
+    /// A framed icon button: quiet until the pointer is over it.
     fn button(&self, r: Rect, glyph: &str, s: &Scene) {
-        let t = &s.theme;
-        let hot = s.hot == Some(r);
-        self.fill(r, if hot { t.select } else { t.panel });
-        self.frame(r, if hot { t.dim } else { t.select });
-        self.draw_text(glyph, &self.painter.glyph, r, if hot { t.fg } else { t.dim });
+        self.fill(r, s.theme.panel);
+        self.frame(r, s.theme.select);
+        let c = self.state(r, false, s);
+        self.draw_text(glyph, &self.painter.glyph, r, c);
     }
 
     /// `s` centred in `r`, both ways.
@@ -440,13 +444,11 @@ impl Pen<'_> {
         let t = &s.theme;
         for (i, chip) in s.chips.iter().enumerate() {
             let r = s.layout.chip(i);
-            let hot = s.hot == Some(r);
-            self.fill(r, if s.active_chip == Some(i) || hot { t.select } else { t.panel });
-            if hot {
-                self.frame(r, t.dim);
-            }
+            self.fill(r, t.panel);
+            let active = s.active_chip == Some(i);
+            let lit = self.state(r, active, s);
             self.fill(Rect { x: r.x, y: r.y + r.h - 3.0, w: r.w * chip.used.clamp(0.0, 1.0), h: 3.0 }, t.accent);
-            self.text(&chip.label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h - 3.0 }, t.fg, false);
+            self.text(&chip.label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h - 3.0 }, if active { lit } else { t.fg }, false);
             // A strip along the top edge: neutral for a kept tree, the accent for a running scan.
             let strip = match chip.mark {
                 Mark::None => None,
