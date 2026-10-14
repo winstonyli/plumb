@@ -39,6 +39,11 @@ pub const MIN_COL_W: f32 = 50.0;
 pub const MIN_NAME_W: f32 = 120.0;
 /// Half-width of the grab zone around a column's left edge in the header.
 const GRIP: f32 = 4.0;
+pub const DIVIDER_W: f32 = 5.0;
+pub const MAP_MIN_W: f32 = 160.0;
+pub const MAP_W: f32 = 420.0;
+pub const LEGEND_H: f32 = 22.0;
+pub const MAP_BTN_W: f32 = 32.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
@@ -58,6 +63,12 @@ pub enum Hit {
     FilterBox,
     FilterRegex,
     FilterClear,
+    /// The treemap's tile area.
+    Map,
+    /// The strip between the tree and the map, where a drag resizes the pane.
+    MapDivider,
+    /// The status bar's show/hide button.
+    MapButton,
     None,
 }
 
@@ -73,11 +84,15 @@ pub struct Layout {
     pub col_w: [f32; 3],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
     pub chips: Vec<f32>,
+    /// The map pane is wanted.
+    pub map_on: bool,
+    /// The pane's wanted width in DIPs; clamped when used.
+    pub map_w: f32,
 }
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false, col_w: COL_W, chips: Vec::new() }
+        Self { w, h, banner: false, cancel: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
     /// Sets the width of column `c` (1..=3), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
@@ -85,6 +100,59 @@ impl Layout {
         let others: f32 = self.col_w.iter().sum::<f32>() - self.col_w[c - 1];
         let max = (self.rows_area().w - MIN_NAME_W - others).max(MIN_COL_W);
         self.col_w[c - 1] = w.clamp(MIN_COL_W, max);
+    }
+
+    /// The narrowest the tree may get beside the map: a Name column at its minimum, the other columns and the scrollbar.
+    fn tree_min(&self) -> f32 {
+        MIN_NAME_W + self.col_w.iter().sum::<f32>() + SCROLLBAR_W
+    }
+
+    /// Whether the map pane is on screen: wanted, and the window is wide enough for the tree, the divider and the pane.
+    pub fn map_shown(&self) -> bool {
+        self.map_on && self.w >= self.tree_min() + DIVIDER_W + MAP_MIN_W
+    }
+
+    fn map_pane_w(&self) -> f32 {
+        if self.map_shown() { self.map_w.clamp(MAP_MIN_W, self.w - self.tree_min() - DIVIDER_W) } else { 0.0 }
+    }
+
+    /// The width the tree's header and rows get: the whole window unless the map pane is shown.
+    pub fn tree_w(&self) -> f32 {
+        if self.map_shown() { self.w - self.map_pane_w() - DIVIDER_W } else { self.w }
+    }
+
+    /// Sets the wanted pane width, within what the window allows.
+    pub fn set_map_w(&mut self, w: f32) {
+        self.map_w = w.clamp(MAP_MIN_W, (self.w - self.tree_min() - DIVIDER_W).max(MAP_MIN_W));
+    }
+
+    fn body_h(&self) -> f32 {
+        (self.h - self.top() - STATUS_H).max(0.0)
+    }
+
+    /// The whole pane, beside the header and rows.
+    pub fn map_pane(&self) -> Option<Rect> {
+        self.map_shown().then(|| Rect { x: self.tree_w() + DIVIDER_W, y: self.top(), w: self.map_pane_w(), h: self.body_h() })
+    }
+
+    /// Where the tiles go: the pane above its legend strip.
+    pub fn map(&self) -> Option<Rect> {
+        self.map_pane().map(|p| Rect { h: (p.h - LEGEND_H).max(0.0), ..p })
+    }
+
+    pub fn map_legend(&self) -> Option<Rect> {
+        self.map_pane().map(|p| Rect { y: p.y + (p.h - LEGEND_H).max(0.0), h: LEGEND_H.min(p.h), ..p })
+    }
+
+    /// The strip between the tree and the pane, where a drag resizes the pane.
+    pub fn map_divider(&self) -> Option<Rect> {
+        self.map_shown().then(|| Rect { x: self.tree_w(), y: self.top(), w: DIVIDER_W, h: self.body_h() })
+    }
+
+    /// Shows or hides the pane, at the right end of the status bar.
+    pub fn map_button(&self) -> Rect {
+        let s = self.status();
+        Rect { x: (s.x + s.w - 8.0 - MAP_BTN_W).max(0.0), y: s.y + 2.0, w: MAP_BTN_W, h: s.h - 4.0 }
     }
 
 
@@ -156,13 +224,13 @@ impl Layout {
     }
 
     pub fn header(&self) -> Rect {
-        Rect { x: 0.0, y: self.top(), w: self.w, h: HEADER_H }
+        Rect { x: 0.0, y: self.top(), w: self.tree_w(), h: HEADER_H }
     }
 
     /// Row area, excluding the header and scrollbar.
     pub fn rows_area(&self) -> Rect {
         let y = self.top() + HEADER_H;
-        Rect { x: 0.0, y, w: (self.w - SCROLLBAR_W).max(0.0), h: (self.h - y - STATUS_H).max(0.0) }
+        Rect { x: 0.0, y, w: (self.tree_w() - SCROLLBAR_W).max(0.0), h: (self.h - y - STATUS_H).max(0.0) }
     }
 
     pub fn scrollbar(&self) -> Rect {
@@ -173,7 +241,7 @@ impl Layout {
     /// "Cancel", right-aligned in the status bar.
     pub fn cancel_button(&self) -> Rect {
         let s = self.status();
-        Rect { x: (s.x + s.w - 8.0 - CANCEL_W).max(0.0), y: s.y + 2.0, w: CANCEL_W, h: s.h - 4.0 }
+        Rect { x: (s.x + s.w - 8.0 - MAP_BTN_W - 4.0 - CANCEL_W).max(0.0), y: s.y + 2.0, w: CANCEL_W, h: s.h - 4.0 }
     }
 
     pub fn status(&self) -> Rect {
@@ -240,6 +308,15 @@ impl Layout {
         }
         if self.filter_box().contains(x, y) {
             return Hit::FilterBox;
+        }
+        if self.map_button().contains(x, y) {
+            return Hit::MapButton;
+        }
+        if self.map_divider().is_some_and(|d| d.contains(x, y)) {
+            return Hit::MapDivider;
+        }
+        if self.map().is_some_and(|m| m.contains(x, y)) {
+            return Hit::Map;
         }
         if self.header().contains(x, y) {
             if let Some(c) = (1..4).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
@@ -376,5 +453,43 @@ mod tests {
             let back = l.scroll_for_thumb_y(1000, t.y);
             assert!(back.abs_diff(s) <= 1, "{s} -> {back}");
         }
+    }
+
+    #[test]
+    fn the_map_pane_sits_right_of_the_tree_and_squeezes_it() {
+        let mut l = Layout::new(1200.0, 600.0);
+        assert!(l.map().is_none() && l.tree_w() == 1200.0, "off by default");
+        l.map_on = true;
+        let (pane, div, area, leg) = (l.map_pane().unwrap(), l.map_divider().unwrap(), l.map().unwrap(), l.map_legend().unwrap());
+        assert_eq!((div.x, pane.x), (l.tree_w(), l.tree_w() + DIVIDER_W));
+        assert_eq!(pane.x + pane.w, 1200.0);
+        assert_eq!((area.y, leg.y), (pane.y, area.y + area.h));
+        assert_eq!(leg.y + leg.h, pane.y + pane.h);
+        assert_eq!(pane.y + pane.h + STATUS_H, 600.0);
+        assert_eq!(l.rows_area().w, l.tree_w() - SCROLLBAR_W);
+        assert_eq!(l.header().w, l.tree_w());
+        let y = PICKER_H + 5.0;
+        assert_eq!(l.hit(5.0, y, 0), Hit::Header(0));
+        assert_eq!(l.hit(div.x + 1.0, y, 0), Hit::MapDivider);
+        assert_eq!(l.hit(area.x + 5.0, area.y + 5.0, 0), Hit::Map);
+        assert_eq!(l.hit(leg.x + 5.0, leg.y + 5.0, 0), Hit::None);
+        assert_eq!(l.hit(l.tree_w() - 5.0, 200.0, 0), Hit::Scrollbar);
+        let b = l.map_button();
+        assert_eq!(l.hit(b.x + 2.0, b.y + 2.0, 0), Hit::MapButton);
+        assert!(l.cancel_button().x + l.cancel_button().w <= b.x, "Cancel sits left of the map button");
+    }
+
+    #[test]
+    fn a_narrow_window_hides_the_pane_and_the_width_stays_within_limits() {
+        let mut l = Layout::new(600.0, 600.0);
+        l.map_on = true;
+        assert!(!l.map_shown() && l.map().is_none() && l.tree_w() == 600.0);
+        let mut l = Layout::new(1000.0, 600.0);
+        l.map_on = true;
+        l.set_map_w(10.0);
+        assert_eq!(l.map_pane().unwrap().w, MAP_MIN_W);
+        l.set_map_w(5000.0);
+        assert!(l.tree_w() >= l.tree_min(), "{} < {}", l.tree_w(), l.tree_min());
+        assert!(l.map_pane().unwrap().w >= MAP_MIN_W);
     }
 }
