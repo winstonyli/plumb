@@ -3,7 +3,8 @@ use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
 use plumb_core::filter::Matcher;
-use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, PICKER_H, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, MAP_BTN_W, PICKER_H, RESCAN_W, ROW_H};
+use plumb_core::treemap::{Class, Kind, Tile};
 use plumb_core::rows::RowModel;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -56,6 +57,8 @@ pub struct Theme {
     pub folder: D2D1_COLOR_F,
     /// Box tint for a pattern that does not compile.
     pub error: D2D1_COLOR_F,
+    /// Tile fill per file class, indexed by `Class::index()`.
+    pub class: [D2D1_COLOR_F; 10],
 }
 
 impl Theme {
@@ -65,12 +68,14 @@ impl Theme {
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
                 accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
                 hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
+                class: [0xd0605e, 0xd98c3f, 0x4fae72, 0xb59a3c, 0x5a8fd6, 0x8f6fd0, 0x3fb0b0, 0xb06fa8, 0x7f9fb0, 0x808080].map(rgb),
             }
         } else {
             Self {
                 bg: rgb(0xffffff), panel: rgb(0xf0f0f0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
                 accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), bound: rgb(0xf0b860), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
                 hover: rgb(0xedf3fc), folder: rgb(0xd09a2a),
+                class: [0xc4423f, 0xcf7a22, 0x2f9a58, 0xa08420, 0x2f6fc0, 0x7650c0, 0x1f9696, 0x9a4f92, 0x5f8296, 0x9a9a9a].map(rgb),
             }
         }
     }
@@ -127,6 +132,17 @@ pub struct View<'a> {
     pub found: Option<&'a Matcher>,
 }
 
+/// The treemap pane's content: tiles from `plumb_core::treemap`, plus what is drawn over them.
+pub struct MapView<'a> {
+    pub tiles: &'a [Tile],
+    /// Index of the tile of the selected node, if it has one.
+    pub selected: Option<usize>,
+    /// Index of the tile under the pointer.
+    pub hover: Option<usize>,
+    /// Which classes occur among the tiles, for the legend.
+    pub classes: [bool; 10],
+}
+
 pub struct Scene<'a> {
     pub layout: Layout,
     pub theme: Theme,
@@ -147,6 +163,8 @@ pub struct Scene<'a> {
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
     pub banner: Option<&'a str>,
     pub filter: FilterBar<'a>,
+    /// `None` when the map pane is hidden.
+    pub map: Option<MapView<'a>>,
 }
 
 pub struct Painter {
@@ -373,9 +391,10 @@ impl Pen<'_> {
                 self.text(s.message, Rect { x: a.x + 16.0, y: a.y + 16.0, w: a.w - 32.0, h: ROW_H }, t.dim, false);
             }
         }
+        self.map(s);
         let st = l.status();
         self.fill(st, t.panel);
-        let reserved = if l.cancel { CANCEL_W + 8.0 } else { 0.0 };
+        let reserved = MAP_BTN_W + 8.0 + if l.cancel { CANCEL_W + 4.0 } else { 0.0 };
         let right = Rect { x: st.x + 8.0, y: st.y, w: (st.w - 16.0 - reserved).max(0.0), h: st.h };
         let left_w = (right.w - self.text_width(s.adapter) - 24.0).max(0.0);
         self.fill(Rect { h: 1.0, ..st }, t.select);
@@ -385,6 +404,7 @@ impl Pen<'_> {
             let r = l.cancel_button();
             self.button(r, "\u{E711}", s); // cancel
         }
+        self.toggle_button(l.map_button(), "\u{E80A}", l.map_on, s); // grid
     }
 
     /// What a control looks like when it is on (accent frame and text) or the pointer is over it
@@ -400,10 +420,73 @@ impl Pen<'_> {
 
     /// A framed icon button: quiet until the pointer is over it.
     fn button(&self, r: Rect, glyph: &str, s: &Scene) {
+        self.toggle_button(r, glyph, false, s);
+    }
+
+    /// An icon button that shows the accent frame while `active`.
+    fn toggle_button(&self, r: Rect, glyph: &str, active: bool, s: &Scene) {
         self.fill(r, s.theme.panel);
         self.frame(r, s.theme.select);
-        let c = self.state(r, false, s);
+        let c = self.state(r, active, s);
         self.draw_text(glyph, &self.painter.glyph, r, c);
+    }
+
+    /// The treemap pane: tiles, then the selection and hover outlines over them, then the legend.
+    fn map(&self, s: &Scene) {
+        let (t, l) = (&s.theme, &s.layout);
+        let (Some(pane), Some(area), Some(legend)) = (l.map_pane(), l.map(), l.map_legend()) else { return };
+        if let Some(d) = l.map_divider() {
+            self.fill(Rect { x: d.x + d.w / 2.0 - 0.5, w: 1.0, ..d }, t.select);
+        }
+        self.fill(pane, if s.view.is_some() { t.bg } else { t.panel }); // blank until there is a tree
+        let Some(m) = &s.map else { return };
+        unsafe { self.gfx.d2d.PushAxisAlignedClip(&rc(area), D2D1_ANTIALIAS_MODE_ALIASED) };
+        for tile in m.tiles {
+            self.tile(tile, t);
+        }
+        if let Some(h) = m.hover.and_then(|i| m.tiles.get(i)).filter(|_| m.hover != m.selected) {
+            self.frame(h.rect, D2D1_COLOR_F { a: 0.85, ..t.fg });
+        }
+        if let Some(sel) = m.selected.and_then(|i| m.tiles.get(i)) {
+            self.frame(sel.rect, t.accent);
+            if sel.rect.w >= 4.0 && sel.rect.h >= 4.0 {
+                self.frame(Rect { x: sel.rect.x + 1.0, y: sel.rect.y + 1.0, w: sel.rect.w - 2.0, h: sel.rect.h - 2.0 }, t.accent);
+            }
+        }
+        unsafe { self.gfx.d2d.PopAxisAlignedClip() };
+        self.fill(legend, t.panel);
+        let mut x = legend.x + 8.0;
+        for c in Class::ALL.into_iter().filter(|c| m.classes[c.index()]) {
+            let w = self.text_width(c.label());
+            if x + 14.0 + w > legend.x + legend.w {
+                break;
+            }
+            self.fill(Rect { x, y: legend.y + (legend.h - 10.0) / 2.0, w: 10.0, h: 10.0 }, t.class[c.index()]);
+            self.text(c.label(), Rect { x: x + 14.0, y: legend.y, w: w + 2.0, h: legend.h }, t.dim, false);
+            x += 14.0 + w + 12.0;
+        }
+    }
+
+    fn tile(&self, tile: &Tile, t: &Theme) {
+        let r = tile.rect;
+        match tile.kind {
+            Kind::File => {
+                let c = t.class[tile.class.index()];
+                if r.w >= 3.0 && r.h >= 3.0 {
+                    // A darker edge: the dark fill, then the colour inside it (two draws, not five).
+                    self.fill(r, D2D1_COLOR_F { r: c.r * 0.6, g: c.g * 0.6, b: c.b * 0.6, a: c.a });
+                    self.fill(Rect { x: r.x + 1.0, y: r.y + 1.0, w: r.w - 2.0, h: r.h - 2.0 }, c);
+                } else {
+                    self.fill(r, c);
+                }
+            }
+            Kind::Frame => {
+                self.fill(r, D2D1_COLOR_F { a: 0.07, ..t.fg });
+                self.frame(r, D2D1_COLOR_F { a: 0.45, ..t.dim });
+            }
+            Kind::Solid => self.fill(r, D2D1_COLOR_F { a: 0.45, ..t.dim }),
+            Kind::Rest => self.fill(r, D2D1_COLOR_F { a: 0.22, ..t.dim }),
+        }
     }
 
     /// `s` centred in `r`, both ways.

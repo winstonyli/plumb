@@ -2,7 +2,7 @@
 //! input changes it. No Win32 types, so the whole interaction model tests anywhere.
 mod filter;
 
-use crate::draw::{Chip, Mark, Scene, Theme, View};
+use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
 use crate::layout::{Hit, Layout, Rect, CHIP_PAD, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
@@ -797,6 +797,7 @@ impl App {
             (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher() }),
             _ => None,
         };
+        let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, selected: self.map_selected_tile(), hover: self.map_hover, classes: self.map_classes });
         f(&Scene {
             layout: self.layout.with_cancel(self.cancelable()),
             theme: Theme::new(dark),
@@ -811,6 +812,7 @@ impl App {
             adapter: &self.adapter,
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),
+            map,
         })
     }
 }

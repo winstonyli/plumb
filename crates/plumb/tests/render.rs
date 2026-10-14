@@ -1,7 +1,7 @@
 #![cfg(windows)]
 //! Draws a fixed small tree through a WARP (software) device into an offscreen bitmap.
 //! Opens no window and never touches the physical GPU.
-use plumb::draw::{Chip, FilterBar, Mark, Painter, Scene, Theme, View};
+use plumb::draw::{Chip, FilterBar, MapView, Mark, Painter, Scene, Theme, View};
 use plumb::gfx::Gfx;
 use plumb::layout::{Layout, CHIP_W};
 use plumb_core::rows::RowModel;
@@ -57,10 +57,16 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         adapter: "WARP",
         banner: None,
         filter,
+        map: None,
     };
-    let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
-    Painter::new(&gfx).unwrap().paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
-    let cpu = bitmap(&gfx, D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW);
+    render_scene(&gfx, &scene, &format!("plumb-{}{}", if dark { "dark" } else { "light" }, if filter.error { "-error" } else { "" }))
+}
+
+/// Paints `scene` into an offscreen bitmap and returns its BGRA pixels; `PLUMB_SHOT_DIR=<dir>` keeps them as `<stem>.png`.
+fn render_scene(gfx: &Gfx, scene: &Scene, stem: &str) -> Vec<u8> {
+    let target = bitmap(gfx, D2D1_BITMAP_OPTIONS_TARGET);
+    Painter::new(gfx).unwrap().paint(gfx, &target, 96.0, 0.0, scene).expect("EndDraw");
+    let cpu = bitmap(gfx, D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW);
     unsafe {
         cpu.CopyFromBitmap(None, &target, None).unwrap();
         let m = cpu.Map(D2D1_MAP_OPTIONS_READ).unwrap();
@@ -69,10 +75,8 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
             out.extend_from_slice(std::slice::from_raw_parts(m.bits.add(y * m.pitch as usize), W as usize * 4));
         }
         cpu.Unmap().unwrap();
-        // PLUMB_SHOT_DIR=<dir> keeps the frames as PNGs.
         if let Some(dir) = std::env::var_os("PLUMB_SHOT_DIR") {
-            let name = format!("plumb-{}{}.png", if dark { "dark" } else { "light" }, if filter.error { "-error" } else { "" });
-            write_png(&std::path::Path::new(&dir).join(name), &out);
+            write_png(&std::path::Path::new(&dir).join(format!("{stem}.png")), &out);
         }
         out
     }
@@ -193,5 +197,57 @@ fn the_filter_strip_draws_and_an_invalid_pattern_tints_the_box() {
         assert_eq!(pixel(&ok, 3, y), col(t.bg), "bar (dark={dark})");
         assert_eq!(pixel(&ok, x, y), col(t.panel), "box (dark={dark})");
         assert_eq!(pixel(&bad, x, y), col(t.error), "error tint (dark={dark})");
+    }
+}
+
+fn rgb_at(buf: &[u8], x: u32, y: u32) -> [i32; 3] {
+    let i = ((y * W + x) * 4) as usize;
+    [buf[i + 2] as i32, buf[i + 1] as i32, buf[i] as i32]
+}
+
+fn expect(c: windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F) -> [i32; 3] {
+    [(c.r * 255.0).round() as i32, (c.g * 255.0).round() as i32, (c.b * 255.0).round() as i32]
+}
+
+#[test]
+fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
+    use plumb_core::treemap::{layout as map_layout, Kind};
+    for dark in [true, false] {
+        let gfx = Gfx::warp().expect("WARP device");
+        let mut b = plumb_core::TreeBuilder::new();
+        let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+        b.push_str(root, "movie.mp4", 900_000, plumb_core::NodeFlags::empty());
+        b.push_str(root, "song.flac", 400_000, plumb_core::NodeFlags::empty());
+        b.push_str(root, "notes.txt", 100_000, plumb_core::NodeFlags::empty());
+        let tree = b.finish().unwrap();
+        let model = RowModel::new(&tree);
+        let mut layout = Layout::new(W as f32, H as f32);
+        layout.map_on = true;
+        let area = layout.map().expect("800 DIPs is wide enough");
+        let tiles = map_layout(&tree, root, area, 1.0);
+        let theme = Theme::new(dark);
+        let video = tiles.iter().position(|t| t.kind == Kind::File && t.bytes == 900_000).unwrap();
+        let plain = tiles.iter().position(|t| t.kind == Kind::File && t.bytes == 100_000).unwrap();
+        let shoot = |selected: Option<usize>, stem: &str| {
+            let scene = Scene {
+                layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
+                view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None }),
+                message: "", status: "", adapter: "WARP", banner: None, filter: FilterBar::default(),
+                map: Some(MapView { tiles: &tiles, selected, hover: None, classes: [true; 10] }),
+            };
+            render_scene(&gfx, &scene, stem)
+        };
+        let stem = if dark { "plumb-map-dark" } else { "plumb-map-light" };
+        let (picked, plain_shot) = (shoot(Some(plain), stem), shoot(None, "plumb-map-unselected"));
+        // Tile edges fall between pixels, so outlines are compared against a frame without one, not against a colour.
+        let mid = |i: usize| { let r = tiles[i].rect; ((r.x + r.w / 2.0) as u32, (r.y + r.h / 2.0) as u32) };
+        let (vx, vy) = mid(video);
+        let want = expect(theme.class[plumb_core::treemap::Class::Video.index()]);
+        assert!(rgb_at(&picked, vx, vy).iter().zip(want).all(|(x, y)| (x - y).abs() <= 2), "{dark}: the video tile is in its class colour");
+        let r = tiles[plain].rect;
+        let (ex, ey) = (r.x as u32 + 1, (r.y + r.h / 2.0) as u32);
+        assert_ne!(rgb_at(&picked, ex, ey), rgb_at(&plain_shot, ex, ey), "{dark}: the selected tile gets an outline");
+        let (cx, cy) = mid(plain);
+        assert_eq!(rgb_at(&picked, cx, cy), rgb_at(&plain_shot, cx, cy), "{dark}: its inside is untouched");
     }
 }
