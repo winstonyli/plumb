@@ -66,18 +66,25 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
 fn render_scene(gfx: &Gfx, scene: &Scene, stem: &str) -> Vec<u8> {
     let target = bitmap(gfx, D2D1_BITMAP_OPTIONS_TARGET);
     Painter::new(gfx).unwrap().paint(gfx, &target, 96.0, 0.0, scene).expect("EndDraw");
+    let out = read_back(gfx, &target);
+    // PLUMB_SHOT_DIR=<dir> keeps the frames as PNGs.
+    if let Some(dir) = std::env::var_os("PLUMB_SHOT_DIR") {
+        write_png(&std::path::Path::new(&dir).join(format!("{stem}.png")), &out);
+    }
+    out
+}
+
+/// The BGRA pixels of `target`.
+fn read_back(gfx: &Gfx, target: &ID2D1Bitmap1) -> Vec<u8> {
     let cpu = bitmap(gfx, D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW);
     unsafe {
-        cpu.CopyFromBitmap(None, &target, None).unwrap();
+        cpu.CopyFromBitmap(None, target, None).unwrap();
         let m = cpu.Map(D2D1_MAP_OPTIONS_READ).unwrap();
         let mut out = Vec::with_capacity((W * H * 4) as usize);
         for y in 0..H as usize {
             out.extend_from_slice(std::slice::from_raw_parts(m.bits.add(y * m.pitch as usize), W as usize * 4));
         }
         cpu.Unmap().unwrap();
-        if let Some(dir) = std::env::var_os("PLUMB_SHOT_DIR") {
-            write_png(&std::path::Path::new(&dir).join(format!("{stem}.png")), &out);
-        }
         out
     }
 }
@@ -233,7 +240,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None }),
                 message: "", status: "", adapter: "WARP", banner: None, filter: FilterBar::default(),
-                map: Some(MapView { tiles: &tiles, selected, hover: None, classes: [true; 10] }),
+                map: Some(MapView { tiles: &tiles, generation: 1, selected, hover: None, classes: [true; 10] }),
             };
             render_scene(&gfx, &scene, stem)
         };
@@ -250,4 +257,40 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
         let (cx, cy) = mid(plain);
         assert_eq!(rgb_at(&picked, cx, cy), rgb_at(&plain_shot, cx, cy), "{dark}: its inside is untouched");
     }
+}
+
+#[test]
+fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
+    use plumb_core::treemap::layout as map_layout;
+    let gfx = Gfx::warp().expect("WARP device");
+    let mut b = plumb_core::TreeBuilder::new();
+    let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+    for (i, size) in [900_000u64, 400_000, 100_000, 50_000].into_iter().enumerate() {
+        b.push_str(root, &format!("f{i}.mp4"), size, plumb_core::NodeFlags::empty());
+    }
+    let tree = b.finish().unwrap();
+    let mut layout = Layout::new(W as f32, H as f32);
+    layout.map_on = true;
+    let tiles = map_layout(&tree, root, layout.map().unwrap(), 1.0);
+    let painter = Painter::new(&gfx).unwrap();
+    let frame = |generation: u64, selected: Option<usize>| {
+        let scene = Scene {
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
+            view: None, message: "", status: "", adapter: "WARP", banner: None, filter: FilterBar::default(),
+            map: Some(MapView { tiles: &tiles, generation, selected, hover: None, classes: [true; 10] }),
+        };
+        let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
+        painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
+        read_back(&gfx, &target)
+    };
+    let first = frame(7, None);
+    assert_eq!(painter.map_builds(), 1);
+    let second = frame(7, None);
+    assert_eq!(painter.map_builds(), 1, "same generation: the tiles are not drawn again");
+    assert!(first == second, "the cached frame is pixel-identical to the one that built it");
+    let picked = frame(7, Some(1));
+    assert_eq!(painter.map_builds(), 1, "a selection change only redraws the outline");
+    assert!(first != picked);
+    frame(8, None);
+    assert_eq!(painter.map_builds(), 2, "a new generation redraws the tiles");
 }

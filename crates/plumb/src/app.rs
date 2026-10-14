@@ -177,6 +177,8 @@ pub struct App {
     /// Root and rectangle/scale bits the tiles were built for.
     map_key: Option<(NodeId, [u32; 5])>,
     map_dirty: bool,
+    /// Bumped whenever `map_tiles` is rebuilt, so the painter knows its cached bitmap is stale.
+    map_gen: u64,
     map_classes: [bool; 10],
     /// The tile under the pointer.
     pub map_hover: Option<usize>,
@@ -191,7 +193,7 @@ impl App {
         Self {
             layout, drives, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
-            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_classes: [false; 10], map_hover: None, map_drag: None,
+            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_classes: [false; 10], map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
     }
@@ -630,6 +632,7 @@ impl App {
             self.map_classes[t.class.index()] = true;
         }
         (self.map_key, self.map_dirty, self.map_hover) = (Some(key), false, None);
+        self.map_gen += 1;
     }
 
     pub fn map_tiles(&self) -> &[Tile] {
@@ -797,7 +800,7 @@ impl App {
             (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher() }),
             _ => None,
         };
-        let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, selected: self.map_selected_tile(), hover: self.map_hover, classes: self.map_classes });
+        let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, selected: self.map_selected_tile(), hover: self.map_hover, classes: self.map_classes });
         f(&Scene {
             layout: self.layout.with_cancel(self.cancelable()),
             theme: Theme::new(dark),

@@ -6,14 +6,14 @@ use plumb_core::filter::Matcher;
 use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, MAP_BTN_W, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::treemap::{Class, Kind, Tile};
 use plumb_core::rows::RowModel;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use plumb_core::{NodeFlags, Tree};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{
@@ -42,6 +42,8 @@ fn rc(r: Rect) -> D2D_RECT_F {
 
 #[derive(Clone, Copy)]
 pub struct Theme {
+    /// Which of the two palettes this is (a cache key: colours are not comparable).
+    pub dark: bool,
     pub bg: D2D1_COLOR_F,
     pub panel: D2D1_COLOR_F,
     pub fg: D2D1_COLOR_F,
@@ -65,6 +67,7 @@ impl Theme {
     pub fn new(dark: bool) -> Self {
         if dark {
             Self {
+                dark: true,
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
                 accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
                 hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
@@ -72,6 +75,7 @@ impl Theme {
             }
         } else {
             Self {
+                dark: false,
                 bg: rgb(0xffffff), panel: rgb(0xf0f0f0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
                 accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), bound: rgb(0xf0b860), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
                 hover: rgb(0xedf3fc), folder: rgb(0xd09a2a),
@@ -135,6 +139,8 @@ pub struct View<'a> {
 /// The treemap pane's content: tiles from `plumb_core::treemap`, plus what is drawn over them.
 pub struct MapView<'a> {
     pub tiles: &'a [Tile],
+    /// Changes whenever `tiles` does: the tiles are drawn into a cached bitmap once per generation.
+    pub generation: u64,
     /// Index of the tile of the selected node, if it has one.
     pub selected: Option<usize>,
     /// Index of the tile under the pointer.
@@ -175,6 +181,21 @@ pub struct Painter {
     /// Shell icons by (extension key, folder, open, large). Device bitmaps, so
     /// they live and die with the painter.
     icons: RefCell<HashMap<(String, bool, bool, bool), ID2D1Bitmap1>>,
+    /// The map's tiles, drawn once per (generation, size, scale, palette) and blitted every frame.
+    map_cache: RefCell<Option<MapCache>>,
+    map_builds: Cell<usize>,
+}
+
+struct MapCache {
+    bitmap: ID2D1Bitmap1,
+    key: (u64, u32, u32, u32, bool),
+}
+
+/// Where the map's tile area sits in physical pixels: whole-pixel origin and size, so the cached
+/// bitmap blits 1:1 without blurring. Returns (x, y, w, h).
+fn map_pixels(area: Rect, dpi: f32) -> (f32, f32, u32, u32) {
+    let s = dpi / 96.0;
+    ((area.x * s).round(), (area.y * s).round(), (area.w * s).ceil().max(1.0) as u32, (area.h * s).ceil().max(1.0) as u32)
 }
 
 const ICON_CACHE_MAX: usize = 512;
@@ -208,6 +229,8 @@ impl Painter {
             // Windows' icon font (Segoe MDL2 Assets): one glyph per button.
             glyph: make(w!("Segoe MDL2 Assets"), 14.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
             icons: RefCell::default(),
+            map_cache: RefCell::default(),
+            map_builds: Cell::new(0),
         })
     }
 
@@ -228,18 +251,72 @@ impl Painter {
     /// (the part of a maximized window's client area that overhangs the screen).
     pub fn paint(&self, gfx: &Gfx, target: &ID2D1Bitmap1, dpi: f32, inset: f32, scene: &Scene) -> Result<()> {
         let ctx = &gfx.d2d;
+        self.refresh_map_cache(gfx, scene, dpi)?;
         unsafe {
             ctx.SetTarget(target);
             ctx.SetDpi(dpi, dpi);
             ctx.BeginDraw();
             ctx.SetTransform(&windows_numerics::Matrix3x2::translation(0.0, inset));
             let brush = ctx.CreateSolidColorBrush(&scene.theme.bg, None)?;
-            Pen { gfx, brush, painter: self, large: dpi >= 144.0 }.draw(scene);
+            Pen { gfx, brush, painter: self, large: dpi >= 144.0, dpi }.draw(scene);
             ctx.SetTransform(&windows_numerics::Matrix3x2::identity());
             let r = ctx.EndDraw(None, None);
             ctx.SetTarget(None);
             r
         }
+    }
+}
+
+impl Painter {
+    /// How many times the map's tiles have been drawn into the cache (for tests).
+    pub fn map_builds(&self) -> usize {
+        self.map_builds.get()
+    }
+
+    /// Draws the map's tiles into the cached bitmap unless it already holds this generation at this size, scale and palette.
+    fn refresh_map_cache(&self, gfx: &Gfx, scene: &Scene, dpi: f32) -> Result<()> {
+        let (Some(m), Some(area)) = (&scene.map, scene.layout.map()) else {
+            *self.map_cache.borrow_mut() = None;
+            return Ok(());
+        };
+        let (ox, oy, w, h) = map_pixels(area, dpi);
+        let key = (m.generation, w, h, dpi.to_bits(), scene.theme.dark);
+        if m.tiles.is_empty() {
+            *self.map_cache.borrow_mut() = None;
+            return Ok(());
+        }
+        if self.map_cache.borrow().as_ref().is_some_and(|c| c.key == key) {
+            return Ok(());
+        }
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: dpi,
+            dpiY: dpi,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
+            colorContext: std::mem::ManuallyDrop::new(None),
+        };
+        let ctx = &gfx.d2d;
+        unsafe {
+            let bitmap = ctx.CreateBitmap(D2D_SIZE_U { width: w, height: h }, None, 0, &props)?;
+            ctx.SetTarget(&bitmap);
+            ctx.SetDpi(dpi, dpi);
+            ctx.BeginDraw();
+            ctx.Clear(None);
+            let s = dpi / 96.0;
+            ctx.SetTransform(&windows_numerics::Matrix3x2::translation(-ox / s, -oy / s));
+            let brush = ctx.CreateSolidColorBrush(&scene.theme.bg, None)?;
+            let pen = Pen { gfx, brush, painter: self, large: false, dpi };
+            for tile in m.tiles {
+                pen.tile(tile, &scene.theme);
+            }
+            ctx.SetTransform(&windows_numerics::Matrix3x2::identity());
+            let r = ctx.EndDraw(None, None);
+            ctx.SetTarget(None);
+            r?;
+            *self.map_cache.borrow_mut() = Some(MapCache { bitmap, key });
+        }
+        self.map_builds.set(self.map_builds.get() + 1);
+        Ok(())
     }
 }
 
@@ -249,6 +326,8 @@ struct Pen<'a> {
     painter: &'a Painter,
     /// Fetch the 32-pixel shell icons (drawn at 16 DIPs) rather than the 16-pixel ones.
     large: bool,
+    /// The scale this frame is drawn at.
+    dpi: f32,
 }
 
 impl Pen<'_> {
@@ -441,8 +520,11 @@ impl Pen<'_> {
         self.fill(pane, if s.view.is_some() { t.bg } else { t.panel }); // blank until there is a tree
         let Some(m) = &s.map else { return };
         unsafe { self.gfx.d2d.PushAxisAlignedClip(&rc(area), D2D1_ANTIALIAS_MODE_ALIASED) };
-        for tile in m.tiles {
-            self.tile(tile, t);
+        if let Some(c) = self.painter.map_cache.borrow().as_ref() {
+            let k = self.dpi / 96.0;
+            let (ox, oy, w, h) = map_pixels(area, self.dpi);
+            let dest = D2D_RECT_F { left: ox / k, top: oy / k, right: (ox + w as f32) / k, bottom: (oy + h as f32) / k };
+            unsafe { self.gfx.d2d.DrawBitmap(&c.bitmap, Some(&dest), 1.0, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, None, None) };
         }
         if let Some(h) = m.hover.and_then(|i| m.tiles.get(i)).filter(|_| m.hover != m.selected) {
             self.frame(h.rect, D2D1_COLOR_F { a: 0.85, ..t.fg });
