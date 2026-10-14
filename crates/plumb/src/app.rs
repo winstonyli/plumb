@@ -5,10 +5,11 @@ mod filter;
 use crate::draw::{Chip, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{Hit, Layout, Rect, CHIP_PAD, CHIP_W, INDENT, PICKER_H};
+use crate::layout::{Hit, Layout, Rect, CHIP_PAD, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
 use crate::restore::Snapshot;
-use crate::state::{Sort, State};
+use crate::state::{MapState, Sort, State};
 use plumb_core::rows::{Key, RowModel, SortKey};
+use plumb_core::treemap::{self, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
 
 pub use filter::FilterJob;
@@ -75,6 +76,8 @@ pub enum Input {
     Tab,
     /// The mouse moved with no button held (or left the window: any point outside the rows).
     Hover(f32, f32),
+    /// Ctrl+M or the status bar button: show or hide the map pane.
+    ToggleMap,
 }
 
 #[derive(Debug, PartialEq)]
@@ -92,6 +95,14 @@ pub enum Effect {
     Filter,
     /// Stop the scan in flight.
     Cancel,
+}
+
+/// A map tile's tooltip: the path and size of what it stands for, or what a `Rest` tile holds.
+fn tile_tip(tree: &Tree, t: &Tile) -> String {
+    match t.kind {
+        Kind::Rest => format!("{} smaller items, {}", fmt::count(t.count as u64), fmt::size(t.bytes)),
+        _ => format!("{}  ({})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes)),
+    }
 }
 
 /// The sort each header column stands for; "% of parent" orders by size.
@@ -158,6 +169,19 @@ pub struct App {
     grab: Option<f32>,
     /// While dragging a column edge: the column, and the pointer x and column width at the start.
     col_drag: Option<(usize, f32, f32)>,
+    /// The folder the map shows; follows the tree's selection (see `follow_selection`).
+    map_root: Option<NodeId>,
+    /// The selection `map_root` was last chosen for: a change the map made itself is recorded here so it is not mistaken for one made in the tree.
+    map_seen: Option<NodeId>,
+    map_tiles: Vec<Tile>,
+    /// Root and rectangle/scale bits the tiles were built for.
+    map_key: Option<(NodeId, [u32; 5])>,
+    map_dirty: bool,
+    map_classes: [bool; 10],
+    /// The tile under the pointer.
+    pub map_hover: Option<usize>,
+    /// While dragging the divider: the pointer x and the pane width at the start.
+    map_drag: Option<(f32, f32)>,
     filter: filter::Filter,
 }
 
@@ -167,6 +191,7 @@ impl App {
         Self {
             layout, drives, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
+            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_classes: [false; 10], map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
     }
@@ -191,12 +216,16 @@ impl App {
                 self.layout.set_col_w(i + 1, w);
             }
         }
+        self.layout.map_on = s.map.visible;
+        if s.map.width.is_finite() {
+            self.layout.map_w = s.map.width.clamp(MAP_MIN_W, 4000.0);
+        }
     }
 
     /// The part of the remembered state the app owns; the window fills in its placement.
     pub fn remembered(&self) -> State {
         let (column, descending) = self.sort;
-        State { window: None, columns: Some(self.layout.col_w), sort: Some(Sort { column, descending }), map: Default::default() }
+        State { window: None, columns: Some(self.layout.col_w), sort: Some(Sort { column, descending }), map: MapState { visible: self.layout.map_on, width: self.layout.map_w } }
     }
 
     /// Exchanges the per-drive state with `p`. The result is consistent on its own (banner and
@@ -215,6 +244,7 @@ impl App {
         swap(&mut self.filter.ui, &mut p.filter.ui); // the query text belongs to the window
         self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable());
         self.set_scroll(self.scroll);
+        self.map_reset();
     }
 
     /// Puts another drive on screen: the outgoing rows lose the filter so they come back whole, and
@@ -234,10 +264,12 @@ impl App {
         self.model = None;
         self.scroll = 0;
         self.preview_paused = false;
+        self.map_reset();
     }
 
     pub fn begin_scan(&mut self, drive: usize) {
         self.filter_reset();
+        self.map_reset();
         self.active = Some(drive);
         self.tree = None;
         self.model = None;
@@ -258,6 +290,7 @@ impl App {
     /// Installs a finished tree. The root is expanded and selected so there is something to see.
     pub fn finish_scan(&mut self, tree: Tree, summary: String) {
         self.filter_reset();
+        self.map_reset();
         let mut model = RowModel::new(&tree);
         model.set_sort(&tree, sort_key(self.sort.0), self.sort.1);
         if let Some(r) = model.rows().first().map(|r| r.id) {
@@ -278,6 +311,7 @@ impl App {
     /// the progress line keeps counting.
     pub fn preview_installed(&mut self) {
         self.filter_reset();
+        self.map_reset();
         self.scroll = 0;
         self.model = None;
         let Some(tree) = &mut self.tree else { return };
@@ -301,6 +335,7 @@ impl App {
             (Some(t), Some(m)) => Some(Snapshot::take(t, m, self.scroll)),
             _ => None,
         };
+        self.map_reset();
         let Some(snap) = kept else { return self.finish_scan(tree, summary) };
         let (model, scroll) = snap.apply(&tree, sort_key(self.sort.0), self.sort.1, self.layout.rows_visible());
         self.tree = Some(tree);
@@ -321,6 +356,7 @@ impl App {
             let s = m.refresh(t, self.scroll);
             self.set_scroll(s);
         }
+        self.map_dirty = true;
     }
 
     pub fn set_live(&mut self, live: LiveStatus) {
@@ -349,6 +385,7 @@ impl App {
             self.model = None;
             self.preview_paused = false;
             self.scan = Scan::Cancelled;
+            self.map_reset();
         }
         self.refreshing = false;
     }
@@ -358,6 +395,7 @@ impl App {
         self.model = None;
         self.preview_paused = false;
         self.scan = Scan::Failed(msg);
+        self.map_reset();
     }
 
     fn total_rows(&self) -> usize {
@@ -382,7 +420,9 @@ impl App {
 
     /// Whether the pointer is on a column edge in the header (or one is being dragged), for the resize cursor.
     pub fn over_divider(&self, x: f32, y: f32) -> bool {
-        self.col_drag.is_some() || matches!(self.layout.hit(x, y, self.drives.len()), Hit::Divider(_))
+        self.col_drag.is_some()
+            || self.map_drag.is_some()
+            || matches!(self.layout.hit(x, y, self.drives.len()), Hit::Divider(_) | Hit::MapDivider)
     }
 
     /// The button at (x, y), if there is one there, with its tooltip: an icon button carries no label, and a
@@ -400,12 +440,16 @@ impl App {
             Hit::Rescan => Some((l.rescan_button(), "Rescan".into())),
             Hit::Cancel => Some((l.cancel_button(), "Cancel scan".into())),
             Hit::FilterRegex => Some((l.filter_regex(), "Regular expression".into())),
+            Hit::MapButton => Some((l.map_button(), "Show or hide the map  (Ctrl+M)".into())),
             _ => None,
         }
     }
 
     pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
-        self.button_at(x, y).map(|b| b.1)
+        self.button_at(x, y).map(|b| b.1).or_else(|| {
+            let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map))?)?;
+            Some(tile_tip(self.tree.as_ref()?, t))
+        })
     }
 
     /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
@@ -461,12 +505,23 @@ impl App {
                     _ => None,
                 };
                 self.hot = self.button_at(x, y).map(|b| b.0);
+                self.map_hover = if matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map) { treemap::hit(&self.map_tiles, x, y) } else { None };
             }
+            Input::ToggleMap => self.layout.map_on = !self.layout.map_on,
             Input::Click(x, y) => return self.click(x, y),
             // Windows sends the second press of a quick pair as a double-click instead of a click, so
             // anywhere but a row it must act as a click, or the second press of a header, button or
             // scrollbar would be lost.
             Input::DoubleClick(x, y) => {
+                if matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map) {
+                    if let Some(id) = treemap::hit(&self.map_tiles, x, y).and_then(|i| self.select_from_map(i))
+                        && self.tree.as_ref().is_some_and(|t| t.flags[id].contains(NodeFlags::DIR))
+                    {
+                        self.map_root = Some(id);
+                        self.map_dirty = true;
+                    }
+                    return Effect::None;
+                }
                 let Hit::Row(i) = self.layout.hit(x, y, self.drives.len()) else {
                     return self.click(x, y);
                 };
@@ -481,10 +536,15 @@ impl App {
             }
             Input::RightClick(x, y) => {
                 if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len())
-                    && let (Some(id), Some(m)) = (self.row_at(i), &mut self.model) {
-                        m.select(id);
-                        return Effect::Menu(id);
-                    }
+                    && let (Some(id), Some(m)) = (self.row_at(i), &mut self.model)
+                {
+                    m.select(id);
+                    return Effect::Menu(id);
+                } else if matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map)
+                    && let Some(id) = treemap::hit(&self.map_tiles, x, y).and_then(|i| self.select_from_map(i))
+                {
+                    return Effect::Menu(id);
+                }
             }
             Input::Drag(x, y) => {
                 if let Some((c, x0, w0)) = self.col_drag {
@@ -493,14 +553,97 @@ impl App {
                 } else if let Some(g) = self.grab {
                     let s = self.layout.scroll_for_thumb_y(self.total_rows(), y - g);
                     self.set_scroll(s);
+                } else if let Some((x0, w0)) = self.map_drag {
+                    self.layout.set_map_w(w0 + x0 - x);
                 }
             }
             Input::Release => {
                 self.grab = None;
                 self.col_drag = None;
+                self.map_drag = None;
             }
         }
         Effect::None
+    }
+
+    /// Points the map at the folder for the tree's current selection, unless the map made that selection itself
+    /// (`select_from_map` records it in `map_seen`). Runs from `update_map`, so every way the selection can change
+    /// (mouse, keys, the filter, a rescan) is picked up before the next paint without hooking each one.
+    fn follow_selection(&mut self) {
+        let sel = self.model.as_ref().and_then(|m| m.selected());
+        if sel == self.map_seen && self.map_root.is_some() == self.tree.is_some() {
+            return;
+        }
+        self.map_seen = sel;
+        self.map_root = self.tree.as_ref().and_then(|t| treemap::root_for(t, sel));
+        self.map_dirty = true;
+    }
+
+    /// The tree was replaced, so every remembered id is meaningless.
+    fn map_reset(&mut self) {
+        self.map_seen = None;
+        self.map_root = None;
+        self.map_dirty = true;
+        self.map_hover = None;
+    }
+
+    /// Selects the node of map tile `i` (not `Rest`, which has none) and brings its row into view; the map root stays.
+    fn select_from_map(&mut self, i: usize) -> Option<NodeId> {
+        let t = *self.map_tiles.get(i)?;
+        if t.kind == Kind::Rest {
+            return None;
+        }
+        let (tree, m) = (self.tree.as_ref()?, self.model.as_mut()?);
+        m.reveal(tree, t.node);
+        self.map_seen = Some(t.node);
+        let s = m.scroll_to_selected(self.scroll, self.layout.rows_visible());
+        self.set_scroll(s);
+        Some(t.node)
+    }
+
+    /// Whether `map_root` still names a live node of the current tree.
+    fn live_map_root(&self) -> Option<NodeId> {
+        let t = self.tree.as_ref()?;
+        let sel = self.model.as_ref().and_then(|m| m.selected());
+        self.map_root.filter(|&r| r.idx() < t.len() && !t.flags[r].contains(NodeFlags::DEAD)).or_else(|| treemap::root_for(t, sel))
+    }
+
+    /// Rebuilds the tiles if the tree, the root, the pane's rectangle or the scale changed since they were built.
+    /// `px` is the size of one physical pixel in DIPs (`96 / dpi`). Call before painting.
+    pub fn update_map(&mut self, px: f32) {
+        self.follow_selection();
+        let (rect, root) = (self.layout.map(), self.live_map_root());
+        let (Some(tree), Some(rect), Some(root)) = (&self.tree, rect, root) else {
+            self.map_tiles.clear();
+            self.map_key = None;
+            self.map_classes = [false; 10];
+            self.map_hover = None;
+            return;
+        };
+        let key = (root, [rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits(), px.to_bits()]);
+        if !self.map_dirty && self.map_key == Some(key) {
+            return;
+        }
+        self.map_tiles = treemap::layout(tree, root, rect, px);
+        self.map_classes = [false; 10];
+        for t in self.map_tiles.iter().filter(|t| t.kind == Kind::File) {
+            self.map_classes[t.class.index()] = true;
+        }
+        (self.map_key, self.map_dirty, self.map_hover) = (Some(key), false, None);
+    }
+
+    pub fn map_tiles(&self) -> &[Tile] {
+        &self.map_tiles
+    }
+
+    pub fn map_classes(&self) -> [bool; 10] {
+        self.map_classes
+    }
+
+    /// The tile of the selected node, if it has one (a node inside a `Rest` tile has none).
+    pub fn map_selected_tile(&self) -> Option<usize> {
+        let sel = self.model.as_ref()?.selected()?;
+        self.map_tiles.iter().position(|t| t.node == sel && t.kind != Kind::Rest)
     }
 
     fn click(&mut self, x: f32, y: f32) -> Effect {
@@ -542,6 +685,13 @@ impl App {
                 }
             }
             Hit::Divider(c) => self.col_drag = Some((c, x, self.layout.col_w[c - 1])),
+            Hit::MapButton => self.layout.map_on = !self.layout.map_on,
+            Hit::MapDivider => self.map_drag = Some((x, self.layout.map_w)),
+            Hit::Map => {
+                if let Some(i) = treemap::hit(&self.map_tiles, x, y) {
+                    self.select_from_map(i);
+                }
+            }
             Hit::Row(i) => {
                 let folder = self.icon_at(i, x);
                 if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
@@ -1145,5 +1295,140 @@ mod tests {
         a.scroll = 5;
         a.handle(Input::Resize(800.0, 2000.0));
         assert_eq!(a.scroll, 0);
+    }
+
+    fn with_map() -> App {
+        let mut a = scanned();
+        a.layout.map_on = true;
+        a.update_map(1.0);
+        a
+    }
+
+    fn centre(t: &treemap::Tile) -> (f32, f32) {
+        (t.rect.x + t.rect.w / 2.0, t.rect.y + t.rect.h / 2.0)
+    }
+
+    #[test]
+    fn the_map_follows_the_trees_selection_and_ignores_its_own_clicks() {
+        let mut a = with_map();
+        assert_eq!(a.map_root, Some(NodeId(0)));
+        a.handle(Input::Click(20.0, row_y(1)));
+        a.update_map(1.0); // the hook that notices the selection moved
+        let sel = a.model.as_ref().unwrap().selected();
+        assert_eq!(a.map_root, treemap::root_for(a.tree.as_ref().unwrap(), sel), "a click in the tree re-roots the map");
+        let (i, t) = a.map_tiles().iter().copied().enumerate().find(|(_, t)| t.kind == Kind::File).unwrap();
+        let before = a.map_root;
+        let (x, y) = centre(&t);
+        a.handle(Input::Click(x, y));
+        a.update_map(1.0);
+        assert_eq!(a.model.as_ref().unwrap().selected(), Some(t.node));
+        assert_eq!(a.map_root, before, "a click on the map keeps the root");
+        assert_eq!(a.map_selected_tile(), Some(i));
+        assert!(a.model.as_ref().unwrap().selected_index().is_some(), "its row is revealed in the tree");
+    }
+
+    #[test]
+    fn double_clicking_a_folder_tile_roots_the_map_there() {
+        let mut a = with_map();
+        let t = a.map_tiles().iter().copied().find(|t| t.kind == Kind::Frame).unwrap();
+        let (x, y) = (t.rect.x + 0.5, t.rect.y + 0.5); // the frame's border, clear of its children
+        a.handle(Input::Click(x, y));
+        a.handle(Input::DoubleClick(x, y));
+        assert_eq!(a.map_root, Some(t.node));
+        assert_eq!(a.model.as_ref().unwrap().selected(), Some(t.node));
+        a.update_map(1.0);
+        assert!(a.map_tiles().iter().all(|k| k.depth > 0 || a.tree.as_ref().unwrap().parent[k.node] == t.node || k.kind == Kind::Rest));
+    }
+
+    #[test]
+    fn a_double_click_on_a_file_tile_only_selects_it() {
+        let mut a = with_map();
+        let t = a.map_tiles().iter().copied().find(|t| t.kind == Kind::File).unwrap();
+        let (x, y) = centre(&t);
+        let before = a.map_root;
+        a.handle(Input::DoubleClick(x, y));
+        assert_eq!((a.map_root, a.model.as_ref().unwrap().selected()), (before, Some(t.node)));
+    }
+
+    #[test]
+    fn hovering_a_tile_gives_a_tip_and_leaving_the_map_clears_it() {
+        let mut a = with_map();
+        let t = a.map_tiles().iter().copied().find(|t| t.kind == Kind::File).unwrap();
+        let (x, y) = centre(&t);
+        a.handle(Input::Hover(x, y));
+        assert!(a.map_hover.is_some());
+        let tip = a.tip_at(x, y).unwrap();
+        assert!(tip.contains(&a.tree.as_ref().unwrap().name_string(t.node)), "{tip}");
+        a.handle(Input::Hover(5.0, 5.0));
+        assert_eq!((a.map_hover, a.tip_at(5.0, 5.0)), (None, None));
+    }
+
+    #[test]
+    fn a_rest_tile_says_how_many_items_it_holds() {
+        let tree = plumb_core::synth::flat_tree(3);
+        let t = treemap::Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::Rest, bytes: 2048, count: 7 };
+        assert!(tile_tip(&tree, &t).starts_with("7 smaller items, "));
+        let f = treemap::Tile { node: NodeId(1), kind: Kind::File, count: 1, ..t };
+        assert!(tile_tip(&tree, &f).contains(&tree.name_string(NodeId(1))));
+    }
+
+    #[test]
+    fn right_clicking_a_tile_selects_it_and_asks_for_the_menu() {
+        let mut a = with_map();
+        let t = a.map_tiles().iter().copied().find(|t| t.kind == Kind::File).unwrap();
+        let (x, y) = centre(&t);
+        assert_eq!(a.handle(Input::RightClick(x, y)), Effect::Menu(t.node));
+        assert_eq!(a.model.as_ref().unwrap().selected(), Some(t.node));
+    }
+
+    #[test]
+    fn the_toggle_and_the_divider_work_and_stay_within_limits() {
+        let mut a = scanned();
+        assert!(!a.layout.map_on);
+        a.handle(Input::ToggleMap);
+        assert!(a.layout.map_on);
+        let b = a.layout.map_button();
+        a.handle(Input::Click(b.x + 2.0, b.y + 2.0));
+        assert!(!a.layout.map_on, "the status bar button toggles too");
+        a.layout.map_on = true;
+        a.layout.set_map_w(200.0); // at 800 DIPs the pane can reach 343: room to grow by 50
+        let (d, w0) = (a.layout.map_divider().unwrap(), a.layout.map_w);
+        assert!(a.over_divider(d.x + 1.0, d.y + 5.0));
+        a.handle(Input::Click(d.x + 1.0, d.y + 5.0));
+        a.handle(Input::Drag(d.x - 49.0, d.y + 5.0));
+        assert_eq!(a.layout.map_w, w0 + 50.0, "dragging left widens the pane");
+        a.handle(Input::Drag(-10_000.0, 0.0));
+        assert!(a.layout.column(0).1 >= crate::layout::MIN_NAME_W, "the tree keeps its minimum");
+        a.handle(Input::Drag(10_000.0, 0.0));
+        assert_eq!(a.layout.map_pane().unwrap().w, crate::layout::MAP_MIN_W, "and the pane keeps its own");
+        a.handle(Input::Release);
+        let before = a.layout.map_w;
+        a.handle(Input::Drag(0.0, 0.0));
+        assert_eq!(a.layout.map_w, before, "released");
+    }
+
+    #[test]
+    fn the_map_survives_a_tree_swap_and_an_emptied_root() {
+        let mut a = with_map();
+        a.swap_tree(kary_builder(50, 3).finish().unwrap(), "again".into());
+        a.update_map(1.0);
+        assert!(a.map_root.is_some() && !a.map_tiles().is_empty());
+        a.begin_scan(1);
+        a.update_map(1.0);
+        assert!(a.map_tiles().is_empty() && a.map_hover.is_none(), "no tree, no tiles");
+    }
+
+    #[test]
+    fn the_map_pane_state_is_remembered() {
+        let mut a = app();
+        a.layout.map_on = false;
+        a.layout.map_w = 300.0;
+        let s = a.remembered();
+        let mut b = app();
+        b.restore(&s);
+        assert_eq!((b.layout.map_on, b.layout.map_w), (false, 300.0));
+        let mut c = app();
+        c.restore(&crate::state::State { map: crate::state::MapState { visible: true, width: f32::NAN }, ..Default::default() });
+        assert!(c.layout.map_on && c.layout.map_w.is_finite() && c.layout.map_w >= crate::layout::MAP_MIN_W);
     }
 }
