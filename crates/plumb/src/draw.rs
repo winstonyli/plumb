@@ -191,6 +191,19 @@ impl Painter {
         })
     }
 
+    /// The width in DIPs of `s` set on one line in the normal text format.
+    pub fn text_width(&self, gfx: &Gfx, s: &str) -> f32 {
+        let u: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let Ok(layout) = gfx.dw.CreateTextLayout(&u, &self.left, 10_000.0, 100.0) else { return 0.0 };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_err() {
+                return 0.0;
+            }
+            m.widthIncludingTrailingWhitespace
+        }
+    }
+
     /// Draws `scene` into `target` (a Direct2D target bitmap) at `dpi`, `inset` DIPs down from its top
     /// (the part of a maximized window's client area that overhangs the screen).
     pub fn paint(&self, gfx: &Gfx, target: &ID2D1Bitmap1, dpi: f32, inset: f32, scene: &Scene) -> Result<()> {
@@ -265,15 +278,7 @@ impl Pen<'_> {
     }
 
     fn text_width(&self, s: &str) -> f32 {
-        let u: Vec<u16> = s.encode_utf16().collect();
-        unsafe {
-            let Ok(layout) = self.gfx.dw.CreateTextLayout(&u, &self.painter.left, 10_000.0, 100.0) else { return 0.0 };
-            let mut m = DWRITE_TEXT_METRICS::default();
-            if layout.GetMetrics(&mut m).is_err() {
-                return 0.0;
-            }
-            m.widthIncludingTrailingWhitespace
-        }
+        self.painter.text_width(self.gfx, s)
     }
 
     fn filter_bar(&self, s: &Scene) {

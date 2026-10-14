@@ -3,7 +3,7 @@
 //! Opens no window and never touches the physical GPU.
 use plumb::draw::{Chip, FilterBar, Mark, Painter, Scene, Theme, View};
 use plumb::gfx::Gfx;
-use plumb::layout::Layout;
+use plumb::layout::{Layout, CHIP_W};
 use plumb_core::rows::RowModel;
 use plumb_core::synth::kary_builder;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
@@ -36,15 +36,16 @@ fn render(dark: bool, error: bool) -> Vec<u8> {
     model.expand(&tree, root);
     model.select(model.rows()[1].id);
     let chips = [Chip { label: "C:  123 GB free".into(), used: 0.7, mark: Mark::Kept }, Chip { label: "D:  1 TB free".into(), used: 0.2, mark: Mark::Scanning }];
-    let layout = Layout { chips: chips.len(), ..Layout::new(W as f32, H as f32) };
+    let layout = Layout { chips: vec![CHIP_W; chips.len()], ..Layout::new(W as f32, H as f32) };
     let found = plumb_core::filter::Query { text: "n1".into(), regex: false }.compile().unwrap();
+    let admin = layout.admin_button();
     let scene = Scene {
         layout,
         theme: Theme::new(dark),
         chips: &chips,
         active_chip: Some(0),
         sort: (1, true),
-        admin: Some(layout.admin_button()),
+        admin: Some(admin),
         hot: None,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref() }),
         message: "",
@@ -152,7 +153,7 @@ fn the_filter_strip_draws_and_an_invalid_pattern_tints_the_box() {
     let to8 = |c: f32| (c * 255.0).round() as u8;
     for dark in [false, true] {
         let t = Theme::new(dark);
-        let l = Layout { chips: 2, ..Layout::new(W as f32, H as f32) };
+        let l = Layout { chips: vec![CHIP_W; 2], ..Layout::new(W as f32, H as f32) };
         let b = l.filter_box();
         // inside the box, well right of the three typed characters and left of the clear button
         let (x, y) = ((b.x + b.w / 2.0) as u32, (b.y + b.h / 2.0) as u32);

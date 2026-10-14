@@ -19,7 +19,10 @@ pub const HEADER_H: f32 = 24.0;
 pub const STATUS_H: f32 = 24.0;
 pub const ROW_H: f32 = 22.0;
 pub const SCROLLBAR_W: f32 = 12.0;
+/// A drive chip's width until its label has been measured (see `App::fit_chips`).
 pub const CHIP_W: f32 = 104.0;
+/// Space either side of a chip's label.
+pub const CHIP_PAD: f32 = 8.0;
 pub const CHIP_GAP: f32 = 8.0;
 /// The icon buttons: administrator (a shield), Rescan (a refresh arrow) and Cancel (a cross).
 pub const ADMIN_W: f32 = 32.0;
@@ -68,7 +71,7 @@ pub enum Hit {
     None,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub w: f32,
     pub h: f32,
@@ -78,13 +81,13 @@ pub struct Layout {
     pub cancel: bool,
     /// Widths of the Size, % of parent and Items columns.
     pub col_w: [f32; 3],
-    /// How many drive chips the picker bar holds, which decides where the filter box starts.
-    pub chips: usize,
+    /// The width of each drive chip, left to right: their sum decides where the filter box starts.
+    pub chips: Vec<f32>,
 }
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false, col_w: COL_W, chips: 0 }
+        Self { w, h, banner: false, cancel: false, col_w: COL_W, chips: Vec::new() }
     }
 
     /// Sets the width of column `c` (1..=3), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
@@ -94,12 +97,13 @@ impl Layout {
         self.col_w[c - 1] = w.clamp(MIN_COL_W, max);
     }
 
-    pub fn with_cancel(self, cancel: bool) -> Self {
-        Self { cancel, ..self }
+
+    pub fn with_cancel(&self, cancel: bool) -> Self {
+        Self { cancel, ..self.clone() }
     }
 
-    pub fn with_banner(self, banner: bool) -> Self {
-        Self { banner, ..self }
+    pub fn with_banner(&self, banner: bool) -> Self {
+        Self { banner, ..self.clone() }
     }
 
     /// Top edge of the header: below the picker bar, and below the banner when there is one.
@@ -117,7 +121,12 @@ impl Layout {
 
     /// Left edge of the filter box: after the drive chips.
     fn filter_left(&self) -> f32 {
-        8.0 + self.chips as f32 * (CHIP_W + CHIP_GAP) + 8.0
+        self.chip_x(self.chips.len()) + 8.0
+    }
+
+    /// Left edge of chip `i` (the end of the last chip, plus a gap, for `i` past it).
+    fn chip_x(&self, i: usize) -> f32 {
+        8.0 + self.chips.iter().take(i).map(|w| w + CHIP_GAP).sum::<f32>()
     }
 
     /// The Regex toggle: at the right end inside the filter box.
@@ -148,7 +157,7 @@ impl Layout {
     }
 
     pub fn chip(&self, i: usize) -> Rect {
-        Rect { x: 8.0 + i as f32 * (CHIP_W + CHIP_GAP), y: 6.0, w: CHIP_W, h: PICKER_H - 12.0 }
+        Rect { x: self.chip_x(i), y: 6.0, w: self.chips.get(i).copied().unwrap_or(CHIP_W), h: PICKER_H - 12.0 }
     }
 
     /// "Run as administrator" (a shield), right-aligned in the picker bar.
@@ -283,8 +292,19 @@ mod tests {
     }
 
     #[test]
+    fn chips_follow_their_own_widths_and_the_filter_starts_after_them() {
+        let l = Layout { chips: vec![60.0, 140.0, 80.0], ..Layout::new(1400.0, 600.0) };
+        assert_eq!((l.chip(0).x, l.chip(0).w), (8.0, 60.0));
+        assert_eq!((l.chip(1).x, l.chip(1).w), (8.0 + 60.0 + CHIP_GAP, 140.0));
+        assert_eq!(l.chip(2).x, 8.0 + 60.0 + 140.0 + 2.0 * CHIP_GAP);
+        assert_eq!(l.hit(l.chip(1).x + 1.0, 10.0, 3), Hit::Chip(1));
+        assert_eq!(l.hit(l.chip(0).x + 61.0, 10.0, 3), Hit::None, "the gap after a narrow chip is not part of the next one");
+        assert!(l.filter_box().x >= l.chip(2).x + 80.0);
+    }
+
+    #[test]
     fn hit_testing() {
-        let l = Layout { chips: 3, ..Layout::new(800.0, 600.0) };
+        let l = Layout { chips: vec![CHIP_W; 3], ..Layout::new(800.0, 600.0) };
         assert_eq!(l.hit(10.0, 10.0, 3), Hit::Chip(0));
         assert_eq!(l.hit(10.0 + 2.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::Chip(2));
         assert_eq!(l.hit(10.0 + 3.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::None);
@@ -333,12 +353,12 @@ mod tests {
 
     #[test]
     fn the_filter_shares_the_picker_bar_and_its_controls_hit() {
-        let l = Layout { chips: 3, ..Layout::new(1400.0, 600.0) };
+        let l = Layout { chips: vec![CHIP_W; 3], ..Layout::new(1400.0, 600.0) };
         assert_eq!(l.header().y, PICKER_H);
         assert!(l.filter_box().x >= l.chip(2).x + CHIP_W, "after the chips");
         assert_eq!(l.filter_box().w, FILTER_BOX_W, "full width when there is room");
         assert!(l.filter_count().x + l.filter_count().w <= l.admin_button().x, "clear of the administrator button");
-        let tight = Layout { chips: 2, ..Layout::new(800.0, 600.0) };
+        let tight = Layout { chips: vec![CHIP_W; 2], ..Layout::new(800.0, 600.0) };
         assert!(tight.filter_box().w >= FILTER_BOX_MIN && tight.filter_box().w < FILTER_BOX_W, "the box shrinks to fit");
         assert!(tight.filter_count().x + tight.filter_count().w <= tight.admin_button().x, "and nothing overlaps");
         let (b, r, c, n) = (l.filter_box(), l.filter_regex(), l.filter_clear(), l.filter_count());

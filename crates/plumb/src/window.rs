@@ -382,6 +382,7 @@ impl Win {
         let layout = Layout::new(pw as f32 * 96.0 / dpi, ph as f32 * 96.0 / dpi);
         let mut app = App::new(layout, drives, gfx.adapter.clone());
         app.can_elevate = !plumb_scan::volume::is_elevated();
+        app.fit_chips(&|s| painter.text_width(&gfx, s));
         let dark = dark_mode();
         let (filter_tx, filter_rx) = channel();
         let win = Self {

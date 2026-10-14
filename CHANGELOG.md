@@ -10,6 +10,8 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 - `plumb`, `plumb-scan`: volumes mounted only on a folder (no drive letter) get a chip, labelled with the folder's name and titled with its full path. A drive is now identified by its root path instead of a letter: `Volume::open` takes a root and opens the volume by its `\\?\Volume{guid}` device path, which replaces `drive_letter` with `is_volume_root` (MFT scan, change journal and the `--scan` argument, now `--scan "D:\Mounts\Data"`, all take it). Not yet tried on a real folder mount (needs an elevated `mountvol`).
 
+- `plumb`: drive chips are as wide as their label (measured once at start with DirectWrite) instead of a fixed 104 px, so a long mount-point name fits and short ones take less room; the filter box starts after the last chip. `Layout.chips` is now the list of chip widths, so `Layout` is no longer `Copy`.
+
 ### Fixed
 - `plumb`: tooltips are dark in dark mode (they were the light native style).
 

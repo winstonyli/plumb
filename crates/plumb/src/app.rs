@@ -5,7 +5,7 @@ mod filter;
 use crate::draw::{Chip, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{Hit, Layout, Rect, INDENT, PICKER_H};
+use crate::layout::{Hit, Layout, Rect, CHIP_PAD, CHIP_W, INDENT, PICKER_H};
 use crate::restore::Snapshot;
 use crate::state::{Sort, State};
 use plumb_core::rows::{Key, RowModel, SortKey};
@@ -163,12 +163,17 @@ pub struct App {
 
 impl App {
     pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
-        let layout = Layout { chips: drives.len(), ..layout };
+        let layout = Layout { chips: vec![CHIP_W; drives.len()], ..layout };
         Self {
             layout, drives, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
+    }
+
+    /// Sizes each chip to its label: `measure` gives a text's width in DIPs.
+    pub fn fit_chips(&mut self, measure: &dyn Fn(&str) -> f32) {
+        self.layout.chips = self.chips().iter().map(|c| (measure(&c.label) + 2.0 * CHIP_PAD).ceil()).collect();
     }
 
     /// The header column the rows are sorted by, and whether descending.
@@ -422,7 +427,7 @@ impl App {
         self.layout.cancel = self.cancelable();
         match input {
             Input::Resize(w, h) => {
-                self.layout = Layout { w, h, ..self.layout };
+                (self.layout.w, self.layout.h) = (w, h);
                 self.set_scroll(self.scroll);
             }
             Input::Wheel(rows) => self.set_scroll((self.scroll as i64 + rows as i64).max(0) as usize),
@@ -681,6 +686,18 @@ mod tests {
         a.begin_scan(0);
         a.finish_scan(kary_builder(300, 3).finish().unwrap(), "done".into());
         a
+    }
+
+    #[test]
+    fn chips_are_sized_to_their_labels() {
+        let mut a = app();
+        a.drives[1].root = "D:\\Mounts\\A long mount name\\".into();
+        a.fit_chips(&|s| s.chars().count() as f32 * 7.0);
+        let w: Vec<f32> = (0..2).map(|i| a.layout.chip(i).w).collect();
+        let labels: Vec<usize> = a.chips().iter().map(|c| c.label.chars().count()).collect();
+        assert_eq!(w, vec![(labels[0] as f32 * 7.0 + 16.0).ceil(), (labels[1] as f32 * 7.0 + 16.0).ceil()]);
+        assert!(w[1] > w[0], "a longer label gets a wider chip");
+        assert_eq!(a.handle(Input::Click(a.layout.chip(1).x + 2.0, 10.0)), Effect::Scan(1), "the wide chip is clickable along its width");
     }
 
     #[test]
