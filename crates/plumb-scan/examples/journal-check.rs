@@ -61,7 +61,8 @@ fn main() {
         std::process::exit(2);
     }
     let letter = std::env::args().nth(1).and_then(|s| s.chars().next()).unwrap_or('C').to_ascii_uppercase();
-    let vol = Volume::open(letter).expect("open volume");
+    let drive = std::path::PathBuf::from(format!("{letter}:\\"));
+    let vol = Volume::open(&drive).expect("open volume");
     let info = vol.query().expect("query journal");
     println!("journal {:#x}, next usn {}", info.id, info.next_usn);
 
@@ -81,7 +82,7 @@ fn main() {
     vol.read(info.next_usn, info.id, false).expect("non-blocking read");
     println!("non-blocking read: {} ms", t.elapsed().as_millis());
 
-    let reader = JournalReader::start(Volume::open(letter).unwrap(), info, JournalConfig::default(), || {});
+    let reader = JournalReader::start(Volume::open(&drive).unwrap(), info, JournalConfig::default(), || {});
     let mut w = Watch { reader, seen: Vec::new() };
 
     let id = std::process::id();

@@ -2,7 +2,7 @@
 //! elevated, the directory walker otherwise, and the walker again if the MFT scan fails.
 
 use crate::mft_scan::MftReport;
-use crate::volume::{MftScanner, drive_letter, is_elevated, is_ntfs};
+use crate::volume::{MftScanner, is_elevated, is_ntfs, is_volume_root};
 use crate::walk::WalkScanner;
 use crate::{Progress, ScanError, Scanner};
 use plumb_core::TreeBuilder;
@@ -27,7 +27,7 @@ pub struct ScanReport {
 /// Scans `root` with the best available scanner.
 pub fn scan_auto(root: &Path, out: &mut TreeBuilder, progress: &Progress) -> Result<ScanReport, ScanError> {
     let mut note = None;
-    if drive_letter(root).is_some() && is_ntfs(root) {
+    if is_volume_root(root) && is_ntfs(root) {
         if is_elevated() {
             match MftScanner::default().scan_with_stats(root, out, progress) {
                 Ok(mft) => return Ok(ScanReport { used: Used::Mft, note: None, mft: Some(mft) }),
@@ -56,9 +56,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn drive_roots_are_recognised() {
-        for (s, want) in [("C:", Some('C')), ("c:\\", Some('C')), ("C:/", Some('C')), ("C:\\Users", None), ("\\\\srv\\share", None), ("1:\\", None), ("", None)] {
-            assert_eq!(drive_letter(Path::new(s)), want, "{s}");
+    fn only_whole_volumes_are_volume_roots() {
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        for s in [system.clone(), format!("{system}\\"), format!("{}\\", system.to_lowercase())] {
+            let device = crate::volume::volume_device(Path::new(&s)).unwrap_or_else(|| panic!("{s} is a volume root"));
+            let text = String::from_utf16_lossy(&device[..device.len() - 1]);
+            assert!(text.starts_with(r"\\?\Volume{") && !text.ends_with('\\'), "{text}");
+        }
+        for s in [format!("{system}\\Windows"), "\\\\srv\\share".into(), "1:\\".into(), String::new()] {
+            assert!(!is_volume_root(Path::new(&s)), "{s}");
         }
     }
 

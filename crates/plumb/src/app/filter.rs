@@ -294,7 +294,7 @@ mod tests {
     }
 
     fn app() -> App {
-        let drives = vec![DriveInfo { letter: 'C', total: 1000, free: 500 }];
+        let drives = vec![DriveInfo { root: "C:\\".into(), total: 1000, free: 500 }];
         let mut a = App::new(Layout::new(800.0, 600.0), drives, "test".into());
         a.begin_scan(0);
         a.finish_scan(tree(), "done".into());

@@ -8,6 +8,8 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 - `plumb`: the status bar leads with the selected row's full path, size and (for a folder) item count.
 - `plumb`: remembers the window rectangle (and maximized state), the Size / % of parent / Items column widths and the sort between runs, in `%LOCALAPPDATA%\plumb\state.toml` (written on exit; delete the file to reset). A missing or damaged file means defaults, and a rectangle on a monitor that is gone is moved onto a present one by Windows. Adds `serde` and `toml` to `plumb`.
 
+- `plumb`, `plumb-scan`: volumes mounted only on a folder (no drive letter) get a chip, labelled with the folder's name and titled with its full path. A drive is now identified by its root path instead of a letter: `Volume::open` takes a root and opens the volume by its `\\?\Volume{guid}` device path, which replaces `drive_letter` with `is_volume_root` (MFT scan, change journal and the `--scan` argument, now `--scan "D:\Mounts\Data"`, all take it). Not yet tried on a real folder mount (needs an elevated `mountvol`).
+
 ### Fixed
 - `plumb`: tooltips are dark in dark mode (they were the light native style).
 

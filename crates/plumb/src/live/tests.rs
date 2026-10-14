@@ -220,11 +220,11 @@ fn rescans_are_rate_limited_per_volume_and_wait_for_the_user_to_go_quiet() {
     let min = |m: u64| Duration::from_secs(60 * m);
     let mut p = RescanPolicy::default();
     // The user was active 10 s ago: not yet.
-    assert!(!p.allow('C', t0 + min(1), t0 + min(1) - Duration::from_secs(10)));
-    assert!(p.allow('C', t0 + min(1), t0));
-    assert!(!p.allow('C', t0 + min(5), t0), "second rescan within ten minutes");
-    assert!(p.allow('D', t0 + min(5), t0), "another volume has its own clock");
-    assert!(p.allow('C', t0 + min(11), t0));
+    assert!(!p.allow("C:\\", t0 + min(1), t0 + min(1) - Duration::from_secs(10)));
+    assert!(p.allow("C:\\", t0 + min(1), t0));
+    assert!(!p.allow("C:\\", t0 + min(5), t0), "second rescan within ten minutes");
+    assert!(p.allow("D:\\", t0 + min(5), t0), "another volume has its own clock");
+    assert!(p.allow("C:\\", t0 + min(11), t0));
 }
 
 /// A tiny xorshift so the oracle below is reproducible.

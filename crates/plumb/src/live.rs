@@ -203,18 +203,18 @@ impl Pacer {
 /// When an automatic rescan may start.
 #[derive(Default)]
 pub struct RescanPolicy {
-    last: HashMap<char, Instant>,
+    last: HashMap<String, Instant>,
 }
 
 impl RescanPolicy {
-    /// True (and recorded) if `drive` has not been rescanned automatically in the last ten
+    /// True (and recorded) if the volume at `root` has not been rescanned automatically in the last ten
     /// minutes and the user has not touched the window in the last 30 seconds.
-    pub fn allow(&mut self, drive: char, now: Instant, last_input: Instant) -> bool {
-        let recent = self.last.get(&drive).is_some_and(|&t| now.duration_since(t) < RESCAN_GAP);
+    pub fn allow(&mut self, root: &str, now: Instant, last_input: Instant) -> bool {
+        let recent = self.last.get(root).is_some_and(|&t| now.duration_since(t) < RESCAN_GAP);
         if recent || now.duration_since(last_input) < INPUT_IDLE {
             return false;
         }
-        self.last.insert(drive, now);
+        self.last.insert(root.to_string(), now);
         true
     }
 }

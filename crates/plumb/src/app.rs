@@ -15,9 +15,23 @@ pub use filter::FilterJob;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DriveInfo {
-    pub letter: char,
+    /// Where the volume is mounted: a drive root like `C:\`, or a folder like `D:\Mounts\Data\`.
+    pub root: String,
     pub total: u64,
     pub free: u64,
+}
+
+impl DriveInfo {
+    /// The root as shown and typed (`--scan`): `C:` or `D:\Mounts\Data`, no trailing backslash.
+    pub fn title(&self) -> &str {
+        self.root.trim_end_matches('\\')
+    }
+
+    /// The chip's label: a drive stays `C:`, a mount-point folder shows its own name.
+    pub fn chip_name(&self) -> &str {
+        let t = self.title();
+        if t.len() == 2 { t } else { t.rsplit('\\').next().unwrap_or(t) }
+    }
 }
 
 #[derive(Default)]
@@ -376,7 +390,7 @@ impl App {
         match l.hit(x, y, self.drives.len()) {
             Hit::Chip(i) => {
                 let d = self.drives.get(i)?;
-                Some((l.chip(i), format!("{}: {} free of {}", d.letter, fmt::size(d.free), fmt::size(d.total))))
+                Some((l.chip(i), format!("{} {} free of {}", d.title(), fmt::size(d.free), fmt::size(d.total))))
             }
             Hit::Rescan => Some((l.rescan_button(), "Rescan".into())),
             Hit::Cancel => Some((l.cancel_button(), "Cancel scan".into())),
@@ -556,7 +570,7 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, d)| Chip {
-                label: format!("{}:  {}", d.letter, fmt::size(d.free)),
+                label: format!("{}  {}", d.chip_name(), fmt::size(d.free)),
                 used: 1.0 - fmt::fraction(d.free, d.total),
                 mark: if self.active == Some(i) { Mark::None } else { self.marks.get(i).copied().unwrap_or_default() },
             })
@@ -567,8 +581,8 @@ impl App {
         match &self.scan {
             Scan::Idle => "Select a drive above to scan it.".into(),
             Scan::Running { drive, dirs, files, bytes } => format!(
-                "Scanning {}:  {} folders, {} files, {}",
-                self.drives[*drive].letter, fmt::count(*dirs), fmt::count(*files), fmt::size(*bytes)
+                "Scanning {}  {} folders, {} files, {}",
+                self.drives[*drive].title(), fmt::count(*dirs), fmt::count(*files), fmt::size(*bytes)
             ),
             Scan::Failed(m) => format!("Scan failed: {m}"),
             Scan::Cancelled => "Scan cancelled. Select a drive above to scan it again.".into(),
@@ -656,8 +670,8 @@ mod tests {
 
     fn app() -> App {
         let drives = vec![
-            DriveInfo { letter: 'C', total: 1000, free: 250 },
-            DriveInfo { letter: 'D', total: 1000, free: 900 },
+            DriveInfo { root: "C:\\".into(), total: 1000, free: 250 },
+            DriveInfo { root: "D:\\".into(), total: 1000, free: 900 },
         ];
         App::new(Layout::new(800.0, 600.0), drives, "test".into())
     }
@@ -667,6 +681,14 @@ mod tests {
         a.begin_scan(0);
         a.finish_scan(kary_builder(300, 3).finish().unwrap(), "done".into());
         a
+    }
+
+    #[test]
+    fn a_mount_point_is_titled_by_its_path_and_chipped_by_its_name() {
+        let drive = |root: &str| DriveInfo { root: root.into(), total: 1, free: 1 };
+        let (c, m) = (drive("C:\\"), drive("D:\\Mounts\\Data\\"));
+        assert_eq!((c.title(), c.chip_name()), ("C:", "C:"));
+        assert_eq!((m.title(), m.chip_name()), ("D:\\Mounts\\Data", "Data"));
     }
 
     /// The status line minus the selection details that lead it.

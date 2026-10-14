@@ -9,7 +9,7 @@
 //! Hard links are deliberately absent: the walker cannot see them.
 
 use plumb_core::{NodeFlags, NodeId, Tree, TreeBuilder};
-use plumb_scan::volume::{MftScanner, drive_letter, is_elevated};
+use plumb_scan::volume::{MftScanner, is_elevated, is_volume_root};
 use plumb_scan::walk::WalkScanner;
 use plumb_scan::{Progress, Scanner};
 use std::collections::BTreeMap;
@@ -96,7 +96,7 @@ fn main() {
     assert!(!fixture.exists(), "{} already exists; pick a new directory", fixture.display());
     let comps: Vec<String> = fixture.components().filter_map(|c| match c { std::path::Component::Normal(s) => Some(s), _ => None }).map(|s| s.to_string_lossy().into_owned()).collect();
     let drive = PathBuf::from(format!("{}\\", fixture.to_string_lossy().chars().take(2).collect::<String>()));
-    assert!(drive_letter(&drive).is_some(), "fixture must be on a drive letter");
+    assert!(is_volume_root(&drive), "fixture must be on a drive letter");
 
     make_fixture(&fixture);
     let mut walk_entries = Entries::new();

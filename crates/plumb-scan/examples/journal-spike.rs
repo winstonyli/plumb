@@ -20,7 +20,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let letter = args.next().and_then(|s| s.chars().next()).unwrap_or('C').to_ascii_uppercase();
     let secs: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(60);
-    let vol = Volume::open(letter).expect("open volume");
+    let vol = Volume::open(std::path::Path::new(&format!("{letter}:\\"))).expect("open volume");
     let info = vol.query().expect("query journal");
     println!("== journal on {letter}: id {:#x}, next usn {}", info.id, info.next_usn);
 

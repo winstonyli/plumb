@@ -1,4 +1,4 @@
-﻿//! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
+//! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
 use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, Parked};
 use crate::draw::{Mark, Painter};
@@ -17,7 +17,7 @@ use plumb_scan::journal::{Delta, Event, JournalConfig, JournalInfo, JournalReade
 use plumb_scan::listing::Listing;
 use plumb_scan::watch::{Event as WatchEvent, Stop as WatchStop, WatchConfig, Watcher};
 use plumb_scan::select::{scan_auto, ScanReport, Used};
-use plumb_scan::volume::{drive_letter, is_elevated, is_ntfs, Volume};
+use plumb_scan::volume::{is_elevated, is_ntfs, Volume};
 use plumb_scan::{Progress, ScanError};
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -186,11 +186,10 @@ impl Watch {
 
 fn open_journal(root: &str) -> Option<(Volume, JournalInfo)> {
     let root = Path::new(root);
-    let letter = drive_letter(root)?;
     if !is_elevated() || !is_ntfs(root) {
         return None;
     }
-    let vol = Volume::open(letter).ok()?;
+    let vol = Volume::open(root).ok()?; // fails for anything but a whole volume
     let info = vol.query().ok()?;
     Some((vol, info))
 }
@@ -537,7 +536,7 @@ impl Win {
     }
 
     fn start_scan(&mut self, drive: usize) {
-        let root = format!("{}:\\", self.app.drives[drive].letter);
+        let root = self.app.drives[drive].root.clone();
         self.open(drive, root);
     }
 
@@ -685,7 +684,7 @@ impl Win {
     /// Rescans in the background, keeping the old tree on screen until the new one is ready.
     fn start_rescan(&mut self, drive: usize) {
         if self.rx.is_none() {
-            let root = format!("{}:\\", self.app.drives[drive].letter);
+            let root = self.app.drives[drive].root.clone();
             self.spawn_scan(drive, root, true);
         }
     }
@@ -1004,7 +1003,7 @@ impl Win {
             return true;
         }
         let Some(i) = self.app.active else { return false };
-        if !self.policy.allow(self.app.drives[i].letter, Instant::now(), self.last_input) {
+        if !self.policy.allow(&self.app.drives[i].root, Instant::now(), self.last_input) {
             return false;
         }
         self.start_rescan(i);
@@ -1073,21 +1072,20 @@ fn properties(path: &str) {
     let _ = unsafe { ShellExecuteExW(&mut info) };
 }
 
-/// Arguments for the elevated copy: `--scan C` restarts the scan the user was looking at.
-pub fn relaunch_args(drive: Option<char>) -> String {
-    drive.map(|d| format!("--scan {d}")).unwrap_or_default()
+/// Arguments for the elevated copy: `--scan "C:"` restarts the scan the user was looking at. `title` is a
+/// `DriveInfo::title`, which has no trailing backslash to escape the closing quote.
+pub fn relaunch_args(title: Option<&str>) -> String {
+    title.map(|t| format!("--scan \"{t}\"")).unwrap_or_default()
 }
 
-/// The drive letter after `--scan`, if any.
-pub fn parse_scan_arg(mut args: impl Iterator<Item = String>) -> Option<char> {
+/// The volume (a `DriveInfo::title`) after `--scan`, if any.
+pub fn parse_scan_arg(mut args: impl Iterator<Item = String>) -> Option<String> {
     args.find(|a| a == "--scan")?;
-    let d = args.next()?;
-    let mut c = d.chars();
-    c.next().filter(|l| l.is_ascii_alphabetic() && c.next().is_none()).map(|l| l.to_ascii_uppercase())
+    args.next()
 }
 
 /// Starts this exe again with the `runas` verb. False if the user declined the UAC prompt.
-fn relaunch_elevated(drive: Option<char>) -> bool {
+fn relaunch_elevated(drive: Option<&str>) -> bool {
     let Ok(exe) = std::env::current_exe() else { return false };
     let file = wide(&exe.to_string_lossy());
     let args = wide(&relaunch_args(drive));
@@ -1139,8 +1137,8 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             with(|w| w.start_rescan(i));
         }
         Effect::Elevate => {
-            let letter = with(|w| w.app.active.map(|i| w.app.drives[i].letter)).flatten();
-            if relaunch_elevated(letter) {
+            let title = with(|w| w.app.active.map(|i| w.app.drives[i].title().to_string())).flatten();
+            if relaunch_elevated(title.as_deref()) {
                 let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
             }
         }
@@ -1546,9 +1544,9 @@ pub fn run() -> Result<()> {
     let saved = crate::state::load();
     show_window(hwnd, saved.window);
     with(|w| w.app.restore(&saved));
-    if let Some(letter) = parse_scan_arg(std::env::args()) {
+    if let Some(title) = parse_scan_arg(std::env::args()) {
         with(|w| {
-            if let Some(i) = w.app.drives.iter().position(|d| d.letter == letter) {
+            if let Some(i) = w.app.drives.iter().position(|d| d.title().eq_ignore_ascii_case(title.trim_end_matches('\\'))) {
                 w.start_scan(i);
             }
         });
@@ -1671,7 +1669,7 @@ pub fn selftest_live() -> Result<String> {
     };
     let dir_gone = |w: &mut Win| w.app.tree.as_ref().is_some_and(|t| crate::restore::resolve(t, &shown).is_none());
     let run = || -> Result<String> {
-        let i = with(|w| w.app.drives.iter().position(|d| d.letter == letter)).flatten();
+        let i = with(|w| w.app.drives.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
         let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;
         with(|w| w.spawn_scan(i, format!("{letter}:\\"), false));
         wait("the scan and the journal reader", 180, &|w| w.watch.is_some())?;
@@ -1746,7 +1744,7 @@ pub fn selftest_watch() -> Result<String> {
     let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
     let run = || -> Result<String> {
         let io = |e: std::io::Error| fail(e.to_string());
-        let i = with(|w| w.app.drives.iter().position(|d| d.letter == letter)).flatten();
+        let i = with(|w| w.app.drives.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
         let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;
         with(|w| w.spawn_scan(i, dir.to_string_lossy().into_owned(), false));
         wait("the scan and the directory watch", 60, &|w| w.watch.is_some())?;
@@ -1783,7 +1781,7 @@ pub fn selftest_watch() -> Result<String> {
         // A second drive (made up; its root is another temp directory). Leaving the first keeps its
         // tree and watch: a change made while it is away shows when it comes back, with no rescan.
         let j = with(|w| {
-            w.app.drives.push(DriveInfo { letter: 'Z', total: 0, free: 0 });
+            w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0 });
             w.app.drives.len() - 1
         })
         .ok_or_else(|| fail("no window".into()))?;
@@ -1838,11 +1836,13 @@ mod tests {
 
     #[test]
     fn scan_argument_round_trips() {
-        let args = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>().into_iter();
-        assert_eq!(parse_scan_arg(args(&format!("plumb.exe {}", relaunch_args(Some('d'))))), Some('D'));
-        assert_eq!(parse_scan_arg(args("plumb.exe")), None);
-        assert_eq!(parse_scan_arg(args("plumb.exe --scan")), None);
-        assert_eq!(parse_scan_arg(args("plumb.exe --scan CD")), None);
+        // The command line the elevated copy gets, after the OS strips the quotes.
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
+        assert_eq!(relaunch_args(Some("C:")), "--scan \"C:\"");
+        assert_eq!(relaunch_args(Some("D:\\Mounts\\Data")), "--scan \"D:\\Mounts\\Data\"", "no trailing backslash to escape the quote");
+        assert_eq!(parse_scan_arg(args(&["plumb.exe", "--scan", "D:\\Mounts\\Data"])), Some("D:\\Mounts\\Data".to_string()));
+        assert_eq!(parse_scan_arg(args(&["plumb.exe"])), None);
+        assert_eq!(parse_scan_arg(args(&["plumb.exe", "--scan"])), None);
         assert_eq!(relaunch_args(None), "");
     }
 

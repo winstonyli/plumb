@@ -12,7 +12,7 @@ use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE};
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_SEQUENTIAL_SCAN, FILE_SHARE_READ, FILE_SHARE_WRITE, GetVolumeInformationW,
-    OPEN_EXISTING, ReadFile,
+    GetVolumeNameForVolumeMountPointW, OPEN_EXISTING, ReadFile,
 };
 use windows::Win32::System::IO::{DeviceIoControl, OVERLAPPED};
 use windows::Win32::System::Ioctl::{FSCTL_GET_NTFS_VOLUME_DATA, NTFS_VOLUME_DATA_BUFFER};
@@ -41,12 +41,31 @@ pub fn is_elevated() -> bool {
     }
 }
 
-/// The drive letter if `root` is exactly a drive root (`C:` or `C:\`).
-pub fn drive_letter(root: &Path) -> Option<char> {
-    let s = root.to_str()?;
-    let b = s.as_bytes();
-    let ok = (b.len() == 2 || (b.len() == 3 && (b[2] == b'\\' || b[2] == b'/'))) && b[1] == b':' && b[0].is_ascii_alphabetic();
-    ok.then(|| (b[0] as char).to_ascii_uppercase())
+/// The device path of the volume mounted exactly at `root` (a drive root like `C:\` or a folder a
+/// volume is mounted on): `\\?\Volume{guid}`, no trailing backslash, NUL-terminated. `None` for any other path.
+pub fn volume_device(root: &Path) -> Option<Vec<u16>> {
+    let mut wide: Vec<u16> = root.as_os_str().encode_wide().collect();
+    if wide.is_empty() {
+        return None;
+    }
+    if wide.last() != Some(&(b'\\' as u16)) {
+        wide.push(b'\\' as u16);
+    }
+    wide.push(0);
+    let mut name = [0u16; 64];
+    unsafe { GetVolumeNameForVolumeMountPointW(PCWSTR(wide.as_ptr()), &mut name) }.ok()?;
+    let len = name.iter().position(|&c| c == 0)?;
+    let mut device = name[..len].to_vec();
+    if device.last() == Some(&(b'\\' as u16)) {
+        device.pop();
+    }
+    device.push(0);
+    Some(device)
+}
+
+/// True if `root` is the root of a volume: a drive root or a mount-point folder.
+pub fn is_volume_root(root: &Path) -> bool {
+    volume_device(root).is_some()
 }
 
 /// True if the volume mounted at `root` (a path like `C:\`) is NTFS.
@@ -61,7 +80,7 @@ pub fn is_ntfs(root: &Path) -> bool {
     ok && String::from_utf16_lossy(&fs).trim_end_matches('\0') == "NTFS"
 }
 
-/// An open raw volume (`\\.\C:`), read-only.
+/// An open raw volume, read-only.
 pub struct Volume(pub(crate) HANDLE);
 
 // A volume handle is only read through `ReadFile` with explicit offsets.
@@ -77,8 +96,9 @@ impl Drop for Volume {
 }
 
 impl Volume {
-    pub fn open(letter: char) -> io::Result<Volume> {
-        let path: Vec<u16> = format!("\\\\.\\{letter}:").encode_utf16().chain(Some(0)).collect();
+    /// Opens the volume mounted at `root` (see [`volume_device`]).
+    pub fn open(root: &Path) -> io::Result<Volume> {
+        let path = volume_device(root).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a volume root"))?;
         let h = unsafe {
             CreateFileW(
                 PCWSTR(path.as_ptr()),
@@ -155,10 +175,11 @@ impl MftScanner {
         out: &mut TreeBuilder,
         progress: &Progress,
     ) -> Result<MftReport, ScanError> {
-        let letter = drive_letter(root).ok_or_else(|| ScanError::Mft("not a drive root".into()))?;
-        let vol = Volume::open(letter).map_err(|e| ScanError::Mft(format!("cannot open volume {letter}: {e}")))?;
-        let layout = vol.layout().map_err(|e| ScanError::Mft(format!("cannot query volume {letter}: {e}")))?;
-        scan_mft(&vol, &layout, &format!("{letter}:"), &self.options, out, progress)
+        let shown = root.to_string_lossy();
+        let name = shown.trim_end_matches(['\\', '/']);
+        let vol = Volume::open(root).map_err(|e| ScanError::Mft(format!("cannot open volume {name}: {e}")))?;
+        let layout = vol.layout().map_err(|e| ScanError::Mft(format!("cannot query volume {name}: {e}")))?;
+        scan_mft(&vol, &layout, name, &self.options, out, progress)
             .map_err(|e| match e {
                 crate::mft_scan::MftError::Cancelled => ScanError::Cancelled,
                 e => ScanError::Mft(e.to_string()),
