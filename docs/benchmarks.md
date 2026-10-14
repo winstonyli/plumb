@@ -70,6 +70,21 @@ Where the idle memory goes (2026-10-11, throwaway example, release build; each f
 
 Filter highlight cost, 2026-10-14 (throwaway ignored test, release build, WARP offscreen device, 1600x1400 target, 59 visible rows of a 5000-node tree, `Painter::paint` timed over 100 frames after a warm-up; machine CPU 14%, Defender real-time protection off; WARP is software, so it is only a bound on the CPU-side recording work, not a GPU frame time): no filter 0.52 and 0.96 ms/frame in two runs; filter `n` (1 span per name) 0.49 and 0.99; regex `.` (every character a span, 2-3 per name here) 0.48 and 0.99. The run-to-run spread is larger than any effect of the highlights, so measuring each span with a fresh DirectWrite layout costs nothing visible at this row count. Not tried: very long names with hundreds of spans. Nothing to optimise; the test was not kept.
 
+## Walker: hard links and alternate data streams, 2026-10-14
+
+`crates/plumb-scan/examples/links-spike.rs` (kept), release build, single-threaded, warm cache, not elevated, machine CPU 21%, Defender real-time protection off. It lists a tree with `FileFullDirectoryInfo` and with `FileIdExtdDirectoryInfo` (the same listing plus a file id per entry), counts files whose id was already seen, and times `FindFirstStreamW` on a sample of files.
+
+| Tree | Entries | Listing plain / with ids | Extra links (share of counted bytes) | Set cost | Streams: us/file, named found |
+|---|---|---|---|---|---|
+| `C:\Windows` | 298,843 | 13.30 / 13.75 us per entry | 71,237 (22.5%, 11.7 of 51.9 GiB) | 0.025 us/file, ~4 MiB | 162, 0 of 34,088 |
+| `C:\Users\Winston Li\Documents` | 834,116 | 11.76 / 11.23 | 11,945 (10.8%, 24.3 of 225.2 GiB; cargo `target` dirs) | 0.030 us/file, ~8 MiB | 114, 0 of 20,556 |
+| `C:\Program Files` | 60,947 | 5.93 / 5.70 | 83 (0.4%) | 0.011 us/file | 92, 0 of 54,625 |
+| `C:\Users\Winston Li\Downloads` | 1,510 | 5.45 / 5.75 | 0 | - | 106, 1 of 1,341 (26 bytes, resident) |
+
+- **Hard links:** the walker counts every link, the MFT scanner counts a file once (`HARDLINK`), so the two disagree by 10-22% on trees with `WinSxS` or cargo output. Asking for file ids costs nothing measurable in the listing (the differences are within run-to-run noise, both ways), and de-duplicating is one hash-set insert per file (about 12 bytes each). Cheap and worth doing. The id is 128 bits; NTFS uses the low 64.
+- **Alternate data streams:** 92-162 us per file to look (an open per file), 7-12x the cost of listing an entry, and none of about 110,000 sampled files had a stream that uses clusters (the one named stream found was a 26-byte `Zone.Identifier`, resident in the MFT record, so counted as 0 either way). The MFT scanner also ignores them (`parse_data`: "ignored in v1"), so the scanners agree. Not worth the cost; the gap stays, now measured. Only a sample was probed, not whole drives.
+- The `C:\Users\Winston Li` tree did not finish in 140 s (not measured).
+
 ## Partial-tree spike, MFT records through `Live::apply` 2026-10-12
 
 Throwaway example (deleted after the run; the code replayed `scan_auto`'s MFT records in record order as `Delta::Upsert`s through `Live::apply` into a fresh tree, 4096-record chunks, 5 ms slices, timing only the applying). `C:` elevated, release build, machine load not measured, Defender state not recorded.
