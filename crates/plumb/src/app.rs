@@ -511,8 +511,6 @@ impl App {
         match hit {
             Hit::FilterBox => {
                 self.filter.ui.focus = true;
-                self.filter.ui.all = false;
-                self.filter.ui.caret = self.filter.ui.text.len();
                 return Effect::None;
             }
             Hit::FilterRegex => {

@@ -23,6 +23,8 @@ pub const SCROLLBAR_W: f32 = 12.0;
 pub const CHIP_W: f32 = 104.0;
 /// Space either side of a chip's label.
 pub const CHIP_PAD: f32 = 8.0;
+/// Space between the filter box's left edge and its text.
+pub const FILTER_PAD: f32 = 8.0;
 pub const CHIP_GAP: f32 = 8.0;
 /// The icon buttons: administrator (a shield), Rescan (a refresh arrow) and Cancel (a cross).
 pub const ADMIN_W: f32 = 32.0;

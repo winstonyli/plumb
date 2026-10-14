@@ -2,7 +2,7 @@
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
 use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, Parked};
 use crate::draw::{Mark, Painter};
-use crate::filter_ui::{push_utf16, Edit};
+use crate::filter_ui::{byte_at, push_utf16, Edit, Motion};
 use crate::fmt;
 use crate::state::Placement;
 use crate::gfx::Gfx;
@@ -58,7 +58,7 @@ use windows::Win32::UI::HiDpi::{GetSystemMetricsForDpi,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
-    VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
+    VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -266,6 +266,8 @@ struct Win {
     filter_rx: Receiver<(u64, Hits)>,
     /// First half of a surrogate pair seen by `WM_CHAR`.
     high_surrogate: Option<u16>,
+    /// The left button went down in the filter box and is still held: moving extends the selection.
+    filter_drag: bool,
     /// The partial tree of the foreground scan in progress.
     preview: Option<Preview>,
     preview_pacer: Pacer,
@@ -388,7 +390,7 @@ impl Win {
         let win = Self {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, progress: Arc::default(), rx: None,
             background: false, watch: None, dir_pending: None, dir_failed: None, policy: RescanPolicy::default(), last_input: Instant::now(),
-            posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
+            posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
             parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_buf: Vec::new(),
@@ -526,6 +528,24 @@ impl Win {
     }
 
     /// A client point in DIPs, measured from the top of the content (below the overhang).
+    /// The filter text's byte offset under device-independent x, for placing the caret.
+    fn filter_byte(&self, x: f32) -> usize {
+        byte_at(&self.app.filter_ui().text, x - self.app.filter_origin(), &|s| self.painter.text_width(&self.gfx, s))
+    }
+
+    /// Presses in the filter box place the caret (shift extends the selection, a double-click picks a word).
+    fn filter_press(&mut self, lp: LPARAM, double: bool) {
+        let (x, y) = self.dip(lp);
+        if !self.app.over_filter_box(x, y) {
+            return;
+        }
+        let at = self.filter_byte(x);
+        let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+        self.app.handle(Input::Edit(if double { Edit::Word(at) } else { Edit::Place { at, extend: shift } }));
+        self.filter_drag = true;
+        self.invalidate();
+    }
+
     fn dip(&self, lparam: LPARAM) -> (f32, f32) {
         let x = (lparam.0 & 0xffff) as i16 as f32;
         let y = ((lparam.0 >> 16) & 0xffff) as i16 as f32;
@@ -1335,15 +1355,18 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_LBUTTONDOWN => {
             unsafe { SetCapture(hwnd) };
             dispatch(hwnd, lp, Input::Click);
+            with(|w| w.filter_press(lp, false));
             LRESULT(0)
         }
         WM_LBUTTONDBLCLK => {
             unsafe { SetCapture(hwnd) };
             dispatch(hwnd, lp, Input::DoubleClick);
+            with(|w| w.filter_press(lp, true));
             LRESULT(0)
         }
         WM_LBUTTONUP => {
             let _ = unsafe { ReleaseCapture() };
+            with(|w| w.filter_drag = false);
             dispatch(hwnd, lp, |_, _| Input::Release);
             LRESULT(0)
         }
@@ -1353,6 +1376,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_MOUSEMOVE => {
             if wp.0 & 1 != 0 {
+                with(|w| {
+                    if w.filter_drag {
+                        let at = w.filter_byte(w.dip(lp).0);
+                        w.app.handle(Input::Edit(Edit::Place { at, extend: true }));
+                        w.invalidate();
+                    }
+                });
                 dispatch(hwnd, lp, Input::Drag);
             } else {
                 let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
@@ -1422,10 +1452,27 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_KEYDOWN => {
             let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
-            if ctrl && wp.0 == 'C' as usize {
+            let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+            let in_box = with(|w| w.app.filter_ui().focus).unwrap_or(false);
+            let picked = with(|w| w.app.filter_ui().selected_text().map(str::to_owned)).flatten();
+            let motion = match key_of(wp.0 as u16) {
+                Some(Key::Left) => Some(Motion::Left),
+                Some(Key::Right) => Some(Motion::Right),
+                Some(Key::Home) => Some(Motion::Home),
+                Some(Key::End) => Some(Motion::End),
+                _ => None,
+            };
+            if ctrl && (wp.0 == 'C' as usize || wp.0 == 'X' as usize) && in_box && picked.is_some() {
+                copy_to_clipboard(hwnd, &picked.unwrap_or_default());
+                if wp.0 == 'X' as usize {
+                    send(hwnd, Input::Edit(Edit::Backspace));
+                }
+            } else if ctrl && wp.0 == 'C' as usize {
                 if let Some(Some(p)) = with(|w| w.selected_path()) {
                     copy_to_clipboard(hwnd, &p);
                 }
+            } else if let (true, true, Some(to)) = (shift, in_box, motion) {
+                send(hwnd, Input::Edit(Edit::Move { to, extend: true }));
             } else if let Some(input) = key_input(wp.0 as u16, ctrl, hwnd) {
                 send(hwnd, input);
             }

@@ -2,8 +2,9 @@
 //! result, and keeping it current while the tree changes. No Win32 types.
 use super::{App, Effect};
 use crate::draw::FilterBar;
-use crate::filter_ui::{Edit, FilterUi};
+use crate::filter_ui::{Edit, FilterUi, Motion};
 use crate::fmt;
+use crate::layout::{FILTER_PAD, Hit};
 use plumb_core::NodeId;
 use plumb_core::filter::{FilterError, Hits, Keep, Matcher, Names, Query};
 use plumb_core::rows::Key;
@@ -66,10 +67,10 @@ impl Filter {
 /// Left/Right/Home/End edit the box while it has focus; the other keys stay with the tree.
 pub(super) fn edit_for_key(k: Key) -> Option<Edit> {
     match k {
-        Key::Left => Some(Edit::Left),
-        Key::Right => Some(Edit::Right),
-        Key::Home => Some(Edit::Home),
-        Key::End => Some(Edit::End),
+        Key::Left => Some(Edit::Move { to: Motion::Left, extend: false }),
+        Key::Right => Some(Edit::Move { to: Motion::Right, extend: false }),
+        Key::Home => Some(Edit::Move { to: Motion::Home, extend: false }),
+        Key::End => Some(Edit::Move { to: Motion::End, extend: false }),
         _ => None,
     }
 }
@@ -77,6 +78,16 @@ pub(super) fn edit_for_key(k: Key) -> Option<Edit> {
 impl App {
     pub fn filter_ui(&self) -> &FilterUi {
         &self.filter.ui
+    }
+
+    /// Whether (x, y) is in the filter box.
+    pub fn over_filter_box(&self, x: f32, y: f32) -> bool {
+        matches!(self.layout.hit(x, y, self.drives.len()), Hit::FilterBox)
+    }
+
+    /// Where the filter text starts on screen: the x a click is measured from.
+    pub fn filter_origin(&self) -> f32 {
+        self.layout.filter_box().x + FILTER_PAD
     }
 
     /// True when the installed result is out of date, so `start_filter` has work to do.
@@ -125,7 +136,7 @@ impl App {
             caret: u.caret,
             regex: u.regex,
             focus: u.focus,
-            all: u.all,
+            sel: u.selection(),
             error: self.filter.error.is_some(),
             count,
         }
@@ -521,13 +532,33 @@ mod tests {
     }
 
     #[test]
+    fn pressing_in_the_box_focuses_it_and_the_window_places_the_caret_by_offset() {
+        let mut a = app();
+        type_text(&mut a, "foo bar");
+        a.handle(Input::Tab);
+        let b = a.layout.filter_box();
+        assert!(a.over_filter_box(b.x + 20.0, b.y + 5.0) && !a.over_filter_box(b.x - 20.0, b.y + 5.0));
+        assert!(a.filter_origin() > b.x && a.filter_origin() < b.x + b.w);
+        a.handle(Input::Click(b.x + 20.0, b.y + 5.0));
+        assert!(a.filter_ui().focus);
+        a.handle(Input::Edit(Edit::Place { at: 2, extend: false }));
+        a.handle(Input::Edit(Edit::Place { at: 6, extend: true }));
+        assert_eq!(a.filter_ui().selected_text(), Some("o ba"));
+        a.handle(Input::Edit(Edit::Word(5)));
+        assert_eq!(a.filter_ui().selected_text(), Some("bar"));
+        assert_eq!(a.filter_bar("").sel, Some((4, 7)));
+        a.handle(Input::Edit(Edit::Char('x')));
+        assert_eq!(a.filter_ui().text, "foo x");
+    }
+
+    #[test]
     fn find_selects_the_text_enter_and_tab_move_focus() {
         let mut a = app();
         type_text(&mut a, "ab");
         a.handle(Input::Tab);
         assert!(!a.filter_ui().focus);
         a.handle(Input::Find);
-        assert!(a.filter_ui().focus && a.filter_ui().all);
+        assert!(a.filter_ui().focus && a.filter_ui().selection() == Some((0, 2)));
         a.handle(Input::Edit(Edit::Char('q')));
         assert_eq!(a.filter_ui().text, "q");
         a.handle(Input::Key(Key::Down)); // move the selection off the first row

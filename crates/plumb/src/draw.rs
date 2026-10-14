@@ -3,7 +3,7 @@ use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
 use plumb_core::filter::Matcher;
-use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, INDENT, PICKER_H, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::rows::RowModel;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -102,8 +102,8 @@ pub struct FilterBar<'a> {
     pub caret: usize,
     pub regex: bool,
     pub focus: bool,
-    /// The whole text is selected.
-    pub all: bool,
+    /// The selected byte range of `text`, if any.
+    pub sel: Option<(usize, usize)>,
     /// The pattern did not compile: the box is tinted.
     pub error: bool,
     /// "1,240 matches", "searching...", "invalid pattern", or empty.
@@ -286,21 +286,21 @@ impl Pen<'_> {
         let b = l.filter_box();
         self.fill(b, if f.error { t.error } else { t.panel });
         self.frame(b, if f.focus { t.accent } else { t.select });
-        let inner = Rect { x: b.x + 8.0, y: b.y, w: (l.filter_clear().x - b.x - 8.0).max(0.0), h: b.h };
+        let inner = Rect { x: b.x + FILTER_PAD, y: b.y, w: (l.filter_clear().x - b.x - FILTER_PAD).max(0.0), h: b.h };
         if f.text.is_empty() {
             if !f.focus {
                 self.text("Filter  (Ctrl+F)", inner, t.dim, false);
             }
         } else {
-            if f.all {
-                let w = self.text_width(f.text).min(inner.w);
-                self.fill(Rect { x: inner.x, y: b.y + 4.0, w, h: b.h - 8.0 }, t.select);
+            if let Some((a, e)) = f.sel {
+                let (x0, x1) = (self.text_width(&f.text[..a]).min(inner.w), self.text_width(&f.text[..e]).min(inner.w));
+                self.fill(Rect { x: inner.x + x0, y: b.y + 4.0, w: x1 - x0, h: b.h - 8.0 }, t.select);
             }
             self.text(f.text, inner, t.fg, false);
             let c = l.filter_clear();
             self.text("\u{00D7}", Rect { w: c.w - 6.0, ..c }, t.dim, true);
         }
-        if f.focus && !f.all {
+        if f.focus && f.sel.is_none() {
             let x = inner.x + self.text_width(f.text.get(..f.caret).unwrap_or(f.text));
             if x <= inner.x + inner.w {
                 self.fill(Rect { x, y: b.y + 5.0, w: 1.0, h: b.h - 10.0 }, t.fg);
