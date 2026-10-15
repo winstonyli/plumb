@@ -98,11 +98,20 @@ pub enum Effect {
 }
 
 /// A map tile's tooltip: the path and size of what it stands for, or what a `Rest` tile holds.
-fn tile_tip(tree: &Tree, t: &Tile) -> String {
+fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
     match t.kind {
         Kind::Rest => format!("{} smaller items, {}", fmt::count(t.count as u64), fmt::size(t.bytes)),
-        _ => format!("{}  ({})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes)),
+        _ => {
+            let when = tree.mtime[t.node].map_or_else(String::new, |d| format!(", modified {} ({} ago)", fmt::date(d.get()), fmt::age(now, d.get())));
+            format!("{}  ({}{when})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes))
+        }
     }
+}
+
+/// Today as a day count since 1601-01-01.
+fn today() -> u32 {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    plumb_core::age::day_from_unix(secs)
 }
 
 /// The sort each header column stands for; "% of parent" orders by size.
@@ -184,6 +193,8 @@ pub struct App {
     map_dirty: bool,
     /// Bumped whenever `map_tiles` is rebuilt, so the painter knows its cached bitmap is stale.
     map_gen: u64,
+    /// Today as a day count since 1601, taken when the tiles were last rebuilt: tiles are shaded by age against it.
+    map_now: u32,
     /// Bytes per class among the tiles, largest first: the legend.
     map_classes: Vec<(treemap::Class, u64)>,
     /// The tile under the pointer.
@@ -199,7 +210,7 @@ impl App {
         Self {
             layout, drives, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
-            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
+            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
         }
     }
@@ -448,7 +459,7 @@ impl App {
         self.button_at(x, y).map(|b| b.1).or_else(|| self.layout.status().contains(x, y).then(|| format!("{}
 {}", self.status(), self.adapter))).or_else(|| {
             let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map))?)?;
-            Some(tile_tip(self.tree.as_ref()?, t))
+            Some(tile_tip(self.tree.as_ref()?, t, self.map_now))
         })
     }
 
@@ -626,6 +637,7 @@ impl App {
         }
         self.map_tiles = treemap::layout(tree, root, rect, px);
         self.map_classes = treemap::class_bytes(&self.map_tiles);
+        self.map_now = today();
         (self.map_key, self.map_dirty, self.map_hover) = (Some(key), false, None);
         self.map_gen += 1;
     }
@@ -800,7 +812,7 @@ impl App {
             (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher() }),
             _ => None,
         };
-        let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes });
+        let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes });
         f(&Scene {
             layout: self.layout.with_cancel(self.cancelable()),
             theme: Theme::new(dark),
@@ -1390,9 +1402,19 @@ Test GPU", a.status())));
     fn a_rest_tile_says_how_many_items_it_holds() {
         let tree = plumb_core::synth::flat_tree(3);
         let t = treemap::Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::Rest, bytes: 2048, count: 7, mtime: None };
-        assert!(tile_tip(&tree, &t).starts_with("7 smaller items, "));
+        assert!(tile_tip(&tree, &t, 150_000).starts_with("7 smaller items, "));
         let f = treemap::Tile { node: NodeId(1), kind: Kind::File, count: 1, ..t };
-        assert!(tile_tip(&tree, &f).contains(&tree.name_string(NodeId(1))));
+        assert!(tile_tip(&tree, &f, 150_000).contains(&tree.name_string(NodeId(1))));
+    }
+
+    #[test]
+    fn a_tile_tip_says_when_the_file_was_last_written() {
+        let mut tree = plumb_core::synth::flat_tree(3);
+        let t = treemap::Tile { node: NodeId(1), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::File, bytes: 2048, count: 1, mtime: None };
+        assert!(!tile_tip(&tree, &t, 154_000).contains("modified"));
+        tree.set_mtime(NodeId(1), std::num::NonZeroU32::new(134_774 + 19_791));
+        let tip = tile_tip(&tree, &t, 134_774 + 19_791 + 766);
+        assert!(tip.ends_with(", modified 2024-03-09 (2.1 y ago))"), "{tip}");
     }
 
     #[test]

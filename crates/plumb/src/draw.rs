@@ -2,6 +2,7 @@
 use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
+use plumb_core::age::{shade, FADE_MAX};
 use plumb_core::filter::Matcher;
 use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, MAP_BTN_W, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::treemap::{Class, Kind, Tile};
@@ -27,6 +28,11 @@ use windows::core::{w, Result, PCWSTR};
 /// Banner text stops this far from the right edge, short of the Rescan button.
 const RESCAN_RESERVED: f32 = RESCAN_W + 24.0;
 
+/// `a` moved toward `b` by `f` (0 = `a`, 1 = `b`).
+fn mix(a: D2D1_COLOR_F, b: D2D1_COLOR_F, f: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F { r: a.r + (b.r - a.r) * f, g: a.g + (b.g - a.g) * f, b: a.b + (b.b - a.b) * f, a: a.a }
+}
+
 fn rgb(hex: u32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: ((hex >> 16) & 255) as f32 / 255.0,
@@ -39,6 +45,11 @@ fn rgb(hex: u32) -> D2D1_COLOR_F {
 fn rc(r: Rect) -> D2D_RECT_F {
     D2D_RECT_F { left: r.x, top: r.y, right: r.x + r.w, bottom: r.y + r.h }
 }
+
+/// The legend's age strip: `AGE_STEPS` swatches across `AGE_STRIP` DIPs, `AGE_STRIP_GAP` clear of the type entries.
+const AGE_STRIP: f32 = 48.0;
+const AGE_STRIP_GAP: f32 = 12.0;
+const AGE_STEPS: usize = 8;
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -141,6 +152,8 @@ pub struct MapView<'a> {
     pub tiles: &'a [Tile],
     /// Changes whenever `tiles` does: the tiles are drawn into a cached bitmap once per generation.
     pub generation: u64,
+    /// Today as a day count since 1601; tiles are shaded by their age against it. Changes only with `generation`.
+    pub now: u32,
     /// Index of the tile of the selected node, if it has one.
     pub selected: Option<usize>,
     /// Index of the tile under the pointer.
@@ -308,7 +321,7 @@ impl Painter {
             let brush = ctx.CreateSolidColorBrush(&scene.theme.bg, None)?;
             let pen = Pen { gfx, brush, painter: self, large: false, dpi };
             for tile in m.tiles {
-                pen.tile(tile, &scene.theme);
+                pen.tile(tile, &scene.theme, m.now);
             }
             ctx.SetTransform(&windows_numerics::Matrix3x2::identity());
             let r = ctx.EndDraw(None, None);
@@ -540,14 +553,25 @@ impl Pen<'_> {
             return 0.0;
         }
         used -= 12.0;
-        let mut x = r.x + r.w - used;
+        // The age strip, at the far right, when it fits beside the types: light to dark, new to old.
+        let shift = if used + AGE_STRIP_GAP + AGE_STRIP <= max {
+            let step = AGE_STRIP / AGE_STEPS as f32;
+            for i in 0..AGE_STEPS {
+                let c = mix(s.theme.fg, s.theme.panel, i as f32 / (AGE_STEPS - 1) as f32 * FADE_MAX);
+                self.fill(Rect { x: r.x + r.w - AGE_STRIP + i as f32 * step, y: r.y + (r.h - 10.0) / 2.0, w: step, h: 10.0 }, c);
+            }
+            AGE_STRIP + AGE_STRIP_GAP
+        } else {
+            0.0
+        };
+        let mut x = r.x + r.w - shift - used;
         for (c, label, w) in &entries[..n] {
             let w = *w;
             self.fill(Rect { x, y: r.y + (r.h - 10.0) / 2.0, w: 10.0, h: 10.0 }, s.theme.class[c.index()]);
             self.text(label, Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
             x += 14.0 + w + 12.0;
         }
-        used
+        used + shift
     }
 
     /// The treemap pane: tiles, then the selection and hover outlines over them.
@@ -579,11 +603,11 @@ impl Pen<'_> {
         unsafe { self.gfx.d2d.PopAxisAlignedClip() };
     }
 
-    fn tile(&self, tile: &Tile, t: &Theme) {
+    fn tile(&self, tile: &Tile, t: &Theme, now: u32) {
         let r = tile.rect;
         match tile.kind {
             Kind::File => {
-                let c = t.class[tile.class.index()];
+                let c = mix(t.class[tile.class.index()], t.bg, shade(now, tile.mtime) * FADE_MAX);
                 if r.w >= 3.0 && r.h >= 3.0 {
                     // A darker edge: the dark fill, then the colour inside it (two draws, not five).
                     self.fill(r, D2D1_COLOR_F { r: c.r * 0.6, g: c.g * 0.6, b: c.b * 0.6, a: c.a });

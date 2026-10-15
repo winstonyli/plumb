@@ -241,7 +241,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None }),
                 message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
-                map: Some(MapView { tiles: &tiles, generation: 1, selected, hover: None, classes: &classes }),
+                map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes }),
             };
             render_scene(&gfx, &scene, stem)
         };
@@ -279,7 +279,7 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
             view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
-            map: Some(MapView { tiles: &tiles, generation, selected, hover: None, classes: &classes }),
+            map: Some(MapView { tiles: &tiles, generation, now: 0, selected, hover: None, classes: &classes }),
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
         painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
@@ -318,4 +318,95 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     assert!(bar(top) != bg, "the first row's bar is visible");
     let dist = |p: [i32; 3]| p.iter().zip(bg).map(|(&a, b)| (a - b).abs()).sum::<i32>();
     assert!(dist(bar(bottom)) < dist(bar(top)), "the rows fade out downward");
+}
+
+/// Two same-class files, one written `age` days before `now`, the other today, in a map with the given `now`.
+fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
+    use plumb_core::treemap::{layout as map_layout, Kind};
+    let gfx = Gfx::warp().expect("WARP device");
+    let now = 40_000u32;
+    let mut b = plumb_core::TreeBuilder::new();
+    let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+    let a = b.push_str(root, "old.mp4", 600_000, plumb_core::NodeFlags::empty());
+    let n = b.push_str(root, "new.mp4", 500_000, plumb_core::NodeFlags::empty());
+    b.set_mtime(a, old.and_then(std::num::NonZeroU32::new));
+    b.set_mtime(n, std::num::NonZeroU32::new(now));
+    let tree = b.finish().unwrap();
+    let mut layout = Layout::new(W as f32, H as f32);
+    layout.map_on = true;
+    let tiles = map_layout(&tree, root, layout.map().unwrap(), 1.0);
+    let classes = plumb_core::treemap::class_bytes(&tiles);
+    let theme = Theme::new(dark);
+    let mid = |bytes: u64| {
+        let r = tiles.iter().find(|t| t.kind == Kind::File && t.bytes == bytes).unwrap().rect;
+        ((r.x + r.w / 2.0) as u32, (r.y + r.h / 2.0) as u32)
+    };
+    let scene = Scene {
+        layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
+        view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
+        map: Some(MapView { tiles: &tiles, generation: 1, now, selected: None, hover: None, classes: &classes }),
+    };
+    (render_scene(&gfx, &scene, "plumb-map-age"), [mid(600_000), mid(500_000)], theme)
+}
+
+#[test]
+fn an_old_tile_is_paler_than_a_new_one_and_an_unknown_time_is_the_plain_class_colour() {
+    for dark in [true, false] {
+        let (aged, [old, new], theme) = age_shot(dark, Some(40_000 - 4_000));
+        let class = expect(theme.class[plumb_core::treemap::Class::Video.index()]);
+        let near = |got: [i32; 3], want: [i32; 3]| got.iter().zip(want).all(|(x, y)| (x - y).abs() <= 2);
+        assert!(near(rgb_at(&aged, new.0, new.1), class), "{dark}: written today = the class colour");
+        assert!(!near(rgb_at(&aged, old.0, old.1), class), "{dark}: written 11 years ago is faded");
+        let (unknown, [old, _], _) = age_shot(dark, None);
+        assert!(near(rgb_at(&unknown, old.0, old.1), class), "{dark}: no time = the class colour");
+    }
+}
+
+#[test]
+fn every_pair_of_classes_stays_apart_at_the_oldest_shade() {
+    use plumb_core::age::FADE_MAX;
+    use plumb_core::treemap::Class;
+    for dark in [true, false] {
+        let t = Theme::new(dark);
+        let oldest: Vec<[f32; 3]> = (0..Class::COUNT)
+            .map(|i| {
+                let (c, b) = (t.class[i], t.bg);
+                [c.r + (b.r - c.r) * FADE_MAX, c.g + (b.g - c.g) * FADE_MAX, c.b + (b.b - c.b) * FADE_MAX]
+            })
+            .collect();
+        for i in 0..oldest.len() {
+            for j in i + 1..oldest.len() {
+                let d: f32 = (0..3).map(|k| (oldest[i][k] - oldest[j][k]).powi(2)).sum::<f32>().sqrt();
+                assert!(d > 0.06, "{dark}: classes {i} and {j} are {d} apart when oldest");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
+    let strip_pixels = |width: f32| {
+        let gfx = Gfx::warp().expect("WARP device");
+        let mut b = plumb_core::TreeBuilder::new();
+        let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+        b.push_str(root, "movie.mp4", 900_000, plumb_core::NodeFlags::empty());
+        let tree = b.finish().unwrap();
+        let mut layout = Layout::new(width, H as f32);
+        layout.map_on = true;
+        let tiles = plumb_core::treemap::layout(&tree, root, layout.map().unwrap_or(Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 }), 1.0);
+        let classes = plumb_core::treemap::class_bytes(&tiles);
+        let theme = Theme::new(true);
+        let scene = Scene {
+            layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
+            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
+            map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes }),
+        };
+        let buf = render_scene(&gfx, &scene, "plumb-legend");
+        // The strip's first swatch is the foreground colour itself, which nothing else in the status bar uses.
+        let st = layout.status();
+        let (y, fg) = ((st.y + st.h / 2.0) as u32, expect(theme.fg));
+        (0..width as u32).filter(|&x| rgb_at(&buf, x, y) == fg).count()
+    };
+    assert!(strip_pixels(800.0) >= 4, "wide: the first swatch is drawn");
+    assert_eq!(strip_pixels(220.0), 0, "narrow: no strip");
 }

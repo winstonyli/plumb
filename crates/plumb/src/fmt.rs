@@ -38,9 +38,46 @@ pub fn display_path(p: &str) -> String {
     if p.ends_with(':') { format!("{p}\\") } else { p.to_string() }
 }
 
+/// `YYYY-MM-DD` for a day count since 1601-01-01.
+pub fn date(day: u32) -> String {
+    let z = i64::from(day) - 134_774 + 719_468; // days since 0000-03-01
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// How long before `now` a day was: "today", "5 d", "3 mo", "2.1 y".
+pub fn age(now: u32, day: u32) -> String {
+    let d = now.saturating_sub(day);
+    match d {
+        0 => "today".into(),
+        1..=59 => format!("{d} d"),
+        60..=729 => format!("{} mo", (d + 15) / 30),
+        _ => format!("{:.1} y", d as f32 / 365.0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates_and_ages() {
+        assert_eq!(date(134_774), "1970-01-01");
+        assert_eq!(date(134_774 + 19_791), "2024-03-09");
+        assert_eq!(date(134_774 + 19_782), "2024-02-29"); // a leap day
+        assert_eq!(age(100, 100), "today");
+        assert_eq!(age(105, 100), "5 d");
+        assert_eq!(age(100 + 90, 100), "3 mo");
+        assert_eq!(age(100 + 766, 100), "2.1 y");
+        assert_eq!(age(100, 200), "today", "a time in the future is today");
+    }
 
     #[test]
     fn drive_root_gets_a_trailing_backslash() {
