@@ -1,0 +1,71 @@
+# Pushing a tag like v0.7.0 tests the workspace, builds the release exe and publishes it as a GitHub
+# release with the matching CHANGELOG.md section as its notes. A tag with a suffix (v0.7.0-rc1) makes a
+# prerelease, which is how to try this file out.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build
+        run: cargo build --release --locked -p plumb
+
+      - name: Package
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $dir = "plumb-$tag-windows-x64"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target/release/plumb.exe $dir/
+          Copy-Item CHANGELOG.md $dir/
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+          $hash = (Get-FileHash "$dir.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $dir.zip" | Out-File -Encoding ascii "$dir.zip.sha256"
+          "ASSET=$dir.zip" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Notes
+        run: |
+          # The CHANGELOG section for the tag's version (v0.7.0-rc1 reads 0.7.0), else [Unreleased].
+          $version = ("${{ github.ref_name }}" -replace '^v', '') -replace '-.*$', ''
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -SimpleMatch "## [$version]" | Select-Object -First 1).LineNumber
+          if (-not $start) { $start = ($lines | Select-String -SimpleMatch "## [Unreleased]" | Select-Object -First 1).LineNumber }
+          if (-not $start) { throw "no CHANGELOG section for $version" }
+          $body = @()
+          foreach ($l in $lines[$start..($lines.Count - 1)]) {
+            if ($l.StartsWith("## [")) { break }
+            $body += $l
+          }
+          $body += ""
+          $body += "The exe is unsigned, so Windows SmartScreen may warn on first run. Check the zip against the .sha256 file."
+          $body | Out-File -Encoding utf8 notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $pre = if ($tag -like "*-*") { "--prerelease" } else { }
+          gh release create $tag $env:ASSET "$env:ASSET.sha256" --title $tag --notes-file notes.md --verify-tag @pre
