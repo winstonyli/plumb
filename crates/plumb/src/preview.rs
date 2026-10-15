@@ -102,7 +102,7 @@ impl Preview {
                 out.created = true;
                 out.changes += 1;
             }
-            PreviewMsg::Add { parent, name, size, flags } => {
+            PreviewMsg::Add { parent, name, size, flags, mtime: _ } => {
                 if parent.is_none() {
                     if matches!(self.kind, Kind::Idle) {
                         *tree = Some(root_tree(&name));

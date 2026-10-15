@@ -1,5 +1,7 @@
 //! What a directory looked like when it was listed. Shared by the walker and the directory watch.
 
+use std::num::NonZeroU32;
+
 /// One directory entry. `alloc` is allocated bytes (0 for directories and for data that lives
 /// inside the MFT record), as the walker counts them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12,6 +14,8 @@ pub struct Entry {
     /// The file's id on its volume, the same for every hard link to it (the 128-bit id folded to 64 bits;
     /// NTFS ids fit in 64). Only meaningful for files.
     pub id: u64,
+    /// Last-write day (days since 1601); `None` if unknown.
+    pub mtime: Option<NonZeroU32>,
 }
 
 /// A directory and its entries, or `Err` if it could not be listed (it is gone, or not readable).

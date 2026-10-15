@@ -45,6 +45,8 @@ pub struct MergeStats {
 pub struct MftMerger {
     flags: Vec<u8>,
     alloc: Vec<u64>,
+    /// Last-write day of each record's file.
+    mtime: Vec<Option<std::num::NonZeroU32>>,
     names: Vec<NameRec>,
     pool: Vec<u16>,
     corrupt: u64,
@@ -56,6 +58,7 @@ impl MftMerger {
         Self {
             flags: vec![0; record_count],
             alloc: vec![0; record_count],
+            mtime: vec![None; record_count],
             names: Vec::new(),
             pool: Vec::new(),
             corrupt: 0,
@@ -84,6 +87,7 @@ impl MftMerger {
         }
         if rec.base.is_none() {
             self.flags[o] |= F_IN_USE;
+            self.mtime[o] = rec.mtime;
             if rec.is_dir {
                 self.flags[o] |= F_DIR;
             }
@@ -240,7 +244,8 @@ impl MftMerger {
             } else {
                 NodeId(base + p)
             };
-            out.push(parent, self.name(&self.names[ni as usize]), size, flags);
+            let id = out.push(parent, self.name(&self.names[ni as usize]), size, flags);
+            out.set_mtime(id, self.mtime[o]);
             stats.nodes += 1;
         }
         if used_orphans {
@@ -301,6 +306,20 @@ mod tests {
             feed(&mut m, n, r);
         }
         m
+    }
+
+    #[test]
+    fn every_link_of_a_record_gets_its_last_write_day() {
+        use plumb_core::age::DAY_TICKS;
+        let nine = std::num::NonZeroU32::new(9);
+        let mut m = MftMerger::new(100);
+        feed(&mut m, 5, RecordBuilder::dir().file_name(5, ".", 1));
+        feed(&mut m, 30, RecordBuilder::dir().file_name(5, "d", 1));
+        feed(&mut m, 31, RecordBuilder::file().standard_info(9 * DAY_TICKS).file_name(5, "a", 1).file_name(30, "b", 1).data_nonresident(4096, 100));
+        let (t, _) = build(m);
+        let (a, b) = (find(&t, "X:\\a"), find(&t, "X:\\d\\b"));
+        assert_eq!((t.mtime[a], t.mtime[b]), (nine, nine));
+        assert_eq!((t.mtime[find(&t, "X:")], t.mtime[find(&t, "X:\\d")]), (None, None));
     }
 
     #[test]

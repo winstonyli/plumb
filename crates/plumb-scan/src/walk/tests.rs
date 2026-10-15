@@ -155,7 +155,7 @@ fn the_walker_sends_one_add_per_node_in_builder_order() {
     let t = b.finish().unwrap();
     let mut adds = Vec::new();
     while let Some(m) = rx.try_recv() {
-        if let PreviewMsg::Add { parent, name, size, flags } = m {
+        if let PreviewMsg::Add { parent, name, size, flags, .. } = m {
             adds.push((parent, name, size, flags));
         }
     }
@@ -174,4 +174,14 @@ fn a_cancelled_walk_returns_cancelled_and_ends() {
     let mut b = TreeBuilder::new();
     let r = WalkScanner { threads: 2 }.scan(&f.0, &mut b, &p);
     assert!(matches!(r, Err(ScanError::Cancelled)));
+}
+
+#[test]
+fn files_carry_their_last_write_day() {
+    let fx = fixture("mtime");
+    let (t, _) = scan(&fx.0, 2);
+    let f = (0..t.len() as u32).map(NodeId).find(|&i| t.path(i).ends_with("five.dat")).unwrap();
+    let today = plumb_core::age::day_from_unix(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let day = t.mtime[f].expect("a freshly written file has a time").get();
+    assert!(day.abs_diff(today) <= 1, "{day} vs {today}");
 }

@@ -13,7 +13,7 @@ pub enum PreviewMsg {
     Begin { root: String, nodes: usize },
     /// Walker: a node was pushed. Ids follow push order, so the receiver's ids equal the builder's.
     /// The first message has parent `NodeId::NONE` and is the root.
-    Add { parent: NodeId, name: Vec<u16>, size: u64, flags: NodeFlags },
+    Add { parent: NodeId, name: Vec<u16>, size: u64, flags: NodeFlags, mtime: Option<std::num::NonZeroU32> },
     /// Walker: the directory could not be listed.
     Denied(NodeId),
     /// MFT scan: a base record's file, with the name that carries its size.

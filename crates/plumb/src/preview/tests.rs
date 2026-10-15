@@ -9,7 +9,7 @@ fn far() -> Instant {
 }
 
 fn state(record: u64, parent: u64, name: &str, size: u64, is_dir: bool) -> FileState {
-    FileState { record, sequence: 1, parent, name: name.encode_utf16().collect(), size, is_dir, reparse: false, links: 1 }
+    FileState { record, sequence: 1, parent, name: name.encode_utf16().collect(), size, is_dir, reparse: false, links: 1, mtime: None }
 }
 
 /// path -> (size, is_dir) for every node but the root's own name.
@@ -37,7 +37,7 @@ fn the_walker_replay_equals_the_builder_tree() {
     let mut seed = 7;
     let push = |b: &mut TreeBuilder, parent: NodeId, name: &str, size: u64, flags: NodeFlags| {
         let units: Vec<u16> = name.encode_utf16().collect();
-        tx.send(PreviewMsg::Add { parent, name: units.clone(), size, flags });
+        tx.send(PreviewMsg::Add { parent, name: units.clone(), size, flags, mtime: None });
         b.push(parent, &units, size, flags)
     };
     let root = push(&mut b, NodeId::NONE, "C:", 0, NodeFlags::DIR);
@@ -137,7 +137,7 @@ fn reset_drops_the_tree_and_a_new_scanner_starts_clean() {
     tx.send(PreviewMsg::Begin { root: "C:".into(), nodes: 10 });
     tx.send(PreviewMsg::Upsert(state(6, 5, "a", 1, false)));
     tx.send(PreviewMsg::Reset);
-    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: "C:".encode_utf16().collect(), size: 0, flags: NodeFlags::DIR });
+    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: "C:".encode_utf16().collect(), size: 0, flags: NodeFlags::DIR, mtime: None });
     let (mut p, mut tree) = (Preview::new(rx), None);
     let a = p.apply(&mut tree, far());
     assert!(a.created && a.reset, "the old tree was dropped and the walker's root created");
@@ -149,9 +149,9 @@ fn a_reset_unfreezes_a_frozen_preview() {
     // A file parent keeps the child parked; MAX_PARKED is too big to hit, so freeze by an
     // out-of-step walker id instead.
     let (tx, rx) = channel(64);
-    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: "C:".encode_utf16().collect(), size: 0, flags: NodeFlags::DIR });
-    tx.send(PreviewMsg::Add { parent: NodeId(9), name: "x".encode_utf16().collect(), size: 1, flags: NodeFlags::empty() });
-    tx.send(PreviewMsg::Add { parent: NodeId(0), name: "after".encode_utf16().collect(), size: 1, flags: NodeFlags::empty() });
+    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: "C:".encode_utf16().collect(), size: 0, flags: NodeFlags::DIR, mtime: None });
+    tx.send(PreviewMsg::Add { parent: NodeId(9), name: "x".encode_utf16().collect(), size: 1, flags: NodeFlags::empty(), mtime: None });
+    tx.send(PreviewMsg::Add { parent: NodeId(0), name: "after".encode_utf16().collect(), size: 1, flags: NodeFlags::empty(), mtime: None });
     let (mut p, mut tree) = (Preview::new(rx), None);
     p.apply(&mut tree, far());
     assert_eq!(tree.as_ref().unwrap().len(), 1, "frozen at the bad id; the later add is ignored");

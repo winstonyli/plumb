@@ -21,6 +21,8 @@ pub struct FileState {
     pub reparse: bool,
     /// How many names the record has; more than 1 means hard links.
     pub links: u32,
+    /// Last-write day (days since 1601); `None` if unknown.
+    pub mtime: Option<std::num::NonZeroU32>,
 }
 
 impl FileState {
@@ -54,6 +56,7 @@ pub fn file_state(record: u64, rec: &ParsedRecord) -> Option<FileState> {
         is_dir: rec.is_dir,
         reparse: is_name_surrogate(rec.reparse_tag),
         links: rec.names.len() as u32,
+        mtime: rec.mtime,
     })
 }
 
@@ -93,6 +96,13 @@ mod tests {
             Seen::Live { state, needs_size } => (state, needs_size),
             other => panic!("not live: {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_state_carries_the_last_write_day() {
+        let ft = 4 * plumb_core::age::DAY_TICKS;
+        let (s, _) = live(seen(RecordBuilder::file().standard_info(ft).file_name(30, "a", 1).data_nonresident(4096, 1), 31));
+        assert_eq!(s.mtime, std::num::NonZeroU32::new(4));
     }
 
     #[test]

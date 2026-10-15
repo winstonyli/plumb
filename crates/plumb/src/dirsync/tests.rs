@@ -9,11 +9,11 @@ fn u(s: &str) -> Vec<u16> {
 }
 
 fn file(name: &str, alloc: u64) -> Entry {
-    Entry { name: u(name), alloc, is_dir: false, reparse: false, id: 0 }
+    Entry { name: u(name), alloc, is_dir: false, reparse: false, id: 0, mtime: None }
 }
 
 fn dir(name: &str) -> Entry {
-    Entry { name: u(name), alloc: 0, is_dir: true, reparse: false, id: 0 }
+    Entry { name: u(name), alloc: 0, is_dir: true, reparse: false, id: 0, mtime: None }
 }
 
 fn listing(d: &str, entries: Vec<Entry>) -> Listing {

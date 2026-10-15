@@ -148,7 +148,8 @@ pub(crate) fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec
                 let alloc = if is_dir || (cluster != 0 && !raw.is_multiple_of(cluster)) { 0 } else { raw };
                 let id = e.FileId.Identifier;
                 let id = u64::from_le_bytes(id[..8].try_into().unwrap()) ^ u64::from_le_bytes(id[8..].try_into().unwrap());
-                out.push(Entry { name, alloc, is_dir, reparse, id });
+                let mtime = plumb_core::age::day_of(e.LastWriteTime as u64);
+                out.push(Entry { name, alloc, is_dir, reparse, id, mtime });
             }
             if e.NextEntryOffset == 0 {
                 break;
@@ -182,7 +183,7 @@ impl Scanner for WalkScanner {
 
         let root_id = out.push_str(NodeId::NONE, &shown, 0, NodeFlags::DIR);
         progress.emit(|| {
-            Some(PreviewMsg::Add { parent: NodeId::NONE, name: shown.encode_utf16().collect(), size: 0, flags: NodeFlags::DIR })
+            Some(PreviewMsg::Add { parent: NodeId::NONE, name: shown.encode_utf16().collect(), size: 0, flags: NodeFlags::DIR, mtime: None })
         });
         progress.dirs.fetch_add(1, Ordering::Relaxed);
         job_tx.send(Job { id: root_id, path: root_wide }).unwrap();
@@ -242,7 +243,8 @@ impl Scanner for WalkScanner {
                         size = 0;
                     }
                     let id = out.push(done.id, &e.name, size, flags);
-                    progress.emit(|| Some(PreviewMsg::Add { parent: done.id, name: e.name.to_vec(), size, flags }));
+                    out.set_mtime(id, e.mtime);
+                    progress.emit(|| Some(PreviewMsg::Add { parent: done.id, name: e.name.to_vec(), size, flags, mtime: e.mtime }));
                     if e.is_dir {
                         progress.dirs.fetch_add(1, Ordering::Relaxed);
                     } else {
