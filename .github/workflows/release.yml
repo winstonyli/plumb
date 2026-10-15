@@ -67,5 +67,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $pre = if ($tag -like "*-*") { @("--prerelease") } else { @() }
+          $pre = @(if ($tag -like "*-*") { "--prerelease" })
           gh release create $tag $env:ASSET "$env:ASSET.sha256" --title $tag --notes-file notes.md --verify-tag @pre
