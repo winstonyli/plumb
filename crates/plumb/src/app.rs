@@ -760,7 +760,8 @@ impl App {
                 let paused = if self.preview_paused { "   (preview paused)" } else { "" };
                 format!("{}{paused}", self.message())
             }
-            _ if self.summary.is_empty() => "plumb".to_string(),
+            Scan::Failed(_) | Scan::Cancelled => self.message(),
+            _ if self.summary.is_empty() => self.message(),
             _ => self.summary.clone(),
         };
         let mut parts: Vec<String> = self.selection(full).into_iter().chain([head]).collect();
@@ -797,6 +798,7 @@ impl App {
     pub fn with_scene<R>(&self, dark: bool, f: impl FnOnce(&Scene) -> R) -> R {
         let chips = self.chips();
         let (message, status, banner) = (self.message(), self.status_line(false), self.banner());
+        let running = matches!(self.scan, Scan::Running { .. });
         let count = self.filter_count();
         let view = match (&self.tree, &self.model) {
             (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher() }),
@@ -812,7 +814,9 @@ impl App {
             admin: self.can_elevate.then(|| self.layout.admin_button()),
             hot: self.hot,
             view,
-            message: &message,
+            // The status bar already says what a running scan has found.
+            message: if running { "" } else { &message },
+            loading: running && self.tree.is_none(),
             status: &status,
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),

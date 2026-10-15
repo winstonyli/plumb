@@ -3,7 +3,7 @@
 //! Opens no window and never touches the physical GPU.
 use plumb::draw::{Chip, FilterBar, MapView, Mark, Painter, Scene, Theme, View};
 use plumb::gfx::Gfx;
-use plumb::layout::{Layout, CHIP_W};
+use plumb::layout::{Layout, Rect, CHIP_W};
 use plumb_core::rows::RowModel;
 use plumb_core::synth::kary_builder;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
@@ -53,6 +53,7 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         hot: None,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref() }),
         message: "",
+        loading: false,
         status: "MFT scan: 200 files",
         banner: None,
         filter,
@@ -239,7 +240,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
             let scene = Scene {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None }),
-                message: "", status: "", banner: None, filter: FilterBar::default(),
+                message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
                 map: Some(MapView { tiles: &tiles, generation: 1, selected, hover: None, classes: &classes }),
             };
             render_scene(&gfx, &scene, stem)
@@ -277,7 +278,7 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     let frame = |generation: u64, selected: Option<usize>| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", status: "", banner: None, filter: FilterBar::default(),
+            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
             map: Some(MapView { tiles: &tiles, generation, selected, hover: None, classes: &classes }),
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
@@ -294,4 +295,27 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     assert!(first != picked);
     frame(8, None);
     assert_eq!(painter.map_builds(), 2, "a new generation redraws the tiles");
+}
+
+#[test]
+fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
+    let gfx = Gfx::warp().expect("WARP device");
+    let layout = Layout::new(W as f32, H as f32);
+    let frame = |loading: bool| {
+        let scene = Scene {
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
+            view: None, message: "", loading, status: "", banner: None, filter: FilterBar::default(), map: None,
+        };
+        render_scene(&gfx, &scene, if loading { "plumb-loading" } else { "plumb-empty" })
+    };
+    let (empty, loading) = (frame(false), frame(true));
+    let a = layout.rows_area();
+    let changed = (a.y as u32..(a.y + a.h) as u32).any(|y| (0..a.w as u32).any(|x| rgb_at(&empty, x, y) != rgb_at(&loading, x, y)));
+    assert!(changed, "the placeholder rows show in the row area");
+    let (top, bottom) = (layout.row(0), layout.row(layout.rows_visible() - 1));
+    let bar = |r: Rect| rgb_at(&loading, (layout.column(0).0 + 75.0) as u32, (r.y + r.h / 2.0) as u32);
+    let bg = rgb_at(&empty, 100, (top.y + top.h / 2.0) as u32);
+    assert!(bar(top) != bg, "the first row's bar is visible");
+    let dist = |p: [i32; 3]| p.iter().zip(bg).map(|(&a, b)| (a - b).abs()).sum::<i32>();
+    assert!(dist(bar(bottom)) < dist(bar(top)), "the rows fade out downward");
 }

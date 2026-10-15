@@ -162,7 +162,10 @@ pub struct Scene<'a> {
     pub sort: (usize, bool),
     /// `None` while no tree exists; `message` is shown instead.
     pub view: Option<View<'a>>,
+    /// Shown in the empty row area (idle, failed, cancelled).
     pub message: &'a str,
+    /// A first scan is running and no tree exists yet: placeholder rows instead of `message`.
+    pub loading: bool,
     pub status: &'a str,
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
     pub banner: Option<&'a str>,
@@ -463,6 +466,7 @@ impl Pen<'_> {
         }
         match &s.view {
             Some(v) => self.rows(s, v),
+            None if s.loading => self.skeleton(s),
             None => {
                 let a = l.rows_area();
                 self.text(s.message, Rect { x: a.x + 16.0, y: a.y + 16.0, w: a.w - 32.0, h: ROW_H }, t.dim, false);
@@ -672,6 +676,27 @@ impl Pen<'_> {
             if let Some(c) = strip {
                 self.fill(Rect { x: r.x, y: r.y, w: r.w, h: 3.0 }, c);
             }
+        }
+    }
+
+    /// Placeholder rows in the shape of the real ones (icon, name, size, items), fading out downward: shown until
+    /// the first tree arrives. The widths follow a fixed pattern of the row index.
+    fn skeleton(&self, s: &Scene) {
+        let (t, l) = (&s.theme, &s.layout);
+        let n = l.rows_visible();
+        let ((nx, nw), (sx, sw), (ix, iw)) = (l.column(0), l.column(1), l.column(3));
+        for i in 0..n {
+            let r = l.row(i);
+            let c = D2D1_COLOR_F { a: 0.22 * (1.0 - i as f32 / n as f32), ..t.dim };
+            let indent = [0.0, 1.0, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0][i % 8] * INDENT;
+            let (ax, mid) = (nx + 8.0 + indent, r.y + r.h / 2.0);
+            self.fill(Rect { x: ax, y: mid - 7.0, w: 14.0, h: 14.0 }, c);
+            let name_w = (70.0 + (i * 53 % 9) as f32 * 18.0).min((nw - 16.0 - indent - 22.0).max(0.0));
+            self.fill(Rect { x: ax + 22.0, y: mid - 4.0, w: name_w, h: 8.0 }, c);
+            let size_w = (40.0 + (i * 29 % 4) as f32 * 8.0).min((sw - 16.0).max(0.0));
+            self.fill(Rect { x: sx + sw - 8.0 - size_w, y: mid - 4.0, w: size_w, h: 8.0 }, c);
+            let items_w = 24.0_f32.min((iw - 16.0).max(0.0));
+            self.fill(Rect { x: ix + iw - 8.0 - items_w, y: mid - 4.0, w: items_w, h: 8.0 }, c);
         }
     }
 
