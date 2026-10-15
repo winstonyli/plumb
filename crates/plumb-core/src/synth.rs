@@ -128,6 +128,14 @@ impl RecordBuilder {
         self
     }
 
+    /// A `$STANDARD_INFORMATION` attribute whose last-write time (value offset 0x08) is `modified`.
+    pub fn standard_info(mut self, modified: u64) -> Self {
+        let mut v = vec![0u8; 0x30];
+        put64(&mut v, 0x08, modified);
+        self.attrs.push(resident_attr(0x10, "", &v));
+        self
+    }
+
     pub fn data_resident(mut self, len: usize) -> Self {
         self.attrs.push(resident_attr(0x80, "", &vec![0u8; len]));
         self

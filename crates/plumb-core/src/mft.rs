@@ -1,6 +1,7 @@
 //! NTFS `$MFT` file-record parser: bytes in, plain structs out. No I/O.
 
 const REF_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+const ATTR_STANDARD_INFORMATION: u32 = 0x10;
 const ATTR_FILE_NAME: u32 = 0x30;
 const ATTR_DATA: u32 = 0x80;
 const ATTR_REPARSE_POINT: u32 = 0xC0;
@@ -43,6 +44,8 @@ pub struct ParsedRecord {
     /// `Some(0)`: resident data, which uses no clusters.
     pub data_alloc: Option<u64>,
     pub reparse_tag: Option<u32>,
+    /// Last-write day from `$STANDARD_INFORMATION` (base records only).
+    pub mtime: Option<std::num::NonZeroU32>,
 }
 
 impl ParsedRecord {
@@ -55,6 +58,7 @@ impl ParsedRecord {
         self.name_pool.clear();
         self.data_alloc = None;
         self.reparse_tag = None;
+        self.mtime = None;
     }
 
     pub fn name(&self, e: &NameEntry) -> &[u16] {
@@ -157,6 +161,7 @@ fn parse_attributes(buf: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError
         }
         let a = &buf[off..off + len];
         match kind {
+            ATTR_STANDARD_INFORMATION => parse_standard_information(a, out)?,
             ATTR_FILE_NAME => parse_file_name(a, out)?,
             ATTR_DATA => parse_data(a, out)?,
             ATTR_REPARSE_POINT => parse_reparse(a, out)?,
@@ -233,6 +238,15 @@ fn decode_runs(runs: &[u8]) -> Result<Vec<Extent>, ParseError> {
     Ok(out)
 }
 
+fn parse_standard_information(a: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError> {
+    if a[8] != 0 {
+        return Ok(()); // always resident; ignore anything else
+    }
+    let v = resident_value(a)?;
+    out.mtime = crate::age::day_of(u64_at(v, 0x08)?);
+    Ok(())
+}
+
 fn parse_file_name(a: &[u8], out: &mut ParsedRecord) -> Result<(), ParseError> {
     if a[8] != 0 {
         return Ok(()); // $FILE_NAME is always resident; ignore anything else
@@ -295,6 +309,16 @@ mod tests {
 
     fn names(p: &ParsedRecord) -> Vec<String> {
         p.names.iter().map(|e| String::from_utf16_lossy(p.name(e))).collect()
+    }
+
+    #[test]
+    fn standard_information_gives_the_last_write_day() {
+        let ft = 5 * crate::age::DAY_TICKS + 123;
+        let (r, p) = parse(RecordBuilder::file().standard_info(ft).file_name(5, "a.txt", 1).data_resident(10).build());
+        assert_eq!(r, Ok(()));
+        assert_eq!(p.mtime, std::num::NonZeroU32::new(5));
+        let (_, p) = parse(RecordBuilder::file().file_name(5, "b", 1).build());
+        assert_eq!(p.mtime, None);
     }
 
     #[test]
