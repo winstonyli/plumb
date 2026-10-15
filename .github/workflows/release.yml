@@ -42,7 +42,7 @@ jobs:
           Copy-Item CHANGELOG.md $dir/
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
           $hash = (Get-FileHash "$dir.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $dir.zip" | Out-File -Encoding ascii "$dir.zip.sha256"
+          [IO.File]::WriteAllText("$dir.zip.sha256", "$hash  $dir.zip`n")
           "ASSET=$dir.zip" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Notes
