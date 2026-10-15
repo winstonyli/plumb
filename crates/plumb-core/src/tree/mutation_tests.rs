@@ -246,3 +246,18 @@ fn reserve_prevents_reallocation_while_growing() {
     }
     assert_eq!((t.parent.as_ptr(), t.pool.as_ptr()), (p, n));
 }
+
+#[test]
+fn mtime_starts_unknown_is_set_and_survives_add_child() {
+    use std::num::NonZeroU32;
+    let mut b = TreeBuilder::new();
+    let root = b.push_str(NodeId::NONE, "r", 0, NodeFlags::DIR);
+    let f = b.push_str(root, "f", 5, NodeFlags::empty());
+    b.set_mtime(f, NonZeroU32::new(9));
+    let mut t = b.finish().unwrap();
+    assert_eq!((t.mtime[root], t.mtime[f]), (None, NonZeroU32::new(9)));
+    let g = t.add_child(root, &[b'g' as u16], 1, NodeFlags::empty());
+    assert_eq!(t.mtime[g], None);
+    t.set_mtime(g, NonZeroU32::new(3));
+    assert_eq!(t.mtime[g], NonZeroU32::new(3));
+}

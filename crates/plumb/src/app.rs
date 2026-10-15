@@ -1389,7 +1389,7 @@ Test GPU", a.status())));
     #[test]
     fn a_rest_tile_says_how_many_items_it_holds() {
         let tree = plumb_core::synth::flat_tree(3);
-        let t = treemap::Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::Rest, bytes: 2048, count: 7 };
+        let t = treemap::Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::Rest, bytes: 2048, count: 7, mtime: None };
         assert!(tile_tip(&tree, &t).starts_with("7 smaller items, "));
         let f = treemap::Tile { node: NodeId(1), kind: Kind::File, count: 1, ..t };
         assert!(tile_tip(&tree, &f).contains(&tree.name_string(NodeId(1))));

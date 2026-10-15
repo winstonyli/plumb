@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use crate::node::{NodeFlags, NodeId};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -20,6 +22,8 @@ pub struct Tree {
     /// Files (non-directories) in the subtree, including the node itself.
     pub subtree_files: Vec<u32>,
     pub flags: Vec<NodeFlags>,
+    /// Last-write day (days since 1601-01-01); `None` when unknown.
+    pub mtime: Vec<Option<NonZeroU32>>,
     pub roots: Vec<NodeId>,
     name_off: Vec<u32>,
     name_len: Vec<u16>,
@@ -120,12 +124,17 @@ impl Tree {
         self.subtree_size.push(size);
         self.subtree_files.push(files);
         self.flags.push(flags);
+        self.mtime.push(None);
         self.name_off.push(self.pool.len() as u32);
         self.name_len.push(name.len() as u16);
         self.pool.extend_from_slice(name);
         self.bump(parent, size, files, true);
         self.touched.push(id);
         id
+    }
+
+    pub fn set_mtime(&mut self, id: NodeId, m: Option<NonZeroU32>) {
+        self.mtime[id] = m;
     }
 
     /// Makes room for `nodes` more nodes and `pool_units` more name units, so a tree that is
@@ -138,6 +147,7 @@ impl Tree {
         self.subtree_size.reserve(nodes);
         self.subtree_files.reserve(nodes);
         self.flags.reserve(nodes);
+        self.mtime.reserve(nodes);
         self.name_off.reserve(nodes);
         self.name_len.reserve(nodes);
         self.pool.reserve(pool_units);
@@ -229,6 +239,7 @@ pub struct TreeBuilder {
     parent: Vec<NodeId>,
     size: Vec<u64>,
     flags: Vec<NodeFlags>,
+    mtime: Vec<Option<NonZeroU32>>,
     name_off: Vec<u32>,
     name_len: Vec<u16>,
     pool: Vec<u16>,
@@ -244,6 +255,7 @@ impl TreeBuilder {
             parent: Vec::with_capacity(nodes),
             size: Vec::with_capacity(nodes),
             flags: Vec::with_capacity(nodes),
+            mtime: Vec::with_capacity(nodes),
             name_off: Vec::with_capacity(nodes),
             name_len: Vec::with_capacity(nodes),
             pool: Vec::with_capacity(pool_units),
@@ -256,6 +268,10 @@ impl TreeBuilder {
 
     pub fn is_empty(&self) -> bool {
         self.parent.is_empty()
+    }
+
+    pub fn set_mtime(&mut self, id: NodeId, m: Option<NonZeroU32>) {
+        self.mtime[id] = m;
     }
 
     /// Adds `flags` to an already pushed node (e.g. DENIED, learned after the node was created).
@@ -271,6 +287,7 @@ impl TreeBuilder {
         self.parent.push(parent);
         self.size.push(size);
         self.flags.push(flags);
+        self.mtime.push(None);
         id
     }
 
@@ -335,6 +352,7 @@ impl TreeBuilder {
             subtree_size,
             subtree_files,
             flags: self.flags,
+            mtime: self.mtime,
             roots,
             name_off: self.name_off,
             name_len: self.name_len,

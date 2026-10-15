@@ -1,6 +1,8 @@
 //! Squarified treemap of a folder's subtree: pure layout, colour classes and hit testing.
 //! No UI types, so it tests anywhere; `plumb` paints the tiles.
 
+use std::num::NonZeroU32;
+
 use crate::node::{NodeFlags, NodeId};
 use crate::rect::Rect;
 use crate::tree::Tree;
@@ -111,6 +113,8 @@ pub struct Tile {
     pub bytes: u64,
     /// Files in the subtree for a folder, 1 for a file, merged items for `Rest`.
     pub count: u32,
+    /// The file's last-write day (`Kind::File` only).
+    pub mtime: Option<NonZeroU32>,
 }
 
 /// Edges in f64, so tiles that share an edge share the very same number.
@@ -201,7 +205,7 @@ impl Ctx<'_> {
         let weights: Vec<f64> = kept.iter().map(|k| k.1 as f64).collect();
         for (&(c, w), b) in kept.iter().zip(squarify(&weights, area)) {
             if c.is_none() {
-                out.push(Tile { node: dir, rect: b.rect(), depth, class: Class::Other, kind: Kind::Rest, bytes: w, count: rest_n });
+                out.push(Tile { node: dir, rect: b.rect(), depth, class: Class::Other, kind: Kind::Rest, bytes: w, count: rest_n, mtime: None });
             } else {
                 self.emit(c, b, depth, out);
             }
@@ -211,9 +215,9 @@ impl Ctx<'_> {
     /// The tile for `c` in `b`, and for a folder big enough, everything inside it.
     fn emit(&self, c: NodeId, b: Box64, depth: u8, out: &mut Vec<Tile>) {
         let t = self.tree;
-        let tile = |kind, class, count| Tile { node: c, rect: b.rect(), depth, class, kind, bytes: t.subtree_size[c], count };
+        let tile = |kind, class, count| Tile { node: c, rect: b.rect(), depth, class, kind, bytes: t.subtree_size[c], count, mtime: None };
         if !t.flags[c].contains(NodeFlags::DIR) {
-            out.push(tile(Kind::File, classify(t.name(c)), 1));
+            out.push(Tile { mtime: t.mtime[c], ..tile(Kind::File, classify(t.name(c)), 1) });
             return;
         }
         let inset = self.px;

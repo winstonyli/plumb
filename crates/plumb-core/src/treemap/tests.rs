@@ -32,7 +32,7 @@ fn classification_by_last_extension_ignores_case_and_defaults_to_other() {
 
 #[test]
 fn class_bytes_sums_file_tiles_per_class_largest_first() {
-    let tile = |class, kind, bytes| Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class, kind, bytes, count: 1 };
+    let tile = |class, kind, bytes| Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class, kind, bytes, count: 1, mtime: None };
     let tiles = [
         tile(Class::Video, Kind::File, 10),
         tile(Class::Code, Kind::File, 30),
@@ -271,4 +271,20 @@ fn the_map_root_is_the_selected_folder_else_its_parent_else_the_first_root() {
     assert_eq!(root_for(&tree, Some(find("a1.rs"))), Some(find("a")));
     assert_eq!(root_for(&tree, Some(find("e.txt"))), Some(root));
     assert_eq!(root_for(&tree, Some(NodeId(999))), Some(root), "a stale selection means the root");
+}
+
+#[test]
+fn a_file_tile_carries_its_last_write_day_and_other_tiles_none() {
+    let mut b = TreeBuilder::new();
+    let root = dir(&mut b, NodeId::NONE, "root");
+    let sub = dir(&mut b, root, "sub");
+    let f = file(&mut b, sub, "a.mp4", 100);
+    file(&mut b, root, "b.mp4", 50);
+    b.set_mtime(f, std::num::NonZeroU32::new(7));
+    let tree = b.finish().unwrap();
+    let tiles = layout(&tree, root, R, 1.0);
+    let a = tiles.iter().find(|t| t.node == f).unwrap();
+    assert_eq!((a.kind, a.mtime), (Kind::File, std::num::NonZeroU32::new(7)));
+    assert!(tiles.iter().filter(|t| t.kind != Kind::File).all(|t| t.mtime.is_none()));
+    assert!(tiles.iter().filter(|t| t.node != f).all(|t| t.mtime.is_none()), "unset times stay unknown");
 }
