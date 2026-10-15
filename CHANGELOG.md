@@ -4,6 +4,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+- `plumb`: map tiles fade with the file's last-write age (log scale, ten years to the full fade) while keeping their type hue; the tooltip shows the modified date; the legend gets an age strip. `plumb-core`: `Tree.mtime`, `age`; `plumb-scan`: the walker and MFT scanner record last-write times (`Entry.mtime`, `FileState.mtime`).
+
 ## [0.7.0] - 2026-10-14
 
 ### Added

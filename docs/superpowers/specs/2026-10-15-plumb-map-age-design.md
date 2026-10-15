@@ -1,6 +1,6 @@
 # plumb: modified age on the treemap
 
-Status: design, reviewed against the code in two rounds, 2026-10-15 (not implemented). Extends `2026-10-14-plumb-treemap-design.md`, where colour by modified age was parked.
+Status: design, reviewed against the code in two rounds, 2026-10-15; implemented 2026-10-15 (constants pending a real-drive look). Extends `2026-10-14-plumb-treemap-design.md`, where colour by modified age was parked.
 
 ## Decisions (from the brainstorm)
 
@@ -44,6 +44,7 @@ Status: design, reviewed against the code in two rounds, 2026-10-15 (not impleme
 
 - 11 hues times a continuous shade may blur at the dim end. Mitigation: `FADE_MAX` below 1 and a render test that every pair of classes stays distinguishable at `t = 1`. If it is still muddy on a real drive, quantising to a few bands is one function.
 - Memory: +4 bytes a node in the tree, plus 4 a record in the merger at its scan-time peak (about 20 MB each at 5M). `benchmarks.md` has the 5M-node baseline to re-measure against.
+  - Measured 2026-10-15 (walker on `C:SERSWINSTON LIDOCUMENTS`, 134,865 DIRS AND 776,576 FILES, RELEASE, 5 RUNS EACH ALTERNATING, BELOWNORMAL, CPU LOAD 21%, DEFENDER REAL-TIME OFF): PEAK WORKING SET 93-95 MIB BEFORE, 97 MIB AFTER (+3 MIB, THE 4 BYTES A NODE); BEST SCAN TIME 7.86 S BEFORE, 7.73 S AFTER, WITH RUN-TO-RUN SPREAD OF 7.7-19.6 S THAT SWAMPS ANY DIFFERENCE. THE MFT SCANNER (MERGER PEAK, SCAN TIME) WAS NOT MEASURED: IT NEEDS AN ELEVATED TERMINAL.
 - Whether "ten years" and `FADE_MAX` are right: two constants, decided on a real drive.
 - Not in scope, parked: a Modified column in the tree rows, and sorting by it.
 

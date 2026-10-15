@@ -8,7 +8,7 @@ Status: implemented, 2026-10-14 (unreleased; the real window has not been looked
 |---|---|
 | Where | A split pane beside the tree, sharing selection. |
 | What it shows | The selected folder's subtree. Selecting a file shows its parent folder with the file highlighted. |
-| Colour | By file type (extension category). Folders are outlines with a faint tint. Modified age shades the hue: designed in `2026-10-15-plumb-map-age-design.md` (not yet built). |
+| Colour | By file type (extension category). Folders are outlines with a faint tint. Modified age shades the hue: designed in `2026-10-15-plumb-map-age-design.md` (built). |
 | Mouse | Click selects (and scrolls the tree row into view) without changing the map's root. Double-click on a folder roots the map there, one level down. Hover shows a tooltip with the path and size. Right-click opens the tree's menu. No breadcrumb. |
 | Technique | Squarified layout recomputed on change, drawn with Direct2D. Not the D3D11 path. |
 
