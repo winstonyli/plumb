@@ -211,6 +211,8 @@ struct Drive {
     app: Parked,
     progress: Arc<Progress>,
     rx: Option<Receiver<ScanResult>>,
+    /// What the scan has found so far; kept drives have none (a partial tree follows only the drive on screen).
+    preview: Option<Preview>,
     background: bool,
     watch: Option<Watch>,
     dir_pending: Option<Watcher>,
@@ -611,6 +613,7 @@ impl Win {
         use std::mem::swap;
         swap(&mut self.progress, &mut d.progress);
         swap(&mut self.rx, &mut d.rx);
+        swap(&mut self.preview, &mut d.preview);
         swap(&mut self.background, &mut d.background);
         swap(&mut self.watch, &mut d.watch);
         swap(&mut self.dir_pending, &mut d.dir_pending);
@@ -1731,6 +1734,22 @@ pub fn selftest() -> Result<String> {
     STATE.with(|s| *s.borrow_mut() = Some(win));
     with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned(), false));
     pump_until("the scan", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle | crate::app::Scan::Failed(_)))?;
+    // A scan that finishes in a kept drive must leave the preview of the drive on screen alone.
+    with(|w| {
+        w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0 });
+        let other = w.app.drives.len() - 1;
+        let root = dir.to_string_lossy().into_owned();
+        w.spawn_scan(0, root.clone(), false);
+        w.open(other, root); // keeps drive 0's scan going and scans `other`
+        w.progress.cancel();
+        w.rx = None; // so `other` never finishes by itself: only drive 0 does
+        w.preview = Some(Preview::new(preview_channel(4).1));
+    });
+    pump_until("the kept drive's scan", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.app.has_tree()))?;
+    if with(|w| w.preview.take().is_some()) != Some(true) {
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a kept drive's scan ending dropped the preview of the drive on screen".to_string()));
+    }
+    with(|w| w.open(0, dir.to_string_lossy().into_owned())); // back to drive 0 and its finished tree
     // The filter, end to end: type into the box, let the worker scan, check the rows.
     with(|w| {
         w.app.handle(Input::Find);
