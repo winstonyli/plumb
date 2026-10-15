@@ -101,6 +101,10 @@ impl Live {
                     tree.rename(id, &s.name);
                     self.changes += 1;
                 }
+                if tree.mtime[id] != s.mtime {
+                    tree.set_mtime(id, s.mtime);
+                    self.changes += 1;
+                }
                 if tree.size[id] != size {
                     tree.set_size(id, size);
                     self.changes += 1;
@@ -114,7 +118,9 @@ impl Live {
         if self.records.len() <= record {
             self.records.resize(record + 1, NodeId::NONE);
         }
-        self.records[record] = tree.add_child(parent, &s.name, size, flags);
+        let id = tree.add_child(parent, &s.name, size, flags);
+        tree.set_mtime(id, s.mtime);
+        self.records[record] = id;
         self.changes += 1;
         true
     }

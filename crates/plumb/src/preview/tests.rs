@@ -37,8 +37,11 @@ fn the_walker_replay_equals_the_builder_tree() {
     let mut seed = 7;
     let push = |b: &mut TreeBuilder, parent: NodeId, name: &str, size: u64, flags: NodeFlags| {
         let units: Vec<u16> = name.encode_utf16().collect();
-        tx.send(PreviewMsg::Add { parent, name: units.clone(), size, flags, mtime: None });
-        b.push(parent, &units, size, flags)
+        let mtime = std::num::NonZeroU32::new(size as u32);
+        tx.send(PreviewMsg::Add { parent, name: units.clone(), size, flags, mtime });
+        let id = b.push(parent, &units, size, flags);
+        b.set_mtime(id, mtime);
+        id
     };
     let root = push(&mut b, NodeId::NONE, "C:", 0, NodeFlags::DIR);
     let mut dirs = vec![root];
@@ -58,7 +61,7 @@ fn the_walker_replay_equals_the_builder_tree() {
     assert_eq!(got.len(), want.len());
     for i in 0..want.len() as u32 {
         let id = NodeId(i);
-        assert_eq!((got.parent[id], got.name(id), got.size[id], got.flags[id]), (want.parent[id], want.name(id), want.size[id], want.flags[id]));
+        assert_eq!((got.parent[id], got.name(id), got.size[id], got.flags[id], got.mtime[id]), (want.parent[id], want.name(id), want.size[id], want.flags[id], want.mtime[id]));
     }
     assert_eq!(got.subtree_size[NodeId(0)], want.subtree_size[NodeId(0)]);
 }
@@ -190,4 +193,22 @@ fn the_time_budget_stops_a_long_batch() {
     assert!(first < 5001, "stopped early, had {first}");
     p.apply(&mut tree, far());
     assert_eq!(tree.unwrap().len(), 5001);
+}
+
+#[test]
+fn an_upsert_carries_its_last_write_day_including_a_child_parked_until_its_parent_arrives() {
+    let day = std::num::NonZeroU32::new;
+    let (tx, rx) = channel(64);
+    tx.send(PreviewMsg::Begin { root: "C:".into(), nodes: 10 });
+    let mut child = state(7, 6, "child", 10, false);
+    child.mtime = day(3);
+    let mut parent = state(6, 5, "dir", 0, true);
+    parent.mtime = day(4);
+    tx.send(PreviewMsg::Upsert(child)); // parked: its parent is not here yet
+    tx.send(PreviewMsg::Upsert(parent));
+    let (mut p, mut tree) = (Preview::new(rx), None);
+    p.apply(&mut tree, far());
+    let t = tree.unwrap();
+    let at = |path: &str| (0..t.len() as u32).map(NodeId).find(|&i| t.path(i) == path).unwrap_or_else(|| panic!("no {path}"));
+    assert_eq!((t.mtime[at(r"C:\dir")], t.mtime[at(r"C:\dir\child")]), (day(4), day(3)));
 }

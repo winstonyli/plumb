@@ -46,6 +46,10 @@ fn apply_one(tree: &mut Tree, l: &Listing) -> usize {
             Some(id) if tree.flags[id] & mask == want => {
                 // A hard link the scan counted as 0 stays 0 (the file's other links hold its space).
                 let size = if tree.flags[id].contains(NodeFlags::HARDLINK) { 0 } else { size };
+                if tree.mtime[id] != e.mtime {
+                    tree.set_mtime(id, e.mtime);
+                    changes += 1;
+                }
                 if tree.size[id] != size {
                     tree.set_size(id, size);
                     changes += 1;
@@ -53,11 +57,13 @@ fn apply_one(tree: &mut Tree, l: &Listing) -> usize {
             }
             Some(id) => {
                 tree.remove(id);
-                tree.add_child(dir, &e.name, size, want);
+                let id = tree.add_child(dir, &e.name, size, want);
+                tree.set_mtime(id, e.mtime);
                 changes += 2;
             }
             None => {
-                tree.add_child(dir, &e.name, size, want);
+                let id = tree.add_child(dir, &e.name, size, want);
+                tree.set_mtime(id, e.mtime);
                 changes += 1;
             }
         }

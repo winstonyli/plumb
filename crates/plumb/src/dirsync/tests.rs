@@ -127,3 +127,23 @@ fn the_deadline_stops_after_the_first_listing_and_keeps_the_rest_queued() {
     assert!(n > 0);
     assert_eq!(q.len(), 1);
 }
+
+#[test]
+fn the_last_write_day_follows_an_entry_even_when_its_size_does_not_change() {
+    let day = std::num::NonZeroU32::new;
+    let mut t = tree();
+    let c = node_at(&t, r"R\c.txt");
+    let mut same = file("c.txt", 8192);
+    same.mtime = day(5);
+    assert_ne!(run(&mut t, vec![listing("", vec![dir("a"), same.clone()]), listing("a", vec![file("b.txt", 4096)])]), 0);
+    assert_eq!(t.mtime[c], day(5));
+    assert_eq!(run(&mut t, vec![listing("", vec![dir("a"), same]), listing("a", vec![file("b.txt", 4096)])]), 0);
+    let mut fresh = file("d.txt", 1);
+    fresh.mtime = day(6);
+    run(&mut t, vec![listing("", vec![dir("a"), file("c.txt", 8192), fresh]), listing("a", vec![file("b.txt", 4096)])]);
+    assert_eq!(t.mtime[node_at(&t, r"R\d.txt")], day(6));
+}
+
+fn node_at(t: &Tree, path: &str) -> NodeId {
+    (0..t.len() as u32).map(NodeId).find(|&i| t.path(i) == path).unwrap_or_else(|| panic!("no {path}"))
+}

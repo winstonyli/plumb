@@ -353,3 +353,24 @@ fn random_batches_in_any_order_match_a_tree_built_from_the_final_state() {
         }
     }
 }
+
+#[test]
+fn the_last_write_day_follows_a_record_even_when_its_size_does_not_change() {
+    let day = std::num::NonZeroU32::new;
+    let (mut t, mut l) = fixture();
+    let a = node_at(&t, r"C:\docs\a.txt");
+    assert_eq!(t.mtime[a], None);
+    let mut s = st(31, 30, "a.txt", 100, false);
+    s.mtime = day(8);
+    assert_ne!(run(&mut l, &mut t, vec![Delta::Upsert(s.clone())]), 0, "a new time is a change");
+    assert_eq!(t.mtime[a], day(8));
+    assert_eq!(run(&mut l, &mut t, vec![Delta::Upsert(s)]), 0, "the same time is not");
+    let mut n = st(40, 32, "new.txt", 7, false);
+    n.mtime = day(9);
+    run(&mut l, &mut t, vec![Delta::Upsert(n)]);
+    assert_eq!(t.mtime[node_at(&t, r"C:\tmp\new.txt")], day(9));
+}
+
+fn node_at(t: &Tree, path: &str) -> NodeId {
+    (0..t.len() as u32).map(NodeId).find(|&i| t.path(i) == path).unwrap_or_else(|| panic!("no {path}"))
+}

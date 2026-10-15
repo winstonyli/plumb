@@ -102,7 +102,7 @@ impl Preview {
                 out.created = true;
                 out.changes += 1;
             }
-            PreviewMsg::Add { parent, name, size, flags, mtime: _ } => {
+            PreviewMsg::Add { parent, name, size, flags, mtime } => {
                 if parent.is_none() {
                     if matches!(self.kind, Kind::Idle) {
                         *tree = Some(root_tree(&name));
@@ -117,7 +117,8 @@ impl Preview {
                     self.frozen = true; // out of step with the sender: stop rather than guess
                     return;
                 }
-                t.add_child(parent, &name, size, flags);
+                let id = t.add_child(parent, &name, size, flags);
+                t.set_mtime(id, mtime);
                 out.changes += 1;
             }
             PreviewMsg::Denied(id) => {
@@ -195,6 +196,7 @@ impl Mft {
             flags.set(NodeFlags::DIR, s.is_dir);
             flags.set(NodeFlags::REPARSE, s.reparse);
             let id = t.add_child(parent, &s.name, size, flags);
+            t.set_mtime(id, s.mtime);
             if self.records.len() <= record {
                 self.records.resize(record + 1, NodeId::NONE);
             }
