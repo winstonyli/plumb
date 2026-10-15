@@ -19,8 +19,8 @@ state; the rest is the scan channel and progress, the live watch, the held direc
   index in `wparam`; `WM_JOURNAL` visits every drive with a watch. So scan results and live changes
   reach a drive that is off screen through the same code that serves the one on screen. While swapped
   in, `borrowed` keeps timers and the filter alone.
-- `sync_timers` derives the progress, preview and live timers from the state on screen; nothing else
-  starts or stops them.
+- `sync_timers` derives the progress, preview and live timers from the state on screen and from the
+  kept drives' previews; nothing else starts or stops them.
 
 ## Decisions
 
@@ -29,8 +29,10 @@ state; the rest is the scan channel and progress, the live watch, the held direc
 - Live watches stay on for parked drives. Changes are applied to the parked tree; its rows refresh when
   it comes back. A watch that ends while parked is marked stale (no auto-rescan was needed there: a
   background rescan does start if the policy allows).
-- Only the drive on screen has a partial-tree preview. Parking a first scan drops its partial tree and
-  preview; returning shows the progress counts until the scan finishes.
+- A first scan keeps its preview while parked: `preview_tick` applies it to the kept partial tree (no
+  rows, no refresh; the preview is part of the per-drive window state). Returning builds the rows from
+  the tree as it is and the preview carries on. (Until 0.7.0 parking dropped the partial tree, and a
+  drive returned to showed nothing until its scan ended.)
 - Filter: the query text is shared; the installed result belongs to the drive. Parking takes the filter
   off the rows; unparking filters the returning tree afresh. Generations come from one counter so a
   result can only match the run that asked for it.

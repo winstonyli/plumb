@@ -11,6 +11,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 ### Changed
 - `plumb`: while the first scan has no tree yet, the row area shows placeholder rows (a fading skeleton of icon, name, size and items) instead of repeating the scan progress the status bar already shows. The status bar now also carries the idle hint and scan failures; the row area still shows them too.
 
+### Fixed
+- `plumb`: a first scan keeps building its partial tree while another drive is on screen, so coming back to it shows the tree found so far instead of nothing until the scan ends; a scan finishing on a kept drive no longer stops the preview of the drive on screen.
+
 ## [0.6.0] - 2026-10-14
 
 A real selection and IME in the filter box, mount-point drives, remembered window state, a hard-link-aware walker and a watch that no longer misses changes.

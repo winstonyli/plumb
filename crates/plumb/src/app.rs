@@ -134,6 +134,11 @@ impl Parked {
         self.tree.as_ref()
     }
 
+    /// The tree a kept drive's running scan builds (its rows are made when the drive comes back).
+    pub fn tree_mut(&mut self) -> &mut Option<Tree> {
+        &mut self.tree
+    }
+
     pub fn scan(&self) -> &Scan {
         &self.scan
     }
@@ -259,15 +264,6 @@ impl App {
         self.filter_reset();
         self.swap_slot(p);
         self.filter_reset();
-    }
-
-    /// The partial tree of a scan that is no longer followed on screen is dropped.
-    pub fn discard_partial(&mut self) {
-        self.tree = None;
-        self.model = None;
-        self.scroll = 0;
-        self.preview_paused = false;
-        self.map_reset();
     }
 
     pub fn begin_scan(&mut self, drive: usize) {

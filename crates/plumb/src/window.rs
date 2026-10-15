@@ -621,12 +621,9 @@ impl Win {
     }
 
     /// Takes the drive on screen away, keeping its tree, scan and watch unless there is nothing
-    /// worth coming back to. A partial tree follows only the drive on screen, so it is dropped.
+    /// worth coming back to. A running scan keeps building its partial tree (`preview_tick`).
     fn park_active(&mut self) {
         let Some(old) = self.app.active.take() else { return };
-        if self.preview.take().is_some() {
-            self.app.discard_partial();
-        }
         let mut d = Drive::default();
         self.swap_drive(&mut d);
         if d.app.has_tree() || d.rx.is_some() {
@@ -646,6 +643,12 @@ impl Win {
         let Some(mut d) = self.parked.get_mut(drive).and_then(Option::take) else { return false };
         self.swap_drive(&mut d);
         self.app.active = Some(drive);
+        if self.preview.is_some() {
+            // The scan kept building its tree while the drive was away: make the rows for it as it is now.
+            self.app.preview_installed();
+            self.preview_pacer = Pacer::new(Instant::now());
+            self.preview_dirty = false;
+        }
         self.sync_marks();
         self.apply_live(); // what changed while it was away
         if self.app.filter_dirty() {
@@ -708,7 +711,7 @@ impl Win {
         }
         let want = [
             (TIMER_PROGRESS, self.rx.is_some() && !self.background, 100),
-            (TIMER_PREVIEW, self.preview.is_some(), PREVIEW_TICK_MS),
+            (TIMER_PREVIEW, self.preview.is_some() || self.parked.iter().flatten().any(|d| d.preview.is_some()), PREVIEW_TICK_MS),
             (TIMER_LIVE, self.watch.as_ref().is_some_and(|w| w.armed), REPAINT.as_millis() as u32),
         ];
         for (i, (id, on, ms)) in want.into_iter().enumerate() {
@@ -841,8 +844,15 @@ impl Win {
     /// `TIMER_PREVIEW`: applies some of what the scan has found, and at the live-update pace
     /// refreshes the rows.
     fn preview_tick(&mut self) {
+        let deadline = Instant::now() + APPLY_BUDGET;
+        // Scans of kept drives build their trees too, so a drive comes back with what was found.
+        for d in self.parked.iter_mut().flatten() {
+            if let Some(p) = &mut d.preview {
+                p.apply(d.app.tree_mut(), deadline);
+            }
+        }
         let Some(p) = &mut self.preview else { return };
-        let a = p.apply(&mut self.app.tree, Instant::now() + APPLY_BUDGET);
+        let a = p.apply(&mut self.app.tree, deadline);
         if a.reset || a.created {
             self.app.preview_installed(); // builds the model from whatever tree there is now
         } else {
@@ -1591,7 +1601,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(0)
         }
         WM_SCAN_DONE => {
-            with(|w| w.in_slot(wp.0, |w| w.scan_done()));
+            with(|w| {
+                w.in_slot(wp.0, |w| w.scan_done());
+                w.sync_timers(); // a kept drive's preview may have ended
+            });
             LRESULT(0)
         }
         WM_SETTINGCHANGE => {
@@ -1750,6 +1763,26 @@ pub fn selftest() -> Result<String> {
         return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a kept drive's scan ending dropped the preview of the drive on screen"));
     }
     with(|w| w.open(0, dir.to_string_lossy().into_owned())); // back to drive 0 and its finished tree
+    // A scan keeps building its tree while another drive is shown, and the drive comes back with it.
+    let big = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    with(|w| w.spawn_scan(0, big.clone(), false));
+    let started = |w: &mut Win| matches!(w.app.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200) && w.app.tree.is_some();
+    pump_until("the big scan to get going", 60, &started)?;
+    let other = with(|w| {
+        w.open(w.app.drives.len() - 1, dir.to_string_lossy().into_owned());
+        w.parked.first().and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).map_or(0, |t| t.len())
+    })
+    .unwrap_or(0);
+    let away = |w: &mut Win| w.parked.first().and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).map_or(0, |t| t.len());
+    pump_until("the kept scan's tree to grow", 30, &|w| away(w) > other + 1000 || w.parked.first().and_then(|d| d.as_ref()).is_none_or(|d| d.rx.is_none()))?;
+    with(|w| w.open(0, big.clone()));
+    let back = with(|w| w.app.tree.is_some() && w.app.model.is_some() && (w.preview.is_some() || matches!(w.app.scan, crate::app::Scan::Idle)));
+    if back != Some(true) {
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "coming back to a drive that is still scanning showed no tree"));
+    }
+    with(|w| w.cancel_scan());
+    with(|w| w.open(0, dir.to_string_lossy().into_owned()));
+    pump_until("the small scan again", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle) && w.app.tree.is_some())?;
     // The filter, end to end: type into the box, let the worker scan, check the rows.
     with(|w| {
         w.app.handle(Input::Find);
