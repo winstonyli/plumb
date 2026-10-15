@@ -1783,6 +1783,17 @@ pub fn selftest() -> Result<String> {
     with(|w| w.cancel_scan());
     with(|w| w.open(0, dir.to_string_lossy().into_owned()));
     pump_until("the small scan again", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle) && w.app.tree.is_some())?;
+    // A scan that finishes while another drive is shown comes back finished: a tree, rows, no scan.
+    with(|w| {
+        w.spawn_scan(0, dir.to_string_lossy().into_owned(), false);
+        w.open(w.app.drives.len() - 1, dir.to_string_lossy().into_owned());
+    });
+    pump_until("the parked scan to finish", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.rx.is_none() && d.app.has_tree()))?;
+    with(|w| w.open(0, dir.to_string_lossy().into_owned()));
+    let done = with(|w| w.app.tree.is_some() && w.app.model.is_some() && w.preview.is_none() && matches!(w.app.scan, crate::app::Scan::Idle));
+    if done != Some(true) {
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a scan that finished while parked came back without a finished tree"));
+    }
     // The filter, end to end: type into the box, let the worker scan, check the rows.
     with(|w| {
         w.app.handle(Input::Find);
