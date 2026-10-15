@@ -1747,7 +1747,7 @@ pub fn selftest() -> Result<String> {
     });
     pump_until("the kept drive's scan", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.app.has_tree()))?;
     if with(|w| w.preview.take().is_some()) != Some(true) {
-        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a kept drive's scan ending dropped the preview of the drive on screen".to_string()));
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a kept drive's scan ending dropped the preview of the drive on screen"));
     }
     with(|w| w.open(0, dir.to_string_lossy().into_owned())); // back to drive 0 and its finished tree
     // The filter, end to end: type into the box, let the worker scan, check the rows.
