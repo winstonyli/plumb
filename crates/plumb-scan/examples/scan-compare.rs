@@ -8,6 +8,7 @@
 //! the whole volume with the MFT scanner, compares the fixture's subtree in both, and deletes it.
 //! One hard-linked pair is included. Each scanner counts the file on a different link, so the pair is
 //! compared by its total (the file counted once) rather than link by link.
+//! Last-write days must agree to within one day (the walker reads them from the directory index, the MFT scanner from the record).
 
 use plumb_core::{NodeFlags, NodeId, Tree, TreeBuilder};
 use plumb_scan::volume::{MftScanner, is_elevated, is_volume_root};
@@ -53,14 +54,14 @@ fn remove_fixture(root: &Path) {
     let _ = fs::remove_dir_all(root);
 }
 
-type Entries = BTreeMap<String, (u64, bool, bool)>; // relative path (lowercase) -> (size, dir, reparse)
+type Entries = BTreeMap<String, (u64, bool, bool, u32)>; // relative path (lowercase) -> (size, dir, reparse, last-write day or 0)
 
 fn collect(t: &Tree, node: NodeId, prefix: &str, out: &mut Entries) {
     for c in t.children(node) {
         let path = if prefix.is_empty() { t.name_string(c) } else { format!("{prefix}\\{}", t.name_string(c)) };
         out.insert(
             path.to_lowercase(),
-            (t.size[c], t.flags[c].contains(NodeFlags::DIR), t.flags[c].contains(NodeFlags::REPARSE)),
+            (t.size[c], t.flags[c].contains(NodeFlags::DIR), t.flags[c].contains(NodeFlags::REPARSE), t.mtime[c].map_or(0, |d| d.get())),
         );
         collect(t, c, &path, out);
     }
@@ -78,7 +79,7 @@ fn fold_links(e: &mut Entries, who: &str) -> Option<String> {
     for l in LINKS {
         e.get_mut(l).unwrap().0 = 0;
     }
-    e.insert("<hard link total>".into(), (sizes.iter().sum(), false, false));
+    e.insert("<hard link total>".into(), (sizes.iter().sum(), false, false, 0));
     None
 }
 
@@ -95,7 +96,7 @@ fn diff(walk: &Entries, mft: &Entries) -> Vec<String> {
     for (k, w) in walk {
         match mft.get(k) {
             None => d.push(format!("only in walker: {k} {w:?}")),
-            Some(m) if m != w => d.push(format!("differs: {k}: walker {w:?}, mft {m:?}")),
+            Some(m) if (m.0, m.1, m.2) != (w.0, w.1, w.2) || m.3.abs_diff(w.3) > 1 => d.push(format!("differs: {k}: walker {w:?}, mft {m:?}")),
             _ => {}
         }
     }
