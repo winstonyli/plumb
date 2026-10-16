@@ -1733,10 +1733,18 @@ fn create_window() -> Result<HWND> {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let inst: HMODULE = GetModuleHandleW(None)?;
         let class = w!("PlumbWindow");
+        // The exe's icon resource (id 1, see build.rs), at the sizes the shell asks for so the .ico's own 16/24/32 entries are used.
+        let icon = |cx, cy| {
+            LoadImageW(Some(inst.into()), PCWSTR(1 as *const u16), IMAGE_ICON, GetSystemMetrics(cx), GetSystemMetrics(cy), LR_DEFAULTCOLOR | LR_SHARED)
+                .map(|h| HICON(h.0))
+                .unwrap_or_default()
+        };
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_DBLCLKS,
             lpfnWndProc: Some(wndproc),
+            hIcon: icon(SM_CXICON, SM_CYICON),
+            hIconSm: icon(SM_CXSMICON, SM_CYSMICON),
             hInstance: inst.into(),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             lpszClassName: class,
