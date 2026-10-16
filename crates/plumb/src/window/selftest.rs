@@ -451,12 +451,13 @@ pub fn selftest_delete() -> Result<String> {
             return Err(fail(format!("the recycled file is not in the Recycle Bin exactly once: {:?} {}", String::from_utf8_lossy(&bin.stdout), String::from_utf8_lossy(&bin.stderr))));
         }
 
-        // A file held open: the shell's own error dialog is off, so the failure reaches our dialog with its reason.
+        // A file held open, recycled (which fails the same way and leaves nothing in the bin): the shell's own error
+        // dialog is off, so the failure reaches our dialog with its reason.
         // Retry asks again (still held: a second dialog), Close leaves the file in place and marked; once it is
         // released, the next commit removes it.
         let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(dir.join(LOCKED)).map_err(io)?;
         mark(&[LOCKED]);
-        let h = answer_dialogs(vec![crate::dialog::PERMANENT, IDYES.0, crate::dialog::RETRY, IDCLOSE.0]);
+        let h = answer_dialogs(vec![crate::dialog::RECYCLE, crate::dialog::RETRY, IDCLOSE.0]);
         commit(hwnd);
         pump_until("the failure dialogs", 30, &|_| h.is_finished())?;
         if !h.join().unwrap_or(false) {
@@ -465,6 +466,16 @@ pub fn selftest_delete() -> Result<String> {
         pump_until("the failed delete to finish", 30, &|w| !w.app.deleting())?;
         if !exists(LOCKED) || with(|w| w.app.basket().len()) != Some(1) {
             return Err(fail("a failed delete removed the file or unmarked it".into()));
+        }
+        // The reason reached the status bar (its tooltip carries the whole line), not an empty one.
+        let tip = with(|w| {
+            let bar = w.app.layout.status();
+            w.app.tip_at(bar.x + 40.0, bar.y + 5.0)
+        })
+        .flatten()
+        .unwrap_or_default();
+        if !tip.contains("not deleted: in use by another program; still marked") {
+            return Err(fail(format!("the failure's reason is not on the status line: {tip:?}")));
         }
         drop(held);
         let h = answer_dialogs(vec![crate::dialog::PERMANENT, IDYES.0]);
@@ -476,7 +487,7 @@ pub fn selftest_delete() -> Result<String> {
         if exists(LOCKED) || with(|w| w.app.basket().len()) != Some(0) {
             return Err(fail("the released file was not deleted".into()));
         }
-        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items; a held file shows the failure dialog (Retry, Close) and stays marked; tree followed in {lag:.1?}"))
+        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items; a held file (recycled) shows the failure dialog (Retry, Close) with its reason on the status line and stays marked; tree followed in {lag:.1?}"))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);
