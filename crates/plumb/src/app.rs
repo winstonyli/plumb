@@ -102,6 +102,14 @@ pub enum Effect {
 }
 
 /// A map tile's tooltip: the path and size of what it stands for, or what a `Rest` tile holds.
+/// What a tooltip is about: a button or the status bar (by its rectangle), or a map tile (by its node and kind, which
+/// survive the tiles being rebuilt as a tree grows).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TipKey {
+    Area(Rect),
+    Tile(NodeId, Kind),
+}
+
 fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
     match t.kind {
         Kind::Rest => format!("{} smaller items, {}", fmt::count(t.count as u64), fmt::size(t.bytes)),
@@ -511,12 +519,23 @@ impl App {
         }
     }
 
+    /// The tooltip under (x, y): what it is about, and its text. The text may change while the target stays
+    /// (a scan keeps adding to the totals), so the window compares targets to decide when to hide the tip.
+    pub fn tip_target(&self, x: f32, y: f32) -> Option<(TipKey, String)> {
+        if let Some((r, text)) = self.button_at(x, y) {
+            return Some((TipKey::Area(r), text));
+        }
+        let bar = self.layout.status();
+        if bar.contains(x, y) {
+            return Some((TipKey::Area(bar), format!("{}
+{}", self.status(), self.adapter)));
+        }
+        let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map))?)?;
+        Some((TipKey::Tile(t.node, t.kind), tile_tip(self.tree.as_ref()?, t, self.map_now)))
+    }
+
     pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
-        self.button_at(x, y).map(|b| b.1).or_else(|| self.layout.status().contains(x, y).then(|| format!("{}
-{}", self.status(), self.adapter))).or_else(|| {
-            let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map))?)?;
-            Some(tile_tip(self.tree.as_ref()?, t, self.map_now))
-        })
+        self.tip_target(x, y).map(|t| t.1)
     }
 
     /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
@@ -1550,6 +1569,21 @@ mod tests {
         let bar = a.layout.status();
         assert_eq!(a.tip_at(bar.x + 40.0, bar.y + 5.0), Some(format!("{}
 Test GPU", a.status())));
+    }
+
+    #[test]
+    fn a_tip_keeps_its_target_while_its_text_changes_and_loses_it_on_leaving() {
+        let mut a = scanned();
+        let bar = a.layout.status();
+        let (x, y) = (bar.x + 40.0, bar.y + 5.0);
+        let (key, before) = a.tip_target(x, y).unwrap();
+        a.notice = "something happened".into();
+        let (same, after) = a.tip_target(x, y).unwrap();
+        assert_eq!(key, same, "the status bar is the same target");
+        assert_ne!(before, after, "whose text moved on");
+        a.can_elevate = true;
+        let other = a.tip_target(a.layout.admin_button().x + 5.0, a.layout.admin_button().y + 5.0).map(|t| t.0);
+        assert!(other.is_some() && other != Some(key), "another target is another key");
     }
 
     #[test]

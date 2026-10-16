@@ -11,6 +11,9 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 - `plumb`: a Modified column in the tree (the item's own last-write date, sortable; unknown dates are blank and sort as oldest). A state file with three remembered column widths still loads.
 - `plumb`: map tiles fade with the file's last-write age (log scale, ten years to the full fade) while keeping their type hue; the tooltip shows the modified date; the legend gets an age strip. `plumb-core`: `Tree.mtime`, `age`; `plumb-scan`: the walker and MFT scanner record last-write times (`Entry.mtime`, `FileState.mtime`).
 
+### Fixed
+- `plumb`: a tooltip no longer flashes while a scan changes its text (the status bar's totals, a map tile's size): it is hidden only when the pointer moves to another target, and refreshed in place otherwise.
+
 ## [0.7.0] - 2026-10-14
 
 ### Added
