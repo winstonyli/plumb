@@ -715,13 +715,12 @@ impl Win {
 
     /// A delete batch ended: unmark what went, keep what failed, say so on the status line.
     fn finish_delete(&mut self, drive: usize, out: Vec<trash::Outcome>) {
-        let reason = |hr: i32| windows::core::Error::from(windows::core::HRESULT(hr)).message();
         let gone: Vec<String> = out.iter().filter(|o| !matches!(o.verdict, trash::Verdict::Failed(_))).map(|o| o.path.clone()).collect();
         let missing = out.iter().filter(|o| o.verdict == trash::Verdict::Missing).count();
         let failed: Vec<(String, String)> = out
             .iter()
             .filter_map(|o| match o.verdict {
-                trash::Verdict::Failed(hr) => Some((o.path.clone(), reason(hr))),
+                trash::Verdict::Failed(hr) => Some((o.path.clone(), trash::reason(hr))),
                 _ => None,
             })
             .collect();

@@ -12,6 +12,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 - `plumb`: map tiles fade with the file's last-write age (log scale, ten years to the full fade) while keeping their type hue; the tooltip shows the modified date; the legend gets an age strip. `plumb-core`: `Tree.mtime`, `age`; `plumb-scan`: the walker and MFT scanner record last-write times (`Entry.mtime`, `FileState.mtime`).
 
 ### Fixed
+- `plumb`: a delete failure now says why (a file in use by another program read "not deleted: ; still marked": the shell's own error codes have no system text, so the ones a delete can meet are named, and any other shows its code).
 - `plumb`: a tooltip no longer flashes while a scan changes its text (the status bar's totals, a map tile's size): it is hidden only when the pointer moves to another target, and refreshed in place otherwise.
 
 ## [0.7.0] - 2026-10-14

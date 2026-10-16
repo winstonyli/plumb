@@ -105,6 +105,38 @@ fn perform(paths: &[&str], permanent: bool, owner: isize, results: &Results) -> 
     Ok(())
 }
 
+/// Why a path failed, in words. The shell's own codes (`COPYENGINE_E_*`, facility 0x27) have no system message text, so the
+/// ones a delete can meet are named here; anything else is the system's message, or the code itself.
+pub fn reason(hr: i32) -> String {
+    const NAMED: [(HRESULT, &str); 16] = [
+        (COPYENGINE_E_SHARING_VIOLATION_SRC, "in use by another program"),
+        (COPYENGINE_E_ACCESS_DENIED_SRC, "access denied"),
+        (COPYENGINE_E_ACCESSDENIED_READONLY, "read-only"),
+        (COPYENGINE_E_REQUIRES_ELEVATION, "needs administrator rights"),
+        (COPYENGINE_E_PATH_NOT_FOUND_SRC, "path not found"),
+        (COPYENGINE_E_PATH_TOO_DEEP_SRC, "path too long"),
+        (COPYENGINE_E_DIR_NOT_EMPTY, "folder not empty"),
+        (COPYENGINE_E_NET_DISCONNECT_SRC, "network disconnected"),
+        (COPYENGINE_E_RECYCLE_BIN_NOT_FOUND, "no Recycle Bin on this drive"),
+        (COPYENGINE_E_RECYCLE_SIZE_TOO_BIG, "too big for the Recycle Bin"),
+        (COPYENGINE_E_RECYCLE_PATH_TOO_LONG, "path too long for the Recycle Bin"),
+        (COPYENGINE_E_RECYCLE_FORCE_NUKE, "cannot be moved to the Recycle Bin"),
+        (COPYENGINE_E_RECYCLE_UNKNOWN_ERROR, "the Recycle Bin could not take it"),
+        (COPYENGINE_E_USER_CANCELLED, "cancelled"),
+        (COPYENGINE_E_CANCELLED, "cancelled"),
+        (COPYENGINE_E_BLOCKED_BY_DLP_POLICY, "blocked by policy"),
+    ];
+    let code = HRESULT(hr);
+    if let Some((_, text)) = NAMED.iter().find(|(c, _)| *c == code) {
+        return (*text).into();
+    }
+    let message = windows::core::Error::from(code).message();
+    match message.trim() {
+        "" => format!("error {:#010x}", hr as u32),
+        m => m.into(),
+    }
+}
+
 /// What happened to a path the batch was given: the disk decides. A path still there was not deleted, whatever the
 /// shell reported (it also returns success codes for items the user skipped in its own prompts).
 fn judge(report: Option<i32>, still_there: bool, setup: Option<i32>) -> Verdict {
@@ -180,6 +212,13 @@ mod tests {
         assert!(dir.join("locked.txt").exists() && !dir.join("ok.txt").exists());
         drop(held);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_locked_file_has_a_reason_in_words_and_an_unknown_code_shows_itself() {
+        assert_eq!(reason(COPYENGINE_E_SHARING_VIOLATION_SRC.0), "in use by another program");
+        assert_eq!(reason(0x8027ff00u32 as i32), "error 0x8027ff00", "a shell code without text");
+        assert!(!reason(CANCELLED).is_empty(), "a system code keeps the system's text");
     }
 
     #[test]
