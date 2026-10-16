@@ -357,6 +357,27 @@ fn answer_dialogs(ids: Vec<i32>) -> std::thread::JoinHandle<bool> {
     })
 }
 
+/// Presses a button of the shell's own operation window (a DirectUI window the dialog helpers cannot click) through UI
+/// Automation, found by its automation id; true once pressed.
+fn press_shell_button(automation_id: &'static str) -> std::thread::JoinHandle<bool> {
+    let pid = std::process::id();
+    std::thread::spawn(move || {
+        let script = format!(
+            "Add-Type -AssemblyName UIAutomationClient; $A = [System.Windows.Automation.AutomationElement]; \
+             $c = New-Object System.Windows.Automation.AndCondition((New-Object System.Windows.Automation.PropertyCondition($A::ProcessIdProperty, {pid})), \
+             (New-Object System.Windows.Automation.PropertyCondition($A::AutomationIdProperty, '{automation_id}'))); \
+             $end = (Get-Date).AddSeconds(20); \
+             while ((Get-Date) -lt $end) {{ $b = $A::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c); \
+             if ($b) {{ $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); 'pressed'; exit }}; Start-Sleep -Milliseconds 100 }}"
+        );
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "pressed")
+    })
+}
+
 /// Not elevated. Marks files in a scratch directory, answers the real commit dialogs, and checks the disk, the
 /// basket and the tree: Cancel keeps everything, a permanent delete (two dialogs) and a recycle each remove only
 /// the marked items and the tree follows. Run it from a normal prompt: `plumb --selftest-delete`.
@@ -364,6 +385,8 @@ fn answer_dialogs(ids: Vec<i32>) -> std::thread::JoinHandle<bool> {
 const REC: &str = "plumb-selftest-delete.tmp";
 /// The file held open for the failure step.
 const LOCKED: &str = "locked.bin";
+/// The sparse file too big for the Recycle Bin.
+const BIG: &str = "big.bin";
 
 pub fn selftest_delete() -> Result<String> {
     use windows::Win32::Foundation::E_FAIL;
@@ -379,7 +402,7 @@ pub fn selftest_delete() -> Result<String> {
     let shown = dir.to_string_lossy().into_owned();
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("folder")).map_err(io)?;
-    for f in ["keep.txt", "a.bin", "b.bin", r"folder\inner.bin", REC, LOCKED] {
+    for f in ["keep.txt", "a.bin", "b.bin", r"folder\inner.bin", REC, LOCKED, BIG] {
         std::fs::write(dir.join(f), vec![1u8; 4096]).map_err(io)?;
     }
     let hwnd = create_window()?;
@@ -455,6 +478,30 @@ pub fn selftest_delete() -> Result<String> {
             return Err(fail(format!("the recycled file is not in the Recycle Bin exactly once: {:?} {}", String::from_utf8_lossy(&bin.stdout), String::from_utf8_lossy(&bin.stderr))));
         }
 
+        // A file too big for the Recycle Bin (sparse, 200 GB logical, no disk used): the shell asks whether to delete it
+        // for good (confirmations stay on for a recycle). Answering No must keep the file (our failure dialog then lists it, closed
+        // here); without the prompt a
+        // recycle would silently become permanent.
+        let big = dir.join(BIG);
+        let sparse = std::process::Command::new("fsutil").args(["sparse", "setflag"]).arg(&big).stdin(std::process::Stdio::null()).status().map_err(|e| fail(format!("fsutil: {e}")))?;
+        std::fs::OpenOptions::new().write(true).open(&big).and_then(|f| f.set_len(200 << 30)).map_err(|e| fail(format!("set_len: {e}")))?;
+        if !sparse.success() {
+            return Err(fail("could not make a sparse test file".into()));
+        }
+        mark(&[BIG]);
+        let (h, no) = (answer_dialogs(vec![crate::dialog::RECYCLE, IDCLOSE.0]), press_shell_button("eltInterruptNoBtn"));
+        commit(hwnd);
+        pump_until("the too-big prompt", 40, &|_| h.is_finished() && no.is_finished())?;
+        if !(h.join().unwrap_or(false) && no.join().unwrap_or(false)) {
+            return Err(fail(format!("a recycle of a file too big for the Recycle Bin did not ask before deleting it (file still there: {})", exists(BIG))));
+        }
+        pump_until("the too-big recycle to finish", 30, &|w| !w.app.deleting())?;
+        if !exists(BIG) {
+            return Err(fail("a file too big for the Recycle Bin was deleted although the prompt was answered No".into()));
+        }
+        mark(&[BIG]); // unmark it; the directory is removed at the end
+        pump_until("the unmark", 5, &|w| w.app.basket().is_empty())?;
+
         // A file held open, recycled (which fails the same way and leaves nothing in the bin): the shell's own error
         // dialog is off, so the failure reaches our dialog with its reason.
         // Retry asks again (still held: a second dialog), Close leaves the file in place and marked; once it is
@@ -491,7 +538,7 @@ pub fn selftest_delete() -> Result<String> {
         if exists(LOCKED) || with(|w| w.app.basket().len()) != Some(0) {
             return Err(fail("the released file was not deleted".into()));
         }
-        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items; a held file (recycled) shows the failure dialog (Retry, Close) with its reason on the status line and stays marked; tree followed in {lag:.1?}"))
+        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items; a file too big for the Recycle Bin gets the shell's prompt and survives No; a held file (recycled) shows the failure dialog (Retry, Close) with its reason on the status line and stays marked; tree followed in {lag:.1?}"))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);
