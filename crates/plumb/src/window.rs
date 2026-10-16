@@ -1773,7 +1773,7 @@ fn create_window() -> Result<HWND> {
         let class = w!("PlumbWindow");
         // The exe's icon resource (id 1, see build.rs), at the sizes the shell asks for so the .ico's own 16/24/32 entries are used.
         let icon = |cx, cy| {
-            LoadImageW(Some(inst.into()), PCWSTR(1 as *const u16), IMAGE_ICON, GetSystemMetrics(cx), GetSystemMetrics(cy), LR_DEFAULTCOLOR | LR_SHARED)
+            LoadImageW(Some(inst.into()), PCWSTR(std::ptr::without_provenance(1)) /* MAKEINTRESOURCE(1): icon.rc id */, IMAGE_ICON, GetSystemMetrics(cx), GetSystemMetrics(cy), LR_DEFAULTCOLOR | LR_SHARED)
                 .map(|h| HICON(h.0))
                 .unwrap_or_default()
         };
