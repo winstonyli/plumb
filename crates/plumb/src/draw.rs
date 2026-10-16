@@ -481,13 +481,13 @@ impl Pen<'_> {
         let h = l.header();
         self.fill(h, t.panel);
         let partial = s.view.as_ref().is_some_and(|v| v.partial);
-        for (c, name) in ["Name", "Size", "% of parent", "Items"].iter().enumerate() {
+        for (c, name) in ["Name", "Size", "% of parent", "Items", "Modified"].iter().enumerate() {
             let (x, w) = l.column(c);
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
             // During a scan the sums are what has been found so far: "at least", said once here.
             let atleast = if partial && (c == 1 || c == 3) { "\u{2265} " } else { "" };
             let (label, color) = (format!("{atleast}{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
-            self.text(&label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, c == 1 || c == 3);
+            self.text(&label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4));
             if c > 0 {
                 // The grip for resizing: a hairline at the column's left edge.
                 self.fill(Rect { x, y: h.y + 5.0, w: 1.0, h: h.h - 10.0 }, D2D1_COLOR_F { a: 0.5, ..t.dim });
@@ -820,6 +820,10 @@ impl Pen<'_> {
             self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (ix, iw) = l.column(3);
             self.text(&fmt::count(v.tree.subtree_files[id] as u64), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
+            if let Some(day) = v.tree.mtime[id] {
+                let (mx, mw) = l.column(4);
+                self.text(&fmt::date(day.get()), Rect { x: mx, y: r.y, w: mw - 8.0, h: r.h }, side, true);
+            }
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {
             self.fill(l.scrollbar(), t.panel);

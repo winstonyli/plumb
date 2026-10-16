@@ -120,7 +120,7 @@ fn today() -> u32 {
 
 /// The sort each header column stands for; "% of parent" orders by size.
 fn sort_key(col: usize) -> SortKey {
-    [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items][col]
+    [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified][col]
 }
 
 /// What the app holds for one drive, kept while another drive is on screen. The filter box text
@@ -207,7 +207,7 @@ pub struct App {
     pub refreshing: bool,
     /// The partial tree stopped following the scan; the status line says so.
     pub preview_paused: bool,
-    /// Header column last clicked (0 Name, 1 Size, 2 % of parent, 3 Items) and direction.
+    /// Header column last clicked (0 Name, 1 Size, 2 % of parent, 3 Items, 4 Modified) and direction.
     sort: (usize, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
     grab: Option<f32>,
@@ -274,11 +274,11 @@ impl App {
 
     /// Takes the remembered column widths and sort (before any scan, so the first tree is sorted by it).
     pub fn restore(&mut self, s: &State) {
-        if let Some(Sort { column, descending }) = s.sort.filter(|s| s.column < 4) {
+        if let Some(Sort { column, descending }) = s.sort.filter(|s| s.column < 5) {
             self.sort = (column, descending);
         }
-        if let Some(cols) = s.columns {
-            for (i, w) in cols.into_iter().enumerate().filter(|(_, w)| w.is_finite()) {
+        if let Some(cols) = &s.columns {
+            for (i, &w) in cols.iter().take(self.layout.col_w.len()).enumerate().filter(|(_, w)| w.is_finite()) {
                 self.layout.set_col_w(i + 1, w);
             }
         }
@@ -291,7 +291,7 @@ impl App {
     /// The part of the remembered state the app owns; the window fills in its placement.
     pub fn remembered(&self) -> State {
         let (column, descending) = self.sort;
-        State { window: None, columns: Some(self.layout.col_w), sort: Some(Sort { column, descending }), map: MapState { visible: self.layout.map_on, width: self.layout.map_w } }
+        State { window: None, columns: Some(self.layout.col_w.to_vec()), sort: Some(Sort { column, descending }), map: MapState { visible: self.layout.map_on, width: self.layout.map_w } }
     }
 
     /// Exchanges the per-drive state with `p`. The result is consistent on its own (banner and
@@ -1484,9 +1484,15 @@ mod tests {
         assert_eq!((b.sort(), b.layout.col_w), (a.sort(), a.layout.col_w));
         let mut c = app();
         let before = (c.sort(), c.layout.col_w);
-        c.restore(&State { window: None, columns: Some([f32::NAN, 1.0e9, -5.0]), sort: Some(Sort { column: 9, descending: true }), map: Default::default() });
+        c.restore(&State { window: None, columns: Some(vec![f32::NAN, 1.0e9, -5.0]), sort: Some(Sort { column: 9, descending: true }), map: Default::default() });
         assert_eq!(c.sort(), before.0, "an unknown column is ignored");
         assert!(c.layout.col_w.iter().all(|w| w.is_finite() && *w > 0.0), "widths stay clamped");
+        // A state file from before the Modified column has three widths: they apply, and the new column keeps its default.
+        let mut d = app();
+        d.restore(&State::parse("columns = [111.0, 99.0, 77.0]\n[sort]\ncolumn = 4\ndescending = true\n"));
+        assert_eq!(d.layout.col_w[..3], [111.0, 99.0, 77.0]);
+        assert_eq!(d.layout.col_w[3], crate::layout::COL_W[3]);
+        assert_eq!(d.sort(), (4, true), "and the new column can be the remembered sort");
     }
 
     #[test]
@@ -1683,7 +1689,7 @@ Test GPU", a.status())));
         a.handle(Input::Click(b.x + 2.0, b.y + 2.0));
         assert!(!a.layout.map_on, "the status bar button toggles too");
         a.layout.map_on = true;
-        a.layout.set_map_w(200.0); // at 800 DIPs the pane can reach 343: room to grow by 50
+        a.layout.set_map_w(170.0); // at 800 DIPs the pane can reach 247: room to grow by 50
         let (d, w0) = (a.layout.map_divider().unwrap(), a.layout.map_w);
         assert!(a.over_divider(d.x + 1.0, d.y + 5.0));
         a.handle(Input::Click(d.x + 1.0, d.y + 5.0));

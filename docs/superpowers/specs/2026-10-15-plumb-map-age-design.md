@@ -48,7 +48,7 @@ Status: design, reviewed against the code in two rounds, 2026-10-15; implemented
 - Whether "ten years" and `FADE_MAX` are right: two constants, decided on a real drive.
   - Measured 2026-10-15 (throwaway example, walker, not elevated; byte-weighted by allocated size; deleted afterwards). `C:\Users` (3.5M files, 634 GiB): age p10/p50/p75/p90/p99 = 1/10/64/435/1914 days; 69% of bytes under a month, 1% over ten years. With `AGE_FULL_DAYS` 3650 the bytes spread evenly over shade 0 to 0.9 (16 16 19 15 7 5 6 7 6 1 % per tenth); 1825 spreads them just as evenly (16 13 15 20 8 5 7 6 6 4). `C:\Program Files` (13 GiB): 49% of bytes in one tenth, because an install writes everything at once. `D:\` (25 GiB, an archive): p10 to p90 = 77 to 422 days, so at 3650 nearly all bytes sit in shade 0.5 to 0.8 (a mix difference of about 0.075 at `FADE_MAX` 0.5: the map looks uniform).
   - Reading: the absolute log scale suits an active drive; a cold archive gets almost no contrast. 3650 versus 1825 makes no visible difference on the active drive, so 3650 stays. `FADE_MAX` is a visual choice, not a data one. If archives matter, shading by byte-weighted age percentile within the map's root would use the full range everywhere, at the cost of colours that cannot be compared between maps and a legend that needs labels.
-- Not in scope, parked: a Modified column in the tree rows, and sorting by it.
+- A Modified column in the tree rows (the node's own last-write date; a folder shows its own, not its newest file's) and sorting by it were added after the first cut: unknown sorts as oldest.
 
 ## Testing
 

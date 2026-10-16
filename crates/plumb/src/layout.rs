@@ -33,8 +33,8 @@ pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 32.0;
 pub const BASKET_W: f32 = 190.0;
 pub const INDENT: f32 = 20.0;
-/// Starting widths of the Size, % of parent and Items columns; Name takes the rest.
-pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
+/// Starting widths of the Size, % of parent, Items and Modified columns; Name takes the rest.
+pub const COL_W: [f32; 4] = [100.0, 130.0, 90.0, 96.0];
 /// Narrowest a dragged column may get, and narrowest the Name column may be squeezed.
 pub const MIN_COL_W: f32 = 50.0;
 pub const MIN_NAME_W: f32 = 120.0;
@@ -48,9 +48,9 @@ pub const MAP_BTN_W: f32 = 32.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
     Chip(usize),
-    /// Column header: 0 Name, 1 Size, 2 % of parent, 3 Items.
+    /// Column header: 0 Name, 1 Size, 2 % of parent, 3 Items, 4 Modified.
     Header(usize),
-    /// The left edge of column 1..=3 in the header, where a drag resizes that column.
+    /// The left edge of column 1..=4 in the header, where a drag resizes that column.
     Divider(usize),
     /// Index into the visible window (0 is the first drawn row).
     Row(usize),
@@ -84,8 +84,8 @@ pub struct Layout {
     pub cancel: bool,
     /// The marked-items chip sits in the status bar, left of Cancel and the map button.
     pub basket: bool,
-    /// Widths of the Size, % of parent and Items columns.
-    pub col_w: [f32; 3],
+    /// Widths of the Size, % of parent, Items and Modified columns.
+    pub col_w: [f32; 4],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
     pub chips: Vec<f32>,
     /// The map pane is wanted.
@@ -99,7 +99,7 @@ impl Layout {
         Self { w, h, banner: false, cancel: false, basket: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
-    /// Sets the width of column `c` (1..=3), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
+    /// Sets the width of column `c` (1..=4), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
     pub fn set_col_w(&mut self, c: usize, w: f32) {
         let others: f32 = self.col_w.iter().sum::<f32>() - self.col_w[c - 1];
         let max = (self.rows_area().w - MIN_NAME_W - others).max(MIN_COL_W);
@@ -264,7 +264,7 @@ impl Layout {
         Rect { x: 0.0, y: a.y + i as f32 * ROW_H, w: a.w, h: ROW_H }
     }
 
-    /// Left edge of column `c` (0 Name .. 3 Items) and its width.
+    /// Left edge of column `c` (0 Name .. 4 Modified) and its width.
     pub fn column(&self, c: usize) -> (f32, f32) {
         let fixed: f32 = self.col_w.iter().sum();
         let name_w = (self.rows_area().w - fixed).max(60.0);
@@ -328,10 +328,10 @@ impl Layout {
             return Hit::Map;
         }
         if self.header().contains(x, y) {
-            if let Some(c) = (1..4).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
+            if let Some(c) = (1..5).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
                 return Hit::Divider(c);
             }
-            return (0..4).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
+            return (0..5).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
         }
         if self.scrollbar().contains(x, y) {
             return Hit::Scrollbar;
@@ -362,8 +362,8 @@ mod tests {
     #[test]
     fn columns_fill_the_row_width() {
         let l = Layout::new(800.0, 600.0);
-        let (x3, w3) = l.column(3);
-        assert_eq!(x3 + w3, l.rows_area().w);
+        let (x4, w4) = l.column(4);
+        assert_eq!(x4 + w4, l.rows_area().w);
         assert_eq!(l.column(0).0 + l.column(0).1, l.column(1).0);
     }
 
@@ -401,7 +401,7 @@ mod tests {
         assert_eq!(l.hit(edge + 10.0, y, 0), Hit::Header(2));
         l.set_col_w(2, 200.0);
         assert_eq!(l.column(2).1, 200.0);
-        assert_eq!(l.column(3).0 + l.column(3).1, l.rows_area().w, "the right edge stays put");
+        assert_eq!(l.column(4).0 + l.column(4).1, l.rows_area().w, "the right edge stays put");
         l.set_col_w(2, 1.0);
         assert_eq!(l.column(2).1, MIN_COL_W);
         l.set_col_w(2, 10_000.0);

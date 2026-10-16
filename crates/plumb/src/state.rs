@@ -22,7 +22,7 @@ impl Placement {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sort {
-    /// Header column: 0 Name, 1 Size, 2 % of parent, 3 Items.
+    /// Header column: 0 Name, 1 Size, 2 % of parent, 3 Items, 4 Modified.
     pub column: usize,
     pub descending: bool,
 }
@@ -45,8 +45,8 @@ impl Default for MapState {
 #[serde(default)]
 pub struct State {
     pub window: Option<Placement>,
-    /// Widths in DIPs of the Size, % of parent and Items columns.
-    pub columns: Option<[f32; 3]>,
+    /// Widths in DIPs of the Size, % of parent, Items and Modified columns; a shorter list (an older file) sets the first few.
+    pub columns: Option<Vec<f32>>,
     pub sort: Option<Sort>,
     /// The treemap pane.
     pub map: MapState,
@@ -88,7 +88,7 @@ mod tests {
     fn a_state_survives_a_round_trip() {
         let s = State {
             window: Some(Placement { x: -20, y: 40, w: 1100, h: 760, maximized: true }),
-            columns: Some([120.0, 90.5, 80.0]),
+            columns: Some(vec![120.0, 90.5, 80.0]),
             sort: Some(Sort { column: 3, descending: false }),
             map: MapState { visible: false, width: 333.5 },
         };

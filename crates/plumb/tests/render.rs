@@ -484,3 +484,30 @@ fn a_marked_row_is_tinted() {
     let (x, y) = at(0);
     assert_eq!(rgb_at(&before, x, y), rgb_at(&after, x, y), "other rows are untouched");
 }
+
+#[test]
+fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_leaves_it_empty() {
+    let gfx = Gfx::warp().expect("WARP device");
+    let layout = Layout::new(W as f32, H as f32);
+    let shot = |mtime: Option<u32>| {
+        let mut b = plumb_core::TreeBuilder::new();
+        let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+        let f = b.push_str(root, "target.bin", 5_000, plumb_core::NodeFlags::empty());
+        b.set_mtime(f, mtime.and_then(std::num::NonZeroU32::new));
+        let tree = b.finish().unwrap();
+        let mut model = RowModel::new(&tree);
+        model.reveal(&tree, plumb_core::NodeId(1));
+        let scene = Scene {
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
+            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+            message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+        };
+        render_scene(&gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
+    };
+    let (known, unknown) = (shot(Some(154_000)), shot(None));
+    let (mx, mw) = layout.column(4);
+    let r = layout.row(1);
+    let differs = |x0: f32, w: f32| (x0 as u32..(x0 + w) as u32).any(|x| (r.y as u32..(r.y + r.h) as u32).any(|y| rgb_at(&known, x, y) != rgb_at(&unknown, x, y)));
+    assert!(differs(mx, mw), "the date is drawn in the Modified column");
+    assert!(!differs(0.0, mx), "and nothing else changes");
+}

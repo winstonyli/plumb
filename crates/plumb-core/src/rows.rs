@@ -11,6 +11,8 @@ pub enum SortKey {
     Name,
     Size,
     Items,
+    /// Last-write day of the node itself; unknown sorts as oldest.
+    Modified,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -178,6 +180,7 @@ impl RowModel {
         let o = match self.key {
             SortKey::Size => tree.subtree_size[a].cmp(&tree.subtree_size[b]),
             SortKey::Items => tree.subtree_files[a].cmp(&tree.subtree_files[b]),
+            SortKey::Modified => tree.mtime[a].cmp(&tree.mtime[b]),
             SortKey::Name => cmp_names(tree.name(a), tree.name(b)),
         };
         (if self.desc { o.reverse() } else { o }).then(a.cmp(&b))
@@ -416,7 +419,7 @@ mod tests {
 
     #[test]
     fn repositioning_keeps_every_cached_list_equal_to_a_fresh_sort() {
-        for key in [SortKey::Size, SortKey::Items, SortKey::Name] {
+        for key in [SortKey::Size, SortKey::Items, SortKey::Name, SortKey::Modified] {
             let mut tree = crate::synth::kary_builder(400, 5).finish().unwrap();
             let mut m = RowModel::new(&tree);
             m.set_sort(&tree, key, true);
@@ -522,6 +525,21 @@ mod tests {
         m.set_sort(&t, SortKey::Name, false);
         m.expand(&t, r);
         assert_eq!(ids(&m), vec![0, 2, 1, 3]);
+    }
+
+    #[test]
+    fn modified_sort_orders_by_the_nodes_own_last_write_and_an_unknown_one_is_oldest() {
+        let mut t = sample();
+        let (big, mid, small) = (NodeId(1), NodeId(4), NodeId(6));
+        t.mtime[big] = std::num::NonZeroU32::new(100);
+        t.mtime[mid] = std::num::NonZeroU32::new(300);
+        t.mtime[small] = None;
+        let mut m = RowModel::new(&t);
+        m.set_sort(&t, SortKey::Modified, true);
+        m.expand(&t, NodeId(0));
+        assert_eq!(ids(&m), vec![0, 4, 1, 6], "newest first, unknown last");
+        m.set_sort(&t, SortKey::Modified, false);
+        assert_eq!(ids(&m), vec![0, 6, 1, 4], "oldest first, unknown first");
     }
 
     #[test]
