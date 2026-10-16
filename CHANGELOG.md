@@ -4,6 +4,8 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-16
+
 ### Added
 - `plumb`: the status bar has two rows: the selected item's full path and size (a long path shortens in the middle) beside the legend and buttons, and the scan, notice and live state at the full width below, so long messages are no longer cut at the legend. The bar is a constant 44 px (was 24), so nothing moves as the text changes.
 - `plumb`: an app icon (a brass plumb bob over a four-tile treemap, in the map's own class colours), embedded in the exe and set on the window class; the source is `assets/plumb.svg` (see `assets/README.md`). Adds `embed-resource` as a build dependency.
