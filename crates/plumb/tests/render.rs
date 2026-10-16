@@ -515,5 +515,8 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
     let r = layout.row(1);
     let differs = |x0: f32, w: f32| (x0 as u32..(x0 + w) as u32).any(|x| (r.y as u32..(r.y + r.h) as u32).any(|y| rgb_at(&known, x, y) != rgb_at(&unknown, x, y)));
     assert!(differs(mx, mw), "the date is drawn in the Modified column");
-    assert!(!differs(0.0, mx), "and nothing else changes");
+    // Not the file icon (x 29..41 here): the shell can answer a lookup late or differently under load, so it may differ
+    // between two shots whatever the date does.
+    let after_icon = 48.0;
+    assert!(!differs(after_icon, mx - after_icon), "and nothing else changes");
 }

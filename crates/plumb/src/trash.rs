@@ -110,7 +110,8 @@ fn perform(paths: &[&str], permanent: bool, owner: isize, results: &Results) -> 
 /// Why a path failed, in words. The shell's own codes (`COPYENGINE_E_*`, facility 0x27) have no system message text, so the
 /// ones a delete can meet are named here; anything else is the system's message, or the code itself.
 pub fn reason(hr: i32) -> String {
-    const NAMED: [(HRESULT, &str); 16] = [
+    const NAMED: [(HRESULT, &str); 17] = [
+        (HRESULT(CANCELLED), "skipped"), // what `judge` gives an item still there with no failure code: declined in the shell's own prompt
         (COPYENGINE_E_SHARING_VIOLATION_SRC, "in use by another program"),
         (COPYENGINE_E_ACCESS_DENIED_SRC, "access denied"),
         (COPYENGINE_E_ACCESSDENIED_READONLY, "read-only"),
@@ -220,7 +221,8 @@ mod tests {
     fn a_locked_file_has_a_reason_in_words_and_an_unknown_code_shows_itself() {
         assert_eq!(reason(COPYENGINE_E_SHARING_VIOLATION_SRC.0), "in use by another program");
         assert_eq!(reason(0x8027ff00u32 as i32), "error 0x8027ff00", "a shell code without text");
-        assert!(!reason(CANCELLED).is_empty(), "a system code keeps the system's text");
+        assert_eq!(reason(CANCELLED), "skipped", "an item left alone after a shell prompt");
+        assert!(!reason(0x80070005u32 as i32).is_empty(), "a system code keeps the system's text");
     }
 
     #[test]
