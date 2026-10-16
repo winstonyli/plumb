@@ -127,7 +127,7 @@ These are my estimates, to be measured, not claims:
 | ~~Partial tree display while a scan runs~~ | Shipped (preview, 0.3) |
 | ~~Name filter~~ | Shipped (0.4, regex toggle and match tint); a separate search *view* is still parked |
 | Alternate data streams | Rarely large; counted as 0. Measured 2026-10-14 (`docs/benchmarks.md`): not worth the cost |
-| Delete and cleanup suggestions | Read-only tool by decision |
+| Delete and cleanup suggestions | Read-only tool by decision (deletion reversed 2026-10-15: see 2026-10-15-plumb-delete-design.md; cleanup suggestions still out) |
 | Accessibility (UI Automation) | Custom-drawn UI gap, known |
 | Elevated scanner child process | Single process chosen; scanner stays behind the trait |
 

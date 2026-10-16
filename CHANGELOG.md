@@ -5,6 +5,7 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 ## [Unreleased]
 
 ### Added
+- `plumb`: delete from the tree and the map. `Del` or the context menu marks the selected row or tile (a basket per drive that survives a drive switch and a rescan; marked rows and tiles are tinted); a status-bar chip shows how many are marked and how much they hold, and opens a dialog to Recycle (undoable in Explorer) or delete permanently, in one shell batch (`IFileOperation`) with a verdict per item. Drive roots, the Windows folder and a drive that is scanning cannot be marked; a failed item stays marked with its reason on the status line. `plumb-core`: `basket`, `Tree::find`. The exe now embeds a Common Controls v6 manifest.
 - `plumb`: map tiles fade with the file's last-write age (log scale, ten years to the full fade) while keeping their type hue; the tooltip shows the modified date; the legend gets an age strip. `plumb-core`: `Tree.mtime`, `age`; `plumb-scan`: the walker and MFT scanner record last-write times (`Entry.mtime`, `FileState.mtime`).
 
 ## [0.7.0] - 2026-10-14

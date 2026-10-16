@@ -1,6 +1,6 @@
 # plumb: deleting from the tree and the map (stage, then commit)
 
-Status: design, 2026-10-15 (not implemented). Reverses the "Delete and cleanup suggestions: read-only tool by decision" row of `2026-10-11-plumb-disk-design.md`; that row is superseded for deletion only (cleanup suggestions stay out).
+Status: implemented 2026-10-15. Reverses the "Delete and cleanup suggestions: read-only tool by decision" row of `2026-10-11-plumb-disk-design.md`; that row is superseded for deletion only (cleanup suggestions stay out). Left to check by hand: the shell progress and "too large for the Recycle Bin" prompts, Explorer Undo after a recycle, tooltip look under comctl32 v6, the chip at 200% DPI.
 
 ## Goal
 
@@ -26,7 +26,7 @@ Free space from inside plumb: mark files and folders in the tree or on the map, 
 
 ## Design
 
-- `plumb-core::basket` (pure, unit-tested): `Basket { paths: Vec<String> }` (full paths as `Tree::path` gives them, compared case-insensitively), `toggle`, `contains`, `clear`, `remove(&[String])`, `covered(&Tree) -> Vec<NodeId>` (topmost nodes that still resolve) and `total_bytes(&Tree)`. Paths, not node ids, so the basket survives live updates and a drive switch. Resolution walks from the root by name (the basket is small).
+- `plumb-core::basket` (pure, unit-tested): `Basket { paths: Vec<String> }` (full paths as `Tree::path` gives them, compared exactly: every path comes from the tree), `toggle`, `contains`, `clear`, `remove(&[String])`, `covered(&Tree) -> Vec<NodeId>` (topmost nodes that still resolve) and `total_bytes(&Tree)`. Paths, not node ids, so the basket survives live updates and a drive switch. Resolution walks from the root by name (the basket is small).
 - `plumb::app`: `marked: HashSet<NodeId>` for the shown drive, rebuilt from its basket whenever its tree changes (live update, scan end); the row and tile painters read it. Guard checks live in `basket::refusal(&Tree, NodeId, system_root) -> Option<&'static str>` so tests cover them.
 - `plumb::trash` (new, Windows only): `delete(hwnd, paths, permanent) -> Vec<Outcome>` running the batch on a worker thread; the window gets one `WM_APP` message with the outcomes, and `window.rs` applies them (unmark the deleted, set the status line).
 - `layout`: `basket_chip()` rectangle between the cancel button and the map button, with the same hit-test and layout-test treatment as the map button.
@@ -34,7 +34,7 @@ Free space from inside plumb: mark files and folders in the tree or on the map, 
 
 ## Testing
 
-- `basket` unit tests: toggle and case-insensitive match, dedupe of nested marks, a path that no longer resolves is dropped, `total_bytes` counts a marked folder once, `refusal` for a root, the system root, a child of it, and a scanning drive.
+- `basket` unit tests: toggle and exact match, dedupe of nested marks, a path that no longer resolves is dropped, `total_bytes` counts a marked folder once, `refusal` for a root, the system root, a child of it, and a scanning drive.
 - `layout` test: the chip sits between the cancel and map buttons and never overlaps them.
 - `render` test: a marked tile differs from the unmarked frame and the cached tiles are not rebuilt by a mark (`map_builds` unchanged).
 - `--selftest` gains a block: scan a temp directory, mark a file and a folder, commit *permanently* through `trash::delete` (the recycle path is not run in a selftest: it would leave items in the user's Recycle Bin), check the paths are gone, the outcomes are all `Ok`, and a second commit of the same paths reports them missing, not failed.
@@ -49,7 +49,7 @@ Free space from inside plumb: mark files and folders in the tree or on the map, 
 
 ## Risks and open questions
 
-- A destructive tool in what was a read-only one: the README and the disk design's non-goals line change with this.
+- A destructive tool in what was a read-only one: the disk design's non-goals row is amended (the project has no README).
 - Directory sync lag: a delete on a folder the watcher does not cover would leave rows until the next sync; the selftest and the manual check decide whether an explicit sync of each deleted item's parent is needed (it would be one call per parent, not a second removal path).
 - Folder sizes after a partial failure are corrected by the same sync.
 - Not in scope, parked: multi-select, drag to the basket, a dockable basket list (the dialog's list is read-only), cleanup suggestions from age and size, undo inside plumb (Explorer's undo covers a recycle).
