@@ -1002,6 +1002,15 @@ impl App {
     }
 
     fn status_line(&self, full: bool) -> String {
+        self.status_parts(full, true)
+    }
+
+    /// The status line without the selection: the status bar's second row, the selection having a row of its own.
+    fn state_line(&self) -> String {
+        self.status_parts(false, false)
+    }
+
+    fn status_parts(&self, full: bool, with_selection: bool) -> String {
         let head = match &self.scan {
             Scan::Running { .. } => {
                 let paused = if self.preview_paused { "   (preview paused)" } else { "" };
@@ -1011,7 +1020,7 @@ impl App {
             _ if self.summary.is_empty() => self.message(),
             _ => self.summary.clone(),
         };
-        let mut parts: Vec<String> = self.selection(full).into_iter().chain([head]).collect();
+        let mut parts: Vec<String> = self.selection(full).filter(|_| with_selection).into_iter().chain([head]).collect();
         if !self.notice.is_empty() {
             parts.insert(0, self.notice.clone());
             if full && !self.notice_detail.is_empty() {
@@ -1050,7 +1059,8 @@ impl App {
     /// Builds the scene for `dark` and passes it to `f`; the scene borrows locals made here.
     pub fn with_scene<R>(&self, dark: bool, f: impl FnOnce(&Scene) -> R) -> R {
         let chips = self.chips();
-        let (message, status, banner) = (self.message(), self.status_line(false), self.banner());
+        let (message, status, banner) = (self.message(), self.state_line(), self.banner());
+        let selection = self.selection(true).unwrap_or_default();
         let basket_label = self.basket_label();
         let running = matches!(self.scan, Scan::Running { .. });
         let count = self.filter_count();
@@ -1072,6 +1082,7 @@ impl App {
             message: if running { "" } else { &message },
             loading: running && self.tree.is_none(),
             status: &status,
+            selection: &selection,
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),
             map,

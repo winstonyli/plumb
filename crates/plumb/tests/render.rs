@@ -55,7 +55,7 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref(), basket: &Basket::default() }),
         message: "",
         loading: false,
-        status: "MFT scan: 200 files",
+        status: "MFT scan: 200 files", selection: "C:\\Users\\someone\\Documents  (1.2 GB, 300 items)",
         banner: None,
         filter,
         basket: None,
@@ -242,7 +242,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
             let scene = Scene {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
-                message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None,
+                message: "", loading: false, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None,
                 map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
             };
             render_scene(&gfx, &scene, stem)
@@ -280,7 +280,7 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     let frame = |generation: u64, selected: Option<usize>| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None,
+            view: None, message: "", loading: false, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
@@ -306,7 +306,7 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     let frame = |loading: bool| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", loading, status: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+            view: None, message: "", loading, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
         };
         render_scene(&gfx, &scene, if loading { "plumb-loading" } else { "plumb-empty" })
     };
@@ -345,7 +345,7 @@ fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
     };
     let scene = Scene {
         layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-        view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None,
+        view: None, message: "", loading: false, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None,
         map: Some(MapView { tiles: &tiles, generation: 1, now, selected: None, hover: None, classes: &classes, marked: &[] }),
     };
     (render_scene(&gfx, &scene, "plumb-map-age"), [mid(600_000), mid(500_000)], theme)
@@ -400,12 +400,12 @@ fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
         let theme = Theme::new(true);
         let scene = Scene {
             layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None,
+            view: None, message: "", loading: false, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
         };
         let buf = render_scene(&gfx, &scene, "plumb-legend");
         // The strip's first swatch is the foreground colour itself, which nothing else in the status bar uses.
-        let st = layout.status();
+        let st = layout.status_top();
         let (y, fg) = ((st.y + st.h / 2.0) as u32, expect(theme.fg));
         (0..width as u32).filter(|&x| rgb_at(&buf, x, y) == fg).count()
     };
@@ -436,7 +436,7 @@ fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows
     let frame = |marked: &[usize], chip: Option<&str>| {
         let scene = Scene {
             layout: layout.with_basket(chip.is_some()), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: chip,
+            view: None, message: "", loading: false, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: chip,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked }),
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
@@ -467,7 +467,7 @@ fn a_marked_row_is_tinted() {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket }),
-            message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+            message: "", loading: false, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
         };
         render_scene(&gfx, &scene, "plumb-marked-row")
     };
@@ -500,7 +500,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
-            message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+            message: "", loading: false, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
         };
         render_scene(&gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
     };

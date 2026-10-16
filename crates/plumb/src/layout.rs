@@ -4,7 +4,9 @@ pub use plumb_core::Rect;
 
 pub const PICKER_H: f32 = 44.0;
 pub const HEADER_H: f32 = 24.0;
-pub const STATUS_H: f32 = 24.0;
+/// One row of the status bar: the selection, legend and buttons on the first, the scan and live state on the second.
+pub const STATUS_ROW_H: f32 = 22.0;
+pub const STATUS_H: f32 = 2.0 * STATUS_ROW_H;
 pub const ROW_H: f32 = 22.0;
 pub const SCROLLBAR_W: f32 = 12.0;
 /// A drive chip's width until its label has been measured (see `App::fit_chips`).
@@ -146,7 +148,7 @@ impl Layout {
 
     /// Shows or hides the pane, at the right end of the status bar.
     pub fn map_button(&self) -> Rect {
-        let s = self.status();
+        let s = self.status_top();
         Rect { x: (s.x + s.w - 8.0 - MAP_BTN_W).max(0.0), y: s.y + 2.0, w: MAP_BTN_W, h: s.h - 4.0 }
     }
 
@@ -158,7 +160,7 @@ impl Layout {
     /// The marked-items chip in the status bar, left of the Cancel button (or of the map button when there is none).
     pub fn basket_chip(&self) -> Rect {
         let right = if self.cancel { self.cancel_button().x } else { self.map_button().x } - 4.0;
-        let s = self.status();
+        let s = self.status_top();
         Rect { x: (right - BASKET_W).max(0.0), y: s.y + 2.0, w: BASKET_W, h: s.h - 4.0 }
     }
 
@@ -246,8 +248,13 @@ impl Layout {
 
     /// "Cancel", right-aligned in the status bar.
     pub fn cancel_button(&self) -> Rect {
-        let s = self.status();
+        let s = self.status_top();
         Rect { x: (s.x + s.w - 8.0 - MAP_BTN_W - 4.0 - CANCEL_W).max(0.0), y: s.y + 2.0, w: CANCEL_W, h: s.h - 4.0 }
+    }
+
+    /// The status bar's first row, where the buttons sit.
+    pub fn status_top(&self) -> Rect {
+        Rect { h: STATUS_ROW_H, ..self.status() }
     }
 
     pub fn status(&self) -> Rect {
@@ -356,7 +363,17 @@ mod tests {
         let l = Layout::new(800.0, 600.0);
         assert_eq!(l.rows_area().y, PICKER_H + HEADER_H);
         assert_eq!(l.rows_area().y + l.rows_area().h + STATUS_H, 600.0);
-        assert_eq!(l.rows_visible(), ((600.0 - 44.0 - 24.0 - 24.0) / 22.0) as usize);
+        assert_eq!(l.rows_visible(), ((600.0 - PICKER_H - HEADER_H - STATUS_H) / ROW_H) as usize);
+    }
+
+    #[test]
+    fn the_status_bar_has_two_rows_and_the_buttons_sit_in_the_first() {
+        let l = Layout::new(800.0, 600.0).with_cancel(true).with_basket(true);
+        let (bar, top) = (l.status(), l.status_top());
+        assert_eq!((bar.h, top.h * 2.0, top.y), (STATUS_H, STATUS_H, bar.y));
+        for r in [l.map_button(), l.cancel_button(), l.basket_chip()] {
+            assert!(r.y >= top.y && r.y + r.h <= top.y + top.h, "{r:?} in the first row");
+        }
     }
 
     #[test]

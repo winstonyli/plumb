@@ -187,7 +187,10 @@ pub struct Scene<'a> {
     pub message: &'a str,
     /// A first scan is running and no tree exists yet: placeholder rows instead of `message`.
     pub loading: bool,
+    /// The status bar's second row: notice, scan summary, live state.
     pub status: &'a str,
+    /// The status bar's first row, left: the selected row's full path and size (empty when none).
+    pub selection: &'a str,
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
     pub banner: Option<&'a str>,
     pub filter: FilterBar<'a>,
@@ -362,6 +365,22 @@ impl Pen<'_> {
         }
     }
 
+    /// `s` shortened to fit `w` by replacing the middle with an ellipsis: a path keeps its drive and its name.
+    fn fit_middle(&self, s: &str, w: f32) -> String {
+        if self.text_width(s) <= w {
+            return s.to_string();
+        }
+        let c: Vec<char> = s.chars().collect();
+        let build = |k: usize| format!("{}\u{2026}{}", c[..k.div_ceil(2)].iter().collect::<String>(), c[c.len() - k / 2..].iter().collect::<String>());
+        // The most characters that still fit: widths grow with the count, so bisect.
+        let (mut lo, mut hi) = (0, c.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if self.text_width(&build(mid)) <= w { lo = mid } else { hi = mid - 1 }
+        }
+        build(lo)
+    }
+
     fn text(&self, s: &str, r: Rect, c: D2D1_COLOR_F, right: bool) {
         self.draw_text(s, if right { &self.painter.right } else { &self.painter.left }, r, c);
     }
@@ -504,12 +523,17 @@ impl Pen<'_> {
         self.map(s);
         let st = l.status();
         self.fill(st, t.panel);
-        let reserved = MAP_BTN_W + 8.0 + if l.cancel { CANCEL_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
-        let right = Rect { x: st.x + 8.0, y: st.y, w: (st.w - 16.0 - reserved).max(0.0), h: st.h };
         self.fill(Rect { h: 1.0, ..st }, t.select);
+        // Row 1: the selection, the legend and the buttons; row 2: the scan and live state, the full width.
+        let row1 = l.status_top();
+        let reserved = MAP_BTN_W + 8.0 + if l.cancel { CANCEL_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
+        let right = Rect { x: row1.x + 8.0, w: (row1.w - 16.0 - reserved).max(0.0), ..row1 };
         let legend_w = self.legend(s, right, right.w * 0.6);
         let text_w = if legend_w > 0.0 { right.w - legend_w - 24.0 } else { right.w };
-        self.text(s.status, Rect { w: text_w.max(0.0), ..right }, t.dim, false);
+        let sel = self.fit_middle(s.selection, text_w.max(0.0));
+        self.text(&sel, Rect { w: text_w.max(0.0), ..right }, t.dim, false);
+        let row2 = Rect { y: st.y + row1.h, h: st.h - row1.h, ..st };
+        self.text(s.status, Rect { x: row2.x + 8.0, w: (row2.w - 16.0).max(0.0), ..row2 }, t.dim, false);
         if l.cancel {
             let r = l.cancel_button();
             self.button(r, "\u{E711}", s); // cancel
