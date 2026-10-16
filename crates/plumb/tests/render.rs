@@ -4,6 +4,7 @@
 use plumb::draw::{Chip, FilterBar, MapView, Mark, Painter, Scene, Theme, View};
 use plumb::gfx::Gfx;
 use plumb::layout::{Layout, Rect, CHIP_W};
+use plumb_core::basket::Basket;
 use plumb_core::rows::RowModel;
 use plumb_core::synth::kary_builder;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
@@ -51,12 +52,13 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         sort: (1, true),
         admin: Some(admin),
         hot: None,
-        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref() }),
+        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref(), basket: &Basket::default() }),
         message: "",
         loading: false,
         status: "MFT scan: 200 files",
         banner: None,
         filter,
+        basket: None,
         map: None,
     };
     render_scene(&gfx, &scene, &format!("plumb-{}{}", if dark { "dark" } else { "light" }, if filter.error { "-error" } else { "" }))
@@ -239,9 +241,9 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
         let shoot = |selected: Option<usize>, stem: &str| {
             let scene = Scene {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-                view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None }),
-                message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
-                map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes }),
+                view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+                message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None,
+                map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
             };
             render_scene(&gfx, &scene, stem)
         };
@@ -278,8 +280,8 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     let frame = |generation: u64, selected: Option<usize>| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
-            map: Some(MapView { tiles: &tiles, generation, now: 0, selected, hover: None, classes: &classes }),
+            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None,
+            map: Some(MapView { tiles: &tiles, generation, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
         painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
@@ -304,7 +306,7 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     let frame = |loading: bool| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", loading, status: "", banner: None, filter: FilterBar::default(), map: None,
+            view: None, message: "", loading, status: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
         };
         render_scene(&gfx, &scene, if loading { "plumb-loading" } else { "plumb-empty" })
     };
@@ -343,8 +345,8 @@ fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
     };
     let scene = Scene {
         layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-        view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
-        map: Some(MapView { tiles: &tiles, generation: 1, now, selected: None, hover: None, classes: &classes }),
+        view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None,
+        map: Some(MapView { tiles: &tiles, generation: 1, now, selected: None, hover: None, classes: &classes, marked: &[] }),
     };
     (render_scene(&gfx, &scene, "plumb-map-age"), [mid(600_000), mid(500_000)], theme)
 }
@@ -398,8 +400,8 @@ fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
         let theme = Theme::new(true);
         let scene = Scene {
             layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(),
-            map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes }),
+            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None,
+            map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
         };
         let buf = render_scene(&gfx, &scene, "plumb-legend");
         // The strip's first swatch is the foreground colour itself, which nothing else in the status bar uses.
@@ -409,4 +411,76 @@ fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
     };
     assert!(strip_pixels(800.0) >= 4, "wide: the first swatch is drawn");
     assert_eq!(strip_pixels(220.0), 0, "narrow: no strip");
+}
+
+#[test]
+fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows() {
+    use plumb_core::treemap::layout as map_layout;
+    let gfx = Gfx::warp().expect("WARP device");
+    let mut b = plumb_core::TreeBuilder::new();
+    let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+    for (i, size) in [900_000u64, 400_000].into_iter().enumerate() {
+        b.push_str(root, &format!("f{i}.mp4"), size, plumb_core::NodeFlags::empty());
+    }
+    let tree = b.finish().unwrap();
+    let mut layout = Layout::new(W as f32, H as f32);
+    layout.map_on = true;
+    let tiles = map_layout(&tree, root, layout.map().unwrap(), 1.0);
+    let classes = plumb_core::treemap::class_bytes(&tiles);
+    let painter = Painter::new(&gfx).unwrap();
+    let big = tiles.iter().position(|t| t.kind == plumb_core::treemap::Kind::File && t.bytes == 900_000).unwrap();
+    let mid = {
+        let r = tiles[big].rect;
+        ((r.x + r.w / 2.0) as u32, (r.y + r.h / 2.0) as u32)
+    };
+    let frame = |marked: &[usize], chip: Option<&str>| {
+        let scene = Scene {
+            layout: layout.with_basket(chip.is_some()), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
+            view: None, message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: chip,
+            map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked }),
+        };
+        let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
+        painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
+        read_back(&gfx, &target)
+    };
+    let plain = frame(&[], None);
+    assert_eq!(painter.map_builds(), 1);
+    let marked = frame(&[big], Some("1 marked, up to 900 KB"));
+    assert_eq!(painter.map_builds(), 1, "a mark is drawn over the cached tiles, not into them");
+    assert_ne!(rgb_at(&plain, mid.0, mid.1), rgb_at(&marked, mid.0, mid.1), "the marked tile is tinted");
+    let chip = layout.with_basket(true).basket_chip();
+    let (cx, cy) = ((chip.x + 4.0) as u32, (chip.y + chip.h / 2.0) as u32);
+    assert_ne!(rgb_at(&plain, cx, cy), rgb_at(&marked, cx, cy), "the chip is drawn in the status bar");
+}
+
+#[test]
+fn a_marked_row_is_tinted() {
+    let gfx = Gfx::warp().expect("WARP device");
+    let mut b = plumb_core::TreeBuilder::new();
+    let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+    b.push_str(root, "target.bin", 5_000, plumb_core::NodeFlags::empty());
+    let tree = b.finish().unwrap();
+    let mut model = RowModel::new(&tree);
+    model.reveal(&tree, plumb_core::NodeId(1));
+    let layout = Layout::new(W as f32, H as f32);
+    let shot = |basket: &Basket| {
+        let scene = Scene {
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
+            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket }),
+            message: "", loading: false, status: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+        };
+        render_scene(&gfx, &scene, "plumb-marked-row")
+    };
+    let mut basket = Basket::default();
+    let before = shot(&basket);
+    basket.toggle("root\\target.bin");
+    let after = shot(&basket);
+    let at = |row: usize| {
+        let r = layout.row(row);
+        ((r.x + r.w - 4.0) as u32, (r.y + r.h / 2.0) as u32)
+    };
+    let (x, y) = at(1);
+    assert_ne!(rgb_at(&before, x, y), rgb_at(&after, x, y), "the marked row's background changes");
+    let (x, y) = at(0);
+    assert_eq!(rgb_at(&before, x, y), rgb_at(&after, x, y), "other rows are untouched");
 }

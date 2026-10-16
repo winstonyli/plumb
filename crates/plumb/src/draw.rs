@@ -2,9 +2,10 @@
 use crate::fmt;
 use crate::gfx::Gfx;
 use crate::icons;
+use plumb_core::basket::Basket;
 use plumb_core::age::{shade, FADE_MAX};
 use plumb_core::filter::Matcher;
-use crate::layout::{Layout, Rect, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, MAP_BTN_W, PICKER_H, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, BASKET_W, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, MAP_BTN_W, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::treemap::{Class, Kind, Tile};
 use plumb_core::rows::RowModel;
 use std::cell::{Cell, RefCell};
@@ -32,6 +33,9 @@ const RESCAN_RESERVED: f32 = RESCAN_W + 24.0;
 fn mix(a: D2D1_COLOR_F, b: D2D1_COLOR_F, f: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r: a.r + (b.r - a.r) * f, g: a.g + (b.g - a.g) * f, b: a.b + (b.b - a.b) * f, a: a.a }
 }
+/// Marked for deletion: the tint of rows, tiles and the basket chip, in both themes.
+const DANGER: D2D1_COLOR_F = D2D1_COLOR_F { r: 0.82, g: 0.25, b: 0.25, a: 1.0 };
+
 
 fn rgb(hex: u32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -145,6 +149,8 @@ pub struct View<'a> {
     pub hover: Option<usize>,
     /// The name filter's pattern: the part of a name it matched is highlighted.
     pub found: Option<&'a Matcher>,
+    /// Marked for deletion: these rows, and the rows under a marked folder, are tinted.
+    pub basket: &'a Basket,
 }
 
 /// The treemap pane's content: tiles from `plumb_core::treemap`, plus what is drawn over them.
@@ -160,6 +166,8 @@ pub struct MapView<'a> {
     pub hover: Option<usize>,
     /// Bytes per class among the tiles, largest first, for the legend.
     pub classes: &'a [(Class, u64)],
+    /// Indices into `tiles` of tiles at or under a marked node: tinted over the cached bitmap.
+    pub marked: &'a [usize],
 }
 
 pub struct Scene<'a> {
@@ -183,6 +191,8 @@ pub struct Scene<'a> {
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
     pub banner: Option<&'a str>,
     pub filter: FilterBar<'a>,
+    /// The marked-items chip's label, or `None` for no chip.
+    pub basket: Option<&'a str>,
     /// `None` when the map pane is hidden.
     pub map: Option<MapView<'a>>,
 }
@@ -488,7 +498,7 @@ impl Pen<'_> {
         self.map(s);
         let st = l.status();
         self.fill(st, t.panel);
-        let reserved = MAP_BTN_W + 8.0 + if l.cancel { CANCEL_W + 4.0 } else { 0.0 };
+        let reserved = MAP_BTN_W + 8.0 + if l.cancel { CANCEL_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
         let right = Rect { x: st.x + 8.0, y: st.y, w: (st.w - 16.0 - reserved).max(0.0), h: st.h };
         self.fill(Rect { h: 1.0, ..st }, t.select);
         let legend_w = self.legend(s, right, right.w * 0.6);
@@ -497,6 +507,11 @@ impl Pen<'_> {
         if l.cancel {
             let r = l.cancel_button();
             self.button(r, "\u{E711}", s); // cancel
+        }
+        if let (true, Some(label)) = (l.basket, s.basket) {
+            let r = l.basket_chip();
+            self.fill(r, D2D1_COLOR_F { a: 0.8, ..DANGER });
+            self.centered(label, r, rgb(0xffffff));
         }
         self.toggle_button(l.map_button(), "\u{E80A}", l.map_on, s); // grid
     }
@@ -593,6 +608,10 @@ impl Pen<'_> {
         }
         if let Some(h) = m.hover.and_then(|i| m.tiles.get(i)).filter(|_| m.hover != m.selected) {
             self.frame(h.rect, D2D1_COLOR_F { a: 0.85, ..t.fg });
+        }
+        for tile in m.marked.iter().filter_map(|&i| m.tiles.get(i)) {
+            self.fill(tile.rect, D2D1_COLOR_F { a: 0.5, ..DANGER });
+            self.frame(tile.rect, D2D1_COLOR_F { a: 0.9, ..DANGER });
         }
         if let Some(sel) = m.selected.and_then(|i| m.tiles.get(i)) {
             self.frame(sel.rect, t.accent);
@@ -736,11 +755,15 @@ impl Pen<'_> {
             } else if v.hover == Some(i) {
                 self.fill(r, t.hover);
             }
+            let marked = !v.basket.is_empty() && v.basket.covers(&v.tree.path(id));
+            if marked {
+                self.fill(r, D2D1_COLOR_F { a: 0.6, ..DANGER });
+            }
             self.fill(Rect { x: r.x, y: r.y + r.h - 1.0, w: r.w, h: 1.0 }, t.panel); // hairline between rows
             let parent = v.tree.parent[id];
             let denom = if parent.is_none() { v.tree.subtree_size[id] } else { v.tree.subtree_size[parent] };
             let frac = fmt::fraction(v.tree.subtree_size[id], denom);
-            let fg = if row.dim { t.dim } else { t.fg };
+            let fg = if row.dim || marked { t.dim } else { t.fg };
             let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
             let mut name = v.tree.name_string(id).to_string();

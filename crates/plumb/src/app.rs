@@ -984,15 +984,16 @@ impl App {
     pub fn with_scene<R>(&self, dark: bool, f: impl FnOnce(&Scene) -> R) -> R {
         let chips = self.chips();
         let (message, status, banner) = (self.message(), self.status_line(false), self.banner());
+        let basket_label = self.basket_label();
         let running = matches!(self.scan, Scan::Running { .. });
         let count = self.filter_count();
         let view = match (&self.tree, &self.model) {
-            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher() }),
+            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher(), basket: &self.basket }),
             _ => None,
         };
-        let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes });
+        let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
         f(&Scene {
-            layout: self.layout.with_cancel(self.cancelable()),
+            layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()),
             theme: Theme::new(dark),
             chips: &chips,
             active_chip: self.active,
@@ -1007,6 +1008,7 @@ impl App {
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),
             map,
+            basket: basket_label.as_deref(),
         })
     }
 }
