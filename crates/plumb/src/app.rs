@@ -114,7 +114,7 @@ fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
     match t.kind {
         Kind::Rest => format!("{} smaller items, {}", fmt::count(t.count as u64), fmt::size(t.bytes)),
         _ => {
-            let when = tree.mtime[t.node].map_or_else(String::new, |d| format!(", modified {} ({} ago)", fmt::date(d.get()), fmt::age(now, d.get())));
+            let when = tree.mtime[t.node].map_or_else(String::new, |d| format!(", modified {}, {} ago", fmt::date(d.get()), fmt::age(now, d.get())));
             format!("{}  ({}{when})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes))
         }
     }
@@ -1712,7 +1712,7 @@ Test GPU", a.status())));
         assert!(!tile_tip(&tree, &t, 154_000).contains("modified"));
         tree.set_mtime(NodeId(1), std::num::NonZeroU32::new(134_774 + 19_791));
         let tip = tile_tip(&tree, &t, 134_774 + 19_791 + 766);
-        assert!(tip.ends_with(", modified 2024-03-09 (2.1 y ago))"), "{tip}");
+        assert!(tip.ends_with(", modified 2024-03-09, 2.1 y ago)"), "{tip}");
     }
 
     #[test]

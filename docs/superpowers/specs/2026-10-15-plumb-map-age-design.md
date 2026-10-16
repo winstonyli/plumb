@@ -37,7 +37,7 @@ Status: design, reviewed against the code in two rounds, 2026-10-15; implemented
 
 - Shade: `t = clamp(ln(age_days) / ln(AGE_FULL_DAYS), 0, 1)` with `AGE_FULL_DAYS` about 3650 (ten years). The tile colour is the class colour mixed toward the map's background colour by `FADE_MAX * t` (`FADE_MAX` 0.65 after a visual check on 2026-10-15, so the oldest tile keeps a third of its colour; 0.7 makes two class hues closer than 0.05 apart, which the render test forbids). Mixing toward the background is the one mechanism that reads as "dimmer" in both palettes (`Painter::new(dark)` has two) without HSL maths or per-theme branches. Age under one day is `t = 0`. The floor keeps hues distinct.
 - "Now" is read when the tiles are rebuilt (once per layout generation). The bitmap cache key is unchanged, there is no timer redraw, and idle cost stays zero. Tiles age only when the map next redraws.
-- Tooltip: adds `modified 2024-03-09 (2.1 y ago)`, or nothing for `None`.
+- Tooltip: adds `modified 2024-03-09, 2.1 y ago` (inside the tip's own parentheses, so no nested ones), or nothing for `None`.
 - Legend: type entries unchanged. A small continuous age strip (bright to dim) with "new" and "old" end labels sits at the right edge. It is dropped before any type entry when space is short.
 
 ## Risks and open questions
