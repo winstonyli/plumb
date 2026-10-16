@@ -390,11 +390,17 @@ impl Pen<'_> {
     }
 
     fn frame(&self, r: Rect, c: D2D1_COLOR_F) {
+        self.frame_w(r, 1.0, c);
+    }
+
+    /// A frame `t` DIPs thick, kept inside `r` and no thicker than a third of its short side.
+    fn frame_w(&self, r: Rect, t: f32, c: D2D1_COLOR_F) {
+        let t = t.min(r.w.min(r.h) / 3.0).max(1.0);
         for e in [
-            Rect { h: 1.0, ..r },
-            Rect { y: r.y + r.h - 1.0, h: 1.0, ..r },
-            Rect { w: 1.0, ..r },
-            Rect { x: r.x + r.w - 1.0, w: 1.0, ..r },
+            Rect { h: t, ..r },
+            Rect { y: r.y + r.h - t, h: t, ..r },
+            Rect { w: t, ..r },
+            Rect { x: r.x + r.w - t, w: t, ..r },
         ] {
             self.fill(e, c);
         }
@@ -610,8 +616,15 @@ impl Pen<'_> {
             self.frame(h.rect, D2D1_COLOR_F { a: 0.85, ..t.fg });
         }
         for tile in m.marked.iter().filter_map(|&i| m.tiles.get(i)) {
-            self.fill(tile.rect, D2D1_COLOR_F { a: 0.5, ..DANGER });
-            self.frame(tile.rect, D2D1_COLOR_F { a: 0.9, ..DANGER });
+            // Stripes and a light frame, not just a red tint: a tint alone reads as the Video class.
+            let r = tile.rect;
+            self.fill(r, D2D1_COLOR_F { a: 0.35, ..DANGER });
+            let mut y = r.y + 3.0;
+            while y + 2.0 < r.y + r.h {
+                self.fill(Rect { y, h: 2.0, ..r }, D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.3 });
+                y += 6.0;
+            }
+            self.frame_w(r, 2.0, D2D1_COLOR_F { a: 0.9, ..t.fg });
         }
         if let Some(sel) = m.selected.and_then(|i| m.tiles.get(i)) {
             self.frame(sel.rect, t.accent);
