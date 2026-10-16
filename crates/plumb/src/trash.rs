@@ -79,9 +79,11 @@ fn perform(paths: &[&str], permanent: bool, owner: isize, results: &Results) -> 
     unsafe {
         let op: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
         let silent = owner == 0; // tests: no owner window to show the shell's progress or prompts over
-        // Silent only for tests; otherwise the shell's own progress and prompts stay on.
-        // Our dialogs already asked; the shell would ask a third time before a permanent delete.
-        let mut flags = if silent { (FOF_SILENT | FOF_NOERRORUI | FOF_NOCONFIRMATION).0 } else if permanent { FOF_NOCONFIRMATION.0 } else { 0 };
+        // Silent only for tests: the shell's progress window stays on otherwise. Its error dialog never shows: it offers
+        // only Try again or Cancel (and Cancel abandons the rest), so a failure is reported per item instead and
+        // `dialog::failed` offers the retry. Our dialogs already asked; the shell would ask a third time before a
+        // permanent delete.
+        let mut flags = if silent { (FOF_SILENT | FOF_NOERRORUI | FOF_NOCONFIRMATION).0 } else if permanent { (FOF_NOERRORUI | FOF_NOCONFIRMATION).0 } else { FOF_NOERRORUI.0 };
         if !permanent {
             flags |= FOF_ALLOWUNDO.0 | FOFX_RECYCLEONDELETE.0;
         }

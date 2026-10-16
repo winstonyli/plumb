@@ -17,6 +17,7 @@ pub enum Choice {
 pub(crate) const RECYCLE: i32 = 1001;
 pub(crate) const PERMANENT: i32 = 1002;
 const CLEAR: i32 = 1003;
+pub(crate) const RETRY: i32 = 1004;
 /// The paths shown before "and N more".
 const SHOWN: usize = 20;
 
@@ -68,6 +69,42 @@ pub fn choose(owner: HWND, paths: &[String], bytes: u64) -> Choice {
     }
 }
 
+/// The failure dialog's words: the headline, and the details one line per item (the first `SHOWN`, then a count).
+fn failure_text(failed: &[(String, String)], total: usize) -> (String, String) {
+    let head = format!("{} of {} not deleted", failed.len(), total);
+    let lines: Vec<String> = failed.iter().map(|(p, why)| format!("{p}: {why}")).collect();
+    (head, fmt::path_list(&lines, SHOWN))
+}
+
+/// Reports what a delete could not remove, with the reason for each; `true` to retry just those.
+pub fn failed(owner: HWND, failed: &[(String, String)], total: usize) -> bool {
+    let (head, list) = failure_text(failed, total);
+    let title = wide("plumb");
+    let head = wide(&head);
+    let body = wide(&format!("{} still marked. Retry tries them again.", if failed.len() == 1 { "It stays" } else { "They stay" }));
+    let list = wide(&list);
+    let toggle = wide("Show the reasons");
+    let retry = wide("Retry");
+    let buttons = [TASKDIALOG_BUTTON { nButtonID: RETRY, pszButtonText: PCWSTR(retry.as_ptr()) }];
+    let cfg = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        hwndParent: owner,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_EXPAND_FOOTER_AREA | TDF_EXPANDED_BY_DEFAULT,
+        dwCommonButtons: TDCBF_CLOSE_BUTTON,
+        pszWindowTitle: PCWSTR(title.as_ptr()),
+        pszMainInstruction: PCWSTR(head.as_ptr()),
+        pszContent: PCWSTR(body.as_ptr()),
+        pszExpandedInformation: PCWSTR(list.as_ptr()),
+        pszExpandedControlText: PCWSTR(toggle.as_ptr()),
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
+        nDefaultButton: RETRY,
+        ..Default::default()
+    };
+    let mut id = 0;
+    unsafe { TaskDialogIndirect(&cfg, Some(&mut id), None, None) }.is_ok() && id == RETRY
+}
+
 /// The second question before a permanent delete.
 pub fn confirm_permanent(owner: HWND, count: usize, bytes: u64) -> bool {
     let title = wide("plumb");
@@ -86,4 +123,19 @@ pub fn confirm_permanent(owner: HWND, count: usize, bytes: u64) -> bool {
     };
     let mut id = 0;
     unsafe { TaskDialogIndirect(&cfg, Some(&mut id), None, None) }.is_ok() && id == IDYES.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_failure_text_counts_and_lists_each_reason_and_caps_a_long_list() {
+        let f: Vec<(String, String)> = (0..22).map(|i| (format!("C:\\f{i}"), "in use by another program".into())).collect();
+        let (head, list) = failure_text(&f, 30);
+        assert_eq!(head, "22 of 30 not deleted");
+        assert!(list.starts_with("C:\\f0: in use by another program\nC:\\f1: "), "{list}");
+        assert!(list.ends_with("\nand 2 more"), "{list}");
+        assert_eq!(failure_text(&f[..1], 1).0, "1 of 1 not deleted");
+    }
 }

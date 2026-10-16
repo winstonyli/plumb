@@ -358,10 +358,13 @@ fn answer_dialogs(ids: Vec<i32>) -> std::thread::JoinHandle<bool> {
 /// the marked items and the tree follows. Run it from a normal prompt: `plumb --selftest-delete`.
 /// The file the recycle step sends to the Recycle Bin; named so it is recognisable there.
 const REC: &str = "plumb-selftest-delete.tmp";
+/// The file held open for the failure step.
+const LOCKED: &str = "locked.bin";
 
 pub fn selftest_delete() -> Result<String> {
     use windows::Win32::Foundation::E_FAIL;
-    use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDYES};
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDCLOSE, IDYES};
     let fail = |m: String| windows::core::Error::new(E_FAIL, m);
     if is_elevated() {
         return Err(fail("run this from a normal prompt: an elevated delete is not what users see".into()));
@@ -372,7 +375,7 @@ pub fn selftest_delete() -> Result<String> {
     let shown = dir.to_string_lossy().into_owned();
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("folder")).map_err(io)?;
-    for f in ["keep.txt", "a.bin", "b.bin", r"folder\inner.bin", REC] {
+    for f in ["keep.txt", "a.bin", "b.bin", r"folder\inner.bin", REC, LOCKED] {
         std::fs::write(dir.join(f), vec![1u8; 4096]).map_err(io)?;
     }
     let hwnd = create_window()?;
@@ -447,7 +450,33 @@ pub fn selftest_delete() -> Result<String> {
         if String::from_utf8_lossy(&bin.stdout).trim() != "1" {
             return Err(fail(format!("the recycled file is not in the Recycle Bin exactly once: {:?} {}", String::from_utf8_lossy(&bin.stdout), String::from_utf8_lossy(&bin.stderr))));
         }
-        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items; tree followed in {lag:.1?}"))
+
+        // A file held open: the shell's own error dialog is off, so the failure reaches our dialog with its reason.
+        // Retry asks again (still held: a second dialog), Close leaves the file in place and marked; once it is
+        // released, the next commit removes it.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(dir.join(LOCKED)).map_err(io)?;
+        mark(&[LOCKED]);
+        let h = answer_dialogs(vec![crate::dialog::PERMANENT, IDYES.0, crate::dialog::RETRY, IDCLOSE.0]);
+        commit(hwnd);
+        pump_until("the failure dialogs", 30, &|_| h.is_finished())?;
+        if !h.join().unwrap_or(false) {
+            return Err(fail("a held file did not bring up the failure dialog twice (Retry, then Close)".into()));
+        }
+        pump_until("the failed delete to finish", 30, &|w| !w.app.deleting())?;
+        if !exists(LOCKED) || with(|w| w.app.basket().len()) != Some(1) {
+            return Err(fail("a failed delete removed the file or unmarked it".into()));
+        }
+        drop(held);
+        let h = answer_dialogs(vec![crate::dialog::PERMANENT, IDYES.0]);
+        commit(hwnd);
+        if !h.join().unwrap_or(false) {
+            return Err(fail("the commit dialogs did not appear once the file was released".into()));
+        }
+        pump_until("the delete after the release", 30, &|w| !w.app.deleting())?;
+        if exists(LOCKED) || with(|w| w.app.basket().len()) != Some(0) {
+            return Err(fail("the released file was not deleted".into()));
+        }
+        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items; a held file shows the failure dialog (Retry, Close) and stays marked; tree followed in {lag:.1?}"))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);

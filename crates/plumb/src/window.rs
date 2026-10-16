@@ -713,8 +713,9 @@ impl Win {
         Some(r)
     }
 
-    /// A delete batch ended: unmark what went, keep what failed, say so on the status line.
-    fn finish_delete(&mut self, drive: usize, out: Vec<trash::Outcome>) {
+    /// A delete batch ended: unmark what went, keep what failed, say so on the status line. Returns the failures
+    /// (path, reason) and the batch size when the drive is on screen, for the failure dialog.
+    fn finish_delete(&mut self, drive: usize, out: Vec<trash::Outcome>) -> Option<(Vec<(String, String)>, usize)> {
         let gone: Vec<String> = out.iter().filter(|o| !matches!(o.verdict, trash::Verdict::Failed(_))).map(|o| o.path.clone()).collect();
         let missing = out.iter().filter(|o| o.verdict == trash::Verdict::Missing).count();
         let failed: Vec<(String, String)> = out
@@ -724,10 +725,13 @@ impl Win {
                 _ => None,
             })
             .collect();
+        let shown = self.app.active == Some(drive);
         if self.in_slot(drive, |w| w.app.finish_delete(&gone, missing, &failed)).is_none() {
             self.app.set_deleting(false); // the drive's slot was evicted meanwhile
         }
         self.invalidate();
+        let total = gone.len() + failed.len();
+        (shown && !failed.is_empty()).then_some((failed, total))
     }
 
     /// Updates the chip marks from what the other drives hold.
@@ -1292,20 +1296,25 @@ fn commit(hwnd: HWND) {
         }
         _ if permanent && !dialog::confirm_permanent(hwnd, req.paths.len(), req.bytes) => {}
         _ => {
-            if with(|w| w.app.begin_delete()) != Some(true) {
-                with(|w| w.invalidate());
-                return;
-            }
-            let (owner, drive, paths) = (hwnd.0 as isize, req.drive, req.paths);
-            std::thread::spawn(move || {
-                let out = trash::delete(paths, permanent, owner);
-                let boxed = Box::into_raw(Box::new((drive, out)));
-                // The window may be gone by now; then the box leaks, which is harmless at exit.
-                let _ = unsafe { PostMessageW(Some(HWND(owner as *mut _)), WM_DELETED, WPARAM(0), LPARAM(boxed as isize)) };
-            });
+            start_delete(hwnd, req.drive, req.paths, permanent);
         }
     }
     with(|w| w.invalidate());
+}
+
+/// Runs the delete of `paths` on a worker thread; the result comes back as `WM_DELETED`.
+fn start_delete(hwnd: HWND, drive: usize, paths: Vec<String>, permanent: bool) {
+    if with(|w| w.app.begin_delete()) != Some(true) {
+        with(|w| w.invalidate());
+        return;
+    }
+    let owner = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let out = trash::delete(paths, permanent, owner);
+        let boxed = Box::into_raw(Box::new((drive, permanent, out)));
+        // The window may be gone by now; then the box leaks, which is harmless at exit.
+        let _ = unsafe { PostMessageW(Some(HWND(owner as *mut _)), WM_DELETED, WPARAM(0), LPARAM(boxed as isize)) };
+    });
 }
 
 fn pos(l: LPARAM) -> (i32, i32) {
@@ -1697,14 +1706,23 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(0)
         }
         WM_DELETED => {
-            let raw = lp.0 as *mut (usize, Vec<trash::Outcome>);
+            let raw = lp.0 as *mut (usize, bool, Vec<trash::Outcome>);
             let done = with(|w| {
-                let (drive, out) = *unsafe { Box::from_raw(raw) };
-                w.finish_delete(drive, out);
+                let (drive, permanent, out) = *unsafe { Box::from_raw(raw) };
+                w.finish_delete(drive, out).map(|f| (drive, permanent, f))
             });
-            if done.is_none() {
+            match done {
                 // The state was borrowed (a nested message loop): try again rather than lose the result.
-                let _ = unsafe { PostMessageW(Some(hwnd), WM_DELETED, WPARAM(0), lp) };
+                None => {
+                    let _ = unsafe { PostMessageW(Some(hwnd), WM_DELETED, WPARAM(0), lp) };
+                }
+                // With no borrow held (the dialog runs its own message loop): say what failed and why, retry only those.
+                Some(Some((drive, permanent, (failed, total)))) => {
+                    if dialog::failed(hwnd, &failed, total) {
+                        start_delete(hwnd, drive, failed.into_iter().map(|f| f.0).collect(), permanent);
+                    }
+                }
+                Some(None) => {}
             }
             LRESULT(0)
         }
