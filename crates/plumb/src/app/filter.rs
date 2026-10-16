@@ -296,7 +296,6 @@ mod tests {
     use super::*;
     use crate::app::{DriveInfo, Input};
     use crate::layout::{Layout, HEADER_H, PICKER_H, ROW_H};
-    use crate::restore::resolve;
     use plumb_core::{NodeFlags, Tree, TreeBuilder};
 
     /// C:\{docs\{notes.txt, todo.md}, src\{main.rs, deep\more.txt}, readme.md}
@@ -457,19 +456,19 @@ mod tests {
         let mut a = app();
         type_text(&mut a, "txt");
         run(&mut a);
-        let src = resolve(a.tree.as_ref().unwrap(), "C:\\src").unwrap();
+        let src = a.tree.as_ref().unwrap().find("C:\\src").unwrap();
         let t = a.tree.as_mut().unwrap();
         t.add_child(src, &u("new.txt"), 40, NodeFlags::empty());
         a.refresh_rows();
         assert!(names(&a).contains(&"new.txt".to_string()));
         assert_eq!(a.filter_count(), "3 matches");
-        let more = resolve(a.tree.as_ref().unwrap(), "C:\\src\\deep\\more.txt").unwrap();
+        let more = a.tree.as_ref().unwrap().find("C:\\src\\deep\\more.txt").unwrap();
         a.tree.as_mut().unwrap().rename(more, &u("more.rs"));
         a.refresh_rows();
         let n = names(&a);
         assert!(!n.contains(&"more.rs".to_string()) && !n.contains(&"deep".to_string()), "{n:?}");
         assert_eq!(a.filter_count(), "2 matches");
-        let notes = resolve(a.tree.as_ref().unwrap(), "C:\\docs\\notes.txt").unwrap();
+        let notes = a.tree.as_ref().unwrap().find("C:\\docs\\notes.txt").unwrap();
         a.tree.as_mut().unwrap().remove(notes);
         a.refresh_rows();
         assert!(!names(&a).contains(&"docs".to_string()));
@@ -481,8 +480,8 @@ mod tests {
         let mut a = app();
         type_text(&mut a, "txt");
         let j = a.start_filter().unwrap(); // the snapshot is taken here
-        let src = resolve(a.tree.as_ref().unwrap(), "C:\\src").unwrap();
-        let main = resolve(a.tree.as_ref().unwrap(), "C:\\src\\main.rs").unwrap();
+        let src = a.tree.as_ref().unwrap().find("C:\\src").unwrap();
+        let main = a.tree.as_ref().unwrap().find("C:\\src\\main.rs").unwrap();
         let t = a.tree.as_mut().unwrap();
         t.add_child(src, &u("late.txt"), 7, NodeFlags::empty()); // past the snapshot's end
         t.rename(main, &u("main.txt")); // inside it

@@ -1860,10 +1860,10 @@ pub fn selftest_live() -> Result<String> {
     };
     let size_at = |w: &mut Win, rel: &str| -> Option<u64> {
         let t = w.app.tree.as_ref()?;
-        let id = crate::restore::resolve(t, &format!("{shown}\\{rel}"))?;
+        let id = t.find(&format!("{shown}\\{rel}"))?;
         Some(t.subtree_size[id])
     };
-    let dir_gone = |w: &mut Win| w.app.tree.as_ref().is_some_and(|t| crate::restore::resolve(t, &shown).is_none());
+    let dir_gone = |w: &mut Win| w.app.tree.as_ref().is_some_and(|t| t.find(&shown).is_none());
     let run = || -> Result<String> {
         let i = with(|w| w.app.drives.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
         let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;

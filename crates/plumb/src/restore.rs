@@ -1,7 +1,7 @@
 //! Carries the view over to a rescanned tree: what is expanded, what is selected and where it
 //! sits on screen, all by path, since node ids mean nothing in the new tree.
 use plumb_core::rows::{RowModel, SortKey};
-use plumb_core::{NodeId, Tree};
+use plumb_core::Tree;
 
 pub struct Snapshot {
     /// Paths of the expanded folders that are on screen, shallowest first.
@@ -29,12 +29,12 @@ impl Snapshot {
         let mut model = RowModel::new(tree);
         model.set_sort(tree, key, desc);
         for p in &self.expanded {
-            if let Some(id) = resolve(tree, p) {
+            if let Some(id) = tree.find(p) {
                 model.expand(tree, id);
             }
         }
         let found = self.selected.as_deref().and_then(|mut p| loop {
-            if let Some(id) = resolve(tree, p) {
+            if let Some(id) = tree.find(p) {
                 break Some(id);
             }
             p = &p[..p.rfind('\\')?];
@@ -51,21 +51,10 @@ impl Snapshot {
     }
 }
 
-/// The node at `path` ("C:\dir\file"), matching names exactly.
-pub(crate) fn resolve(tree: &Tree, path: &str) -> Option<NodeId> {
-    let mut parts = path.split('\\');
-    let first = parts.next()?;
-    let mut cur = *tree.roots.iter().find(|&&r| tree.name_string(r) == first)?;
-    for part in parts {
-        cur = tree.children(cur).find(|&c| tree.name_string(c) == part)?;
-    }
-    Some(cur)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plumb_core::{NodeFlags, TreeBuilder};
+    use plumb_core::{NodeFlags, NodeId, TreeBuilder};
 
     /// C:\{a\{x, y}, b\{z}, big} with a few filler files in a so scrolling means something.
     fn tree(drop_b: bool) -> Tree {
@@ -89,9 +78,9 @@ mod tests {
         m.set_sort(t, SortKey::Name, false);
         let root = m.rows()[0].id;
         m.expand(t, root);
-        let a = resolve(t, "C:\\a").unwrap();
+        let a = t.find("C:\\a").unwrap();
         m.expand(t, a);
-        m.select(resolve(t, "C:\\a\\f10").unwrap());
+        m.select(t.find("C:\\a\\f10").unwrap());
         let scroll = m.selected_index().unwrap() - 4;
         (m, scroll)
     }
@@ -99,10 +88,10 @@ mod tests {
     #[test]
     fn paths_resolve_exactly() {
         let t = tree(false);
-        assert_eq!(resolve(&t, "C:"), Some(NodeId(0)));
-        assert_eq!(t.path(resolve(&t, "C:\\b\\z").unwrap()), "C:\\b\\z");
-        assert_eq!(resolve(&t, "C:\\B"), None);
-        assert_eq!(resolve(&t, "D:"), None);
+        assert_eq!(t.find("C:"), Some(NodeId(0)));
+        assert_eq!(t.path(t.find("C:\\b\\z").unwrap()), "C:\\b\\z");
+        assert_eq!(t.find("C:\\B"), None);
+        assert_eq!(t.find("D:"), None);
     }
 
     #[test]
@@ -114,8 +103,8 @@ mod tests {
         let (m2, s2) = snap.apply(&new, SortKey::Name, false, 20);
         assert_eq!(new.path(m2.selected().unwrap()), "C:\\a\\f10");
         assert_eq!(m2.selected_index().unwrap() - s2, 4);
-        assert!(m2.is_expanded(resolve(&new, "C:\\a").unwrap()));
-        assert!(!m2.is_expanded(resolve(&new, "C:\\b").unwrap()));
+        assert!(m2.is_expanded(new.find("C:\\a").unwrap()));
+        assert!(!m2.is_expanded(new.find("C:\\b").unwrap()));
     }
 
     #[test]
@@ -124,9 +113,9 @@ mod tests {
         let mut m = RowModel::new(&old);
         let root = m.rows()[0].id;
         m.expand(&old, root);
-        let b = resolve(&old, "C:\\b").unwrap();
+        let b = old.find("C:\\b").unwrap();
         m.expand(&old, b);
-        m.select(resolve(&old, "C:\\b\\z").unwrap());
+        m.select(old.find("C:\\b\\z").unwrap());
         let snap = Snapshot::take(&old, &m, 0);
         let new = tree(true);
         let (m2, _) = snap.apply(&new, SortKey::Name, false, 20);

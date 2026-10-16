@@ -78,6 +78,17 @@ impl Tree {
         parts.join("\\")
     }
 
+    /// The node at `path` ("C:\dir\file", as [`Tree::path`] gives it), matching names exactly.
+    pub fn find(&self, path: &str) -> Option<NodeId> {
+        let mut parts = path.split('\\');
+        let first = parts.next()?;
+        let mut cur = *self.roots.iter().find(|&&r| self.name_string(r) == first)?;
+        for part in parts {
+            cur = self.children(cur).find(|&c| self.name_string(c) == part)?;
+        }
+        Some(cur)
+    }
+
     /// Nodes marked dead so far (slots not yet reclaimed).
     pub fn dead(&self) -> usize {
         self.dead
