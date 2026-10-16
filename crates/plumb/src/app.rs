@@ -12,7 +12,7 @@ use plumb_core::basket::{self, Basket};
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::treemap::{self, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub use filter::FilterJob;
 
@@ -243,6 +243,10 @@ pub struct App {
     /// Every failure of the last delete, one a line: part of the full status line (the hover text).
     notice_detail: Vec<String>,
     system_root: String,
+    /// Marks of drives whose kept state was let go (see `Win::evict`): a later scan of that drive takes them back.
+    stash: HashMap<usize, Basket>,
+    /// Marks the last commit left out because they can no longer be deleted (path, why): reported with its result.
+    skipped: Vec<(String, &'static str)>,
 }
 
 impl App {
@@ -253,7 +257,7 @@ impl App {
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
-            basket: Basket::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(),
+            basket: Basket::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -326,7 +330,9 @@ impl App {
         self.filter_reset();
         self.map_reset();
         if self.active != Some(drive) {
-            self.clear_basket(); // a rescan of the drive on screen keeps its marks
+            // A rescan of the drive on screen keeps its marks; another drive brings back the ones it was let go with.
+            self.basket = self.stash.remove(&drive).unwrap_or_default();
+            self.basket_rev += 1;
         }
         self.active = Some(drive);
         self.tree = None;
@@ -720,6 +726,13 @@ impl App {
         self.basket_active().then(|| format!("{} marked, up to {}", self.basket_view.items, fmt::size(self.basket_view.bytes)))
     }
 
+    /// Keeps the marks of `drive`, whose state is being let go, for its next scan.
+    pub fn stash_basket(&mut self, drive: usize, from: &mut Parked) {
+        if !from.basket.is_empty() {
+            self.stash.insert(drive, std::mem::take(&mut from.basket));
+        }
+    }
+
     pub fn clear_basket(&mut self) {
         self.basket.clear();
         self.basket_rev += 1;
@@ -828,10 +841,19 @@ impl App {
         let (drive, tree) = (self.active?, self.tree.as_ref()?);
         self.basket.prune(tree);
         self.basket_rev += 1;
-        let ids: Vec<NodeId> = self.basket.covered(tree).into_iter().filter(|&i| basket::refusal(tree, i, &self.system_root).is_none()).collect();
+        // A mark that cannot be deleted now (a rename gave it an unsafe name) is dropped and reported with the result.
+        let (ids, refused): (Vec<NodeId>, Vec<NodeId>) = self.basket.covered(tree).into_iter().partition(|&i| basket::refusal(tree, i, &self.system_root).is_none());
+        self.skipped = refused.iter().map(|&i| (tree.path(i), basket::refusal(tree, i, &self.system_root).unwrap_or(""))).collect();
+        let skipped: Vec<String> = self.skipped.iter().map(|(p, _)| p.clone()).collect();
+        self.basket.remove_under(&skipped);
+        self.basket_rev += 1;
         if ids.is_empty() {
             self.clear_basket();
-            self.notice = "the marked items are already gone".into();
+            self.notice = match self.skipped.first() {
+                Some((_, why)) => format!("{} marked item{} skipped: {why}", self.skipped.len(), if self.skipped.len() == 1 { "" } else { "s" }),
+                None => "the marked items are already gone".into(),
+            };
+            self.notice_detail = self.skipped.drain(..).map(|(p, why)| format!("{p}: {why}")).collect();
             return None;
         }
         let paths = ids.iter().map(|&i| tree.path(i)).collect();
@@ -852,6 +874,10 @@ impl App {
             Some((_, why)) => format!("{} of {} not deleted: {why}; still marked", failed.len(), gone.len() + failed.len()),
         };
         self.notice_detail = failed.iter().map(|(p, why)| format!("{p}: {why}")).collect();
+        if let Some((_, why)) = self.skipped.first() {
+            self.notice += &format!("; {} skipped: {why}", self.skipped.len());
+            self.notice_detail.extend(self.skipped.drain(..).map(|(p, why)| format!("{p}: {why}")));
+        }
     }
 
     pub fn map_tiles(&self) -> &[Tile] {
@@ -1779,6 +1805,47 @@ Test GPU", a.status())));
         assert_eq!(a.basket().len(), 1, "rescanning the drive on screen keeps its marks");
         a.begin_scan(1);
         assert!(a.basket().is_empty(), "a first scan of another drive starts clean");
+    }
+
+    #[test]
+    fn a_mark_that_can_no_longer_be_deleted_is_dropped_and_reported_with_the_result() {
+        let mut a = scanned();
+        let (bad, good) = {
+            let t = a.tree.as_ref().unwrap();
+            let mut leaves = (0..t.len() as u32).map(NodeId).filter(|&i| !t.parent[i].is_none() && !t.has_children(i));
+            (leaves.next().unwrap(), leaves.next().unwrap())
+        };
+        a.toggle_mark(bad);
+        a.toggle_mark(good);
+        let bad_path = a.tree.as_ref().unwrap().path(bad);
+        a.system_root = bad_path.clone(); // now the first one is refused, as if renamed to an unsafe name
+        let req = a.commit_request().expect("the other mark still goes");
+        assert_eq!(req.paths.len(), 1);
+        assert_eq!(a.basket().len(), 1, "the refused mark is dropped");
+        a.finish_delete(&req.paths, 0, &[]);
+        assert!(a.notice.contains("1 skipped: the Windows folder is protected"), "{}", a.notice);
+        assert!(a.notice_detail.iter().any(|d| d.starts_with(&bad_path)));
+        // Alone, it gives no request, only the reason.
+        let mut a = scanned();
+        a.toggle_mark(bad);
+        a.system_root = a.tree.as_ref().unwrap().path(bad);
+        assert!(a.commit_request().is_none());
+        assert!(a.notice.starts_with("1 marked item skipped"), "{}", a.notice);
+        assert!(a.basket().is_empty());
+    }
+
+    #[test]
+    fn the_marks_of_a_drive_whose_state_was_let_go_come_back_with_its_next_scan() {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        a.toggle_mark(file);
+        let mut gone = Parked::default();
+        a.swap_slot(&mut gone); // the drive goes away with its mark
+        a.stash_basket(2, &mut gone); // and is let go
+        a.begin_scan(3);
+        assert!(a.basket().is_empty(), "another drive does not get them");
+        a.begin_scan(2);
+        assert_eq!(a.basket().len(), 1, "its own scan does");
     }
 
     #[test]

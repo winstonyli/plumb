@@ -667,7 +667,8 @@ impl Win {
         while self.parked.iter().flatten().filter(|d| d.app.has_tree()).count() >= KEPT_DRIVES {
             let lru = self.parked.iter().enumerate().filter_map(|(i, d)| d.as_ref().filter(|d| d.rx.is_none()).map(|d| (d.used, i))).min();
             let Some((_, i)) = lru else { return };
-            if let Some(d) = self.parked[i].take() {
+            if let Some(mut d) = self.parked[i].take() {
+                self.app.stash_basket(i, &mut d.app); // its marks outlive its tree
                 d.discard();
             }
         }
