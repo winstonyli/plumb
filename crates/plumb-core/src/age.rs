@@ -9,7 +9,7 @@ const UNIX_EPOCH_DAYS: u32 = 134_774;
 /// Age (days) at which the fade is complete.
 pub const AGE_FULL_DAYS: f32 = 3650.0;
 /// How far toward the background the oldest tile is mixed (0 = not at all, 1 = vanishes).
-pub const FADE_MAX: f32 = 0.5;
+pub const FADE_MAX: f32 = 0.65;
 
 /// The day a FILETIME falls on, or `None` if it is under one day (0 means "unset").
 pub fn day_of(filetime: u64) -> Option<NonZeroU32> {

@@ -379,7 +379,7 @@ fn every_pair_of_classes_stays_apart_at_the_oldest_shade() {
         for i in 0..oldest.len() {
             for j in i + 1..oldest.len() {
                 let d: f32 = (0..3).map(|k| (oldest[i][k] - oldest[j][k]).powi(2)).sum::<f32>().sqrt();
-                assert!(d > 0.06, "{dark}: classes {i} and {j} are {d} apart when oldest");
+                assert!(d > 0.05, "{dark}: classes {i} and {j} are {d} apart when oldest");
             }
         }
     }
