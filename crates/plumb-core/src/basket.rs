@@ -49,6 +49,16 @@ impl Basket {
         self.paths.retain(|p| !gone.contains(p));
     }
 
+    /// Drops the marks that are one of `gone` or lie under one: what a deleted folder takes with it.
+    pub fn remove_under(&mut self, gone: &[String]) {
+        self.paths.retain(|p| !gone.iter().any(|g| p == g || p.strip_prefix(g.as_str()).is_some_and(|r| r.starts_with('\\'))));
+    }
+
+    /// Drops the marks that no longer resolve in `tree`.
+    pub fn prune(&mut self, tree: &Tree) {
+        self.paths.retain(|p| tree.find(p).is_some());
+    }
+
     /// The nodes the marks stand for that still exist and have no marked ancestor: what a delete touches.
     pub fn covered(&self, tree: &Tree) -> Vec<NodeId> {
         let ids: Vec<NodeId> = self.paths.iter().filter_map(|p| tree.find(p)).collect();
@@ -79,9 +89,16 @@ pub fn refusal(tree: &Tree, id: NodeId, system_root: &str) -> Option<&'static st
         return Some("a drive root cannot be deleted");
     }
     let path = tree.path(id);
-    let under = path.get(..system_root.len()).is_some_and(|head| head.eq_ignore_ascii_case(system_root))
-        && (path.len() == system_root.len() || path.as_bytes()[system_root.len()] == b'\\');
-    under.then_some("the Windows folder is protected")
+    let starts = |a: &str, b: &str| a.get(..b.len()).is_some_and(|h| h.eq_ignore_ascii_case(b)) && (a.len() == b.len() || a.as_bytes()[b.len()] == b'\\');
+    if starts(&path, system_root) || starts(system_root, &path) {
+        return Some("the Windows folder is protected");
+    }
+    // Win32 rewrites these names (a trailing dot or space is dropped), so a delete could hit another file; the orphan folder is not a real one.
+    let mut parts = path.split('\\').skip(1);
+    if parts.any(|p| p == "<orphans>" || p.ends_with('.') || p.ends_with(' ')) {
+        return Some("this name cannot be deleted safely");
+    }
+    None
 }
 
 #[cfg(test)]
@@ -166,5 +183,40 @@ mod tests {
         assert!(refusal(&t, at(r"C:\Windows\sys"), r"c:\windows").is_some(), "case does not matter");
         assert!(refusal(&t, at(r"C:\a"), r"C:\Windows").is_none());
         assert!(refusal(&t, at(r"C:\big"), r"C:\Win").is_none(), "a longer sibling name is not inside");
+    }
+
+    #[test]
+    fn names_win32_would_rewrite_orphans_and_ancestors_of_the_system_root_are_refused() {
+        let mut b = TreeBuilder::new();
+        let c = b.push_str(NodeId::NONE, "C:", 0, NodeFlags::DIR);
+        let d = b.push_str(c, "d", 0, NodeFlags::DIR);
+        b.push_str(d, "report.", 5, NodeFlags::empty());
+        b.push_str(d, "pad ", 5, NodeFlags::empty());
+        let o = b.push_str(c, "<orphans>", 0, NodeFlags::DIR);
+        b.push_str(o, "lost", 5, NodeFlags::empty());
+        let os = b.push_str(c, "OS", 0, NodeFlags::DIR);
+        b.push_str(os, "Windows", 0, NodeFlags::DIR);
+        let t = b.finish().unwrap();
+        let at = |p: &str| t.find(p).unwrap();
+        assert!(refusal(&t, at(r"C:\d\report."), r"C:\Windows").is_some(), "trailing dot");
+        assert!(refusal(&t, at(r"C:\d\pad "), r"C:\Windows").is_some(), "trailing space");
+        assert!(refusal(&t, at(r"C:\<orphans>"), r"C:\Windows").is_some());
+        assert!(refusal(&t, at(r"C:\<orphans>\lost"), r"C:\Windows").is_some());
+        assert!(refusal(&t, at(r"C:\OS"), r"C:\OS\Windows").is_some(), "an ancestor of the system root");
+        assert!(refusal(&t, at(r"C:\d"), r"C:\OS\Windows").is_none());
+    }
+
+    #[test]
+    fn prune_drops_marks_that_no_longer_resolve_and_remove_under_drops_a_gone_folders_marks() {
+        let t = tree();
+        let mut b = Basket::default();
+        for p in [r"C:\a", r"C:\a\x", r"C:\nope", r"C:\big"] {
+            b.toggle(p);
+        }
+        b.prune(&t);
+        assert!(!b.contains(r"C:\nope") && b.len() == 3);
+        b.remove_under(&[r"C:\a".to_string()]);
+        assert_eq!(b.len(), 1);
+        assert!(b.contains(r"C:\big"));
     }
 }

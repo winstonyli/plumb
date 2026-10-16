@@ -741,6 +741,14 @@ impl App {
         self.basket_rev += 1;
     }
 
+    /// Marks or unmarks the node at `path`, found afresh: the tree may have changed since the caller chose it.
+    pub fn toggle_mark_path(&mut self, path: &str) {
+        match self.tree.as_ref().and_then(|t| t.find(path)) {
+            Some(id) => self.toggle_mark(id),
+            None => self.notice = "that item is gone".into(),
+        }
+    }
+
     fn toggle_mark_selected(&mut self) {
         if let Some(id) = self.model.as_ref().and_then(|m| m.selected()) {
             self.toggle_mark(id);
@@ -794,6 +802,8 @@ impl App {
             return None;
         }
         let (drive, tree) = (self.active?, self.tree.as_ref()?);
+        self.basket.prune(tree);
+        self.basket_rev += 1;
         let ids: Vec<NodeId> = self.basket.covered(tree).into_iter().filter(|&i| basket::refusal(tree, i, &self.system_root).is_none()).collect();
         if ids.is_empty() {
             self.clear_basket();
@@ -808,7 +818,7 @@ impl App {
     /// A delete ended: `gone` (deleted or already missing) leave the basket, `failed` (path, reason) stay.
     pub fn finish_delete(&mut self, gone: &[String], failed: &[(String, String)]) {
         self.deleting = false;
-        self.basket.remove_all(gone);
+        self.basket.remove_under(gone);
         self.basket_rev += 1;
         self.notice = match failed.first() {
             None => format!("deleted {} item{}", gone.len(), if gone.len() == 1 { "" } else { "s" }),
@@ -1784,5 +1794,41 @@ Test GPU", a.status())));
         a.toggle_mark(file);
         a.update_map(1.0);
         assert!(matches!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0)), Effect::Commit));
+    }
+
+    #[test]
+    fn a_deleted_folder_takes_its_childs_mark_and_a_stale_mark_is_pruned_at_commit() {
+        let mut a = scanned();
+        let (file, dir, child) = picks(&a);
+        let t = a.tree.as_ref().unwrap();
+        let (fp, dp) = (t.path(file), t.path(dir));
+        a.toggle_mark(child);
+        a.toggle_mark(dir);
+        a.toggle_mark(file);
+        a.set_deleting(true);
+        a.finish_delete(std::slice::from_ref(&dp), &[]);
+        assert_eq!(a.basket().len(), 1, "the child's mark went with its folder");
+        assert!(a.basket().contains(&fp));
+        let mut b = scanned();
+        let (file, dir, _) = picks(&b);
+        b.toggle_mark(file);
+        b.toggle_mark(dir);
+        let fid = file;
+        assert!(b.tree.as_mut().unwrap().remove(fid));
+        let req = b.commit_request().unwrap();
+        assert_eq!(req.paths.len(), 1);
+        assert_eq!(b.basket().len(), 1, "the mark that no longer resolves is dropped, not kept to come back later");
+    }
+
+    #[test]
+    fn a_mark_from_the_menu_is_found_again_by_path_and_a_vanished_path_marks_nothing() {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        let p = a.tree.as_ref().unwrap().path(file);
+        a.toggle_mark_path(&p);
+        assert!(a.basket().contains(&p));
+        a.toggle_mark_path("nowhere\\at all");
+        assert_eq!(a.basket().len(), 1);
+        assert!(a.status_line(true).starts_with("that item is gone"));
     }
 }

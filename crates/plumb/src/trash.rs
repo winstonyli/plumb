@@ -104,6 +104,18 @@ fn perform(paths: &[&str], permanent: bool, owner: isize, results: &Results) -> 
     Ok(())
 }
 
+/// What happened to a path the batch was given: the disk decides. A path still there was not deleted, whatever the
+/// shell reported (it also returns success codes for items the user skipped in its own prompts).
+fn judge(report: Option<i32>, still_there: bool, setup: Option<i32>) -> Verdict {
+    if !still_there {
+        return Verdict::Deleted;
+    }
+    Verdict::Failed(match report {
+        Some(hr) if hr < 0 => hr,
+        _ => setup.unwrap_or(CANCELLED),
+    })
+}
+
 /// Deletes `paths` (to the Recycle Bin unless `permanent`). Blocking: call from a worker thread.
 /// `owner` is a raw `HWND` the shell's progress window and prompts attach to; 0 means none (silent).
 pub fn delete(paths: Vec<String>, permanent: bool, owner: isize) -> Vec<Outcome> {
@@ -119,13 +131,7 @@ pub fn delete(paths: Vec<String>, permanent: bool, owner: isize) -> Vec<Outcome>
             let verdict = if gone {
                 Verdict::Missing
             } else {
-                match results.get(&path) {
-                    Some(&hr) if hr >= 0 => Verdict::Deleted,
-                    Some(&hr) => Verdict::Failed(hr),
-                    // No report (the shell named the path differently, or never got to it): trust the disk.
-                    None if std::fs::symlink_metadata(&path).is_err() => Verdict::Deleted,
-                    None => Verdict::Failed(setup.as_ref().map_or(CANCELLED, |e| e.code().0)),
-                }
+                judge(results.get(&path).copied(), std::fs::symlink_metadata(&path).is_ok(), setup.as_ref().map(|e| e.code().0))
             };
             Outcome { path, verdict }
         })
@@ -173,6 +179,14 @@ mod tests {
         assert!(dir.join("locked.txt").exists() && !dir.join("ok.txt").exists());
         drop(held);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_disk_decides_so_a_skipped_item_with_a_success_code_is_not_deleted() {
+        assert_eq!(judge(Some(0x00270005), true, None), Verdict::Failed(CANCELLED), "success code, still there");
+        assert_eq!(judge(Some(-5), true, None), Verdict::Failed(-5));
+        assert_eq!(judge(None, false, None), Verdict::Deleted);
+        assert_eq!(judge(Some(0), false, None), Verdict::Deleted);
     }
 
     #[test]

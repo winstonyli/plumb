@@ -1189,7 +1189,7 @@ fn relaunch_elevated(drive: Option<&str>) -> bool {
 
 /// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
 /// because `TrackPopupMenu` runs its own message loop.
-fn context_menu(hwnd: HWND, id: NodeId, path: String, mark: MarkState, at: (i32, i32)) {
+fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, at: (i32, i32)) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let _ = AppendMenuW(menu, MF_STRING, CMD_REVEAL, w!("Reveal in Explorer"));
@@ -1218,7 +1218,7 @@ fn context_menu(hwnd: HWND, id: NodeId, path: String, mark: MarkState, at: (i32,
             CMD_PROPS => properties(&path),
             CMD_MARK => {
                 with(|w| {
-                    w.app.toggle_mark(id);
+                    w.app.toggle_mark_path(&raw);
                     w.invalidate();
                 });
             }
@@ -1250,9 +1250,9 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             }
         }
         Effect::Menu(id) => {
-            let info = with(|w| w.app.tree.as_ref().map(|t| (fmt::display_path(&t.path(id)), w.app.mark_state(id)))).flatten();
-            if let Some((p, mark)) = info {
-                context_menu(hwnd, id, p, mark, at);
+            let info = with(|w| w.app.tree.as_ref().map(|t| (t.path(id), fmt::display_path(&t.path(id)), w.app.mark_state(id)))).flatten();
+            if let Some((raw, p, mark)) = info {
+                context_menu(hwnd, raw, p, mark, at);
             }
         }
     }
