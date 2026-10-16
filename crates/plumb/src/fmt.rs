@@ -63,9 +63,26 @@ pub fn age(now: u32, day: u32) -> String {
     }
 }
 
+/// The first `max` paths, one a line, then "and N more".
+pub fn path_list(paths: &[String], max: usize) -> String {
+    let mut out = paths.iter().take(max).map(String::as_str).collect::<Vec<_>>().join("\n");
+    if paths.len() > max {
+        out.push_str(&format!("\nand {} more", paths.len() - max));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_list_shows_the_first_few_and_counts_the_rest() {
+        let p: Vec<String> = ["C:\\a", "C:\\b", "C:\\c"].map(String::from).into();
+        assert_eq!(path_list(&p, 5), "C:\\a\nC:\\b\nC:\\c");
+        assert_eq!(path_list(&p, 2), "C:\\a\nC:\\b\nand 1 more");
+        assert_eq!(path_list(&[], 2), "");
+    }
 
     #[test]
     fn dates_and_ages() {
