@@ -17,3 +17,7 @@ pub mod gfx;
 pub mod icons;
 #[cfg(windows)]
 pub mod window;
+#[cfg(windows)]
+pub mod trash;
+#[cfg(windows)]
+pub mod dialog;
