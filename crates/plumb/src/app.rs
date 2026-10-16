@@ -8,9 +8,11 @@ use crate::fmt;
 use crate::layout::{Hit, Layout, Rect, CHIP_PAD, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
 use crate::restore::Snapshot;
 use crate::state::{MapState, Sort, State};
+use plumb_core::basket::{self, Basket};
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::treemap::{self, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
+use std::collections::HashSet;
 
 pub use filter::FilterJob;
 
@@ -95,6 +97,8 @@ pub enum Effect {
     Filter,
     /// Stop the scan in flight.
     Cancel,
+    /// Ask what to delete (the basket chip).
+    Commit,
 }
 
 /// A map tile's tooltip: the path and size of what it stands for, or what a `Rest` tile holds.
@@ -132,6 +136,32 @@ pub struct Parked {
     refreshing: bool,
     preview_paused: bool,
     filter: filter::Filter,
+    basket: Basket,
+}
+
+/// What the context menu and `Del` can do with a node.
+#[derive(Debug, PartialEq)]
+pub enum MarkState {
+    Mark,
+    Unmark,
+    Refused(&'static str),
+}
+
+/// What a commit would delete: the topmost marked paths of one drive and what they hold.
+pub struct CommitRequest {
+    pub drive: usize,
+    pub paths: Vec<String>,
+    pub bytes: u64,
+}
+
+/// The basket counted against the tree: derived, so rebuilt when the marks, the tree or the tiles change.
+#[derive(Default)]
+struct BasketView {
+    key: Option<(u64, (usize, usize, u64), u64)>,
+    items: usize,
+    bytes: u64,
+    /// Indices into `map_tiles` to tint: tiles at or under a marked node.
+    tiles: Vec<usize>,
 }
 
 impl Parked {
@@ -202,6 +232,15 @@ pub struct App {
     /// While dragging the divider: the pointer x and the pane width at the start.
     map_drag: Option<(f32, f32)>,
     filter: filter::Filter,
+    basket: Basket,
+    /// Bumped when the marks change or the shown drive's basket is swapped.
+    basket_rev: u64,
+    basket_view: BasketView,
+    /// A delete is running on the worker thread.
+    deleting: bool,
+    /// A one-off message (a refused mark, a delete result) shown first on the status line until the next click or key.
+    notice: String,
+    system_root: String,
 }
 
 impl App {
@@ -212,6 +251,8 @@ impl App {
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
+            basket: Basket::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(),
+            system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
 
@@ -261,6 +302,8 @@ impl App {
         swap(&mut self.preview_paused, &mut p.preview_paused);
         swap(&mut self.filter, &mut p.filter);
         swap(&mut self.filter.ui, &mut p.filter.ui); // the query text belongs to the window
+        swap(&mut self.basket, &mut p.basket);
+        self.basket_rev += 1;
         self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable());
         self.set_scroll(self.scroll);
         self.map_reset();
@@ -280,6 +323,7 @@ impl App {
     pub fn begin_scan(&mut self, drive: usize) {
         self.filter_reset();
         self.map_reset();
+        self.clear_basket();
         self.active = Some(drive);
         self.tree = None;
         self.model = None;
@@ -449,6 +493,7 @@ impl App {
             }
             Hit::Rescan => Some((l.rescan_button(), "Rescan".into())),
             Hit::Cancel => Some((l.cancel_button(), "Cancel scan".into())),
+            Hit::Basket => Some((l.basket_chip(), "Review and delete the marked items".into())),
             Hit::FilterRegex => Some((l.filter_regex(), "Regular expression".into())),
             Hit::MapButton => Some((l.map_button(), "Show or hide the map  (Ctrl+M)".into())),
             _ => None,
@@ -480,6 +525,10 @@ impl App {
 
     pub fn handle(&mut self, input: Input) -> Effect {
         self.layout.cancel = self.cancelable();
+        self.layout.basket = self.basket_active();
+        if matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
+            self.notice.clear();
+        }
         match input {
             Input::Resize(w, h) => {
                 (self.layout.w, self.layout.h) = (w, h);
@@ -498,6 +547,7 @@ impl App {
                     self.set_scroll(s);
                 }
             }
+            Input::Edit(Edit::Delete) if !self.filter.ui.focus => self.toggle_mark_selected(),
             Input::Edit(e) => return self.filter_edit(e),
             Input::Find => {
                 self.filter.ui.focus = true;
@@ -622,6 +672,11 @@ impl App {
     /// Rebuilds the tiles if the tree, the root, the pane's rectangle or the scale changed since they were built.
     /// `px` is the size of one physical pixel in DIPs (`96 / dpi`). Call before painting.
     pub fn update_map(&mut self, px: f32) {
+        self.update_tiles(px);
+        self.refresh_basket();
+    }
+
+    fn update_tiles(&mut self, px: f32) {
         self.follow_selection();
         let (rect, root) = (self.layout.map(), self.live_map_root());
         let (Some(tree), Some(rect), Some(root)) = (&self.tree, rect, root) else {
@@ -640,6 +695,125 @@ impl App {
         self.map_now = today();
         (self.map_key, self.map_dirty, self.map_hover) = (Some(key), false, None);
         self.map_gen += 1;
+    }
+
+    pub fn basket(&self) -> &Basket {
+        &self.basket
+    }
+
+    pub fn basket_active(&self) -> bool {
+        !self.basket.is_empty()
+    }
+
+    pub fn marked_tiles(&self) -> &[usize] {
+        &self.basket_view.tiles
+    }
+
+    /// "3 marked, up to 12.4 GB" for the status bar chip.
+    pub fn basket_label(&self) -> Option<String> {
+        self.basket_active().then(|| format!("{} marked, up to {}", self.basket_view.items, fmt::size(self.basket_view.bytes)))
+    }
+
+    pub fn clear_basket(&mut self) {
+        self.basket.clear();
+        self.basket_rev += 1;
+    }
+
+    pub fn mark_state(&self, id: NodeId) -> MarkState {
+        let Some(tree) = &self.tree else { return MarkState::Refused("no drive is shown") };
+        if self.basket.contains(&tree.path(id)) {
+            return MarkState::Unmark;
+        }
+        if self.cancelable() {
+            return MarkState::Refused("the drive is being scanned");
+        }
+        basket::refusal(tree, id, &self.system_root).map_or(MarkState::Mark, MarkState::Refused)
+    }
+
+    /// Marks or unmarks `id`; a refusal goes to the status line.
+    pub fn toggle_mark(&mut self, id: NodeId) {
+        if let MarkState::Refused(why) = self.mark_state(id) {
+            self.notice = format!("cannot mark: {why}");
+            return;
+        }
+        let Some(path) = self.tree.as_ref().map(|t| t.path(id)) else { return };
+        self.basket.toggle(&path);
+        self.basket_rev += 1;
+    }
+
+    fn toggle_mark_selected(&mut self) {
+        if let Some(id) = self.model.as_ref().and_then(|m| m.selected()) {
+            self.toggle_mark(id);
+        }
+    }
+
+    /// Rebuilds what the chip and the tiles show when the marks, the tree or the tiles changed.
+    fn refresh_basket(&mut self) {
+        let Some(tree) = &self.tree else {
+            self.basket_view = BasketView::default();
+            return;
+        };
+        if self.basket.is_empty() {
+            if self.basket_view.key.is_some() {
+                self.basket_view = BasketView::default();
+            }
+            return;
+        }
+        let fingerprint = (tree.len(), tree.dead(), tree.roots.first().map_or(0, |&r| tree.subtree_size[r]));
+        let key = (self.basket_rev, fingerprint, self.map_gen);
+        if self.basket_view.key == Some(key) {
+            return;
+        }
+        let ids = self.basket.covered(tree);
+        let set: HashSet<NodeId> = ids.iter().copied().collect();
+        let under = |mut n: NodeId| {
+            while !n.is_none() {
+                if set.contains(&n) {
+                    return true;
+                }
+                n = tree.parent[n];
+            }
+            false
+        };
+        let tiles = self.map_tiles.iter().enumerate().filter(|(_, t)| t.kind != Kind::Rest && under(t.node)).map(|(i, _)| i).collect();
+        self.basket_view = BasketView { key: Some(key), items: ids.len(), bytes: ids.iter().map(|&i| tree.subtree_size[i]).sum(), tiles };
+    }
+
+    pub fn set_deleting(&mut self, on: bool) {
+        self.deleting = on;
+    }
+
+    /// What a commit would delete right now, or `None` (with the reason on the status line).
+    pub fn commit_request(&mut self) -> Option<CommitRequest> {
+        if self.deleting {
+            self.notice = "a delete is already running".into();
+            return None;
+        }
+        if self.cancelable() {
+            self.notice = "cannot delete while the drive is being scanned".into();
+            return None;
+        }
+        let (drive, tree) = (self.active?, self.tree.as_ref()?);
+        let ids: Vec<NodeId> = self.basket.covered(tree).into_iter().filter(|&i| basket::refusal(tree, i, &self.system_root).is_none()).collect();
+        if ids.is_empty() {
+            self.clear_basket();
+            self.notice = "the marked items are already gone".into();
+            return None;
+        }
+        let paths = ids.iter().map(|&i| tree.path(i)).collect();
+        let bytes = ids.iter().map(|&i| tree.subtree_size[i]).sum();
+        Some(CommitRequest { drive, paths, bytes })
+    }
+
+    /// A delete ended: `gone` (deleted or already missing) leave the basket, `failed` (path, reason) stay.
+    pub fn finish_delete(&mut self, gone: &[String], failed: &[(String, String)]) {
+        self.deleting = false;
+        self.basket.remove_all(gone);
+        self.basket_rev += 1;
+        self.notice = match failed.first() {
+            None => format!("deleted {} item{}", gone.len(), if gone.len() == 1 { "" } else { "s" }),
+            Some((_, why)) => format!("{} of {} not deleted: {why}; still marked", failed.len(), gone.len() + failed.len()),
+        };
     }
 
     pub fn map_tiles(&self) -> &[Tile] {
@@ -675,6 +849,7 @@ impl App {
         }
         match hit {
             Hit::Cancel => return Effect::Cancel,
+            Hit::Basket => return Effect::Commit,
             // Picking another drive mid-scan cancels the scan in flight; the same drive does nothing.
             Hit::Chip(i) if !(matches!(self.scan, Scan::Running { .. }) && self.active == Some(i)) => return Effect::Scan(i),
             Hit::Rescan => {
@@ -773,6 +948,9 @@ impl App {
             _ => self.summary.clone(),
         };
         let mut parts: Vec<String> = self.selection(full).into_iter().chain([head]).collect();
+        if !self.notice.is_empty() {
+            parts.insert(0, self.notice.clone());
+        }
         match &self.live {
             LiveStatus::Off => {}
             LiveStatus::On { last: None } => parts.push("live".into()),
@@ -1475,5 +1653,134 @@ Test GPU", a.status())));
         let mut c = app();
         c.restore(&crate::state::State { map: crate::state::MapState { visible: true, width: f32::NAN }, ..Default::default() });
         assert!(c.layout.map_on && c.layout.map_w.is_finite() && c.layout.map_w >= crate::layout::MAP_MIN_W);
+    }
+
+    /// A non-root file and a non-root folder that has children, and one of that folder's children.
+    fn picks(a: &App) -> (NodeId, NodeId, NodeId) {
+        let t = a.tree.as_ref().unwrap();
+        let all = || (0..t.len() as u32).map(NodeId).filter(|&i| !t.parent[i].is_none());
+        let file = all().find(|&i| !t.has_children(i)).unwrap();
+        let dir = all().find(|&i| t.has_children(i)).unwrap();
+        (file, dir, t.children(dir).next().unwrap())
+    }
+
+    fn select(a: &mut App, id: NodeId) {
+        let (t, m) = (a.tree.as_ref().unwrap(), a.model.as_mut().unwrap());
+        m.reveal(t, id);
+        m.select(id);
+    }
+
+    #[test]
+    fn del_marks_and_unmarks_the_selection_and_the_filter_box_keeps_its_own_del() {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        select(&mut a, file);
+        a.handle(Input::Edit(Edit::Delete));
+        assert_eq!(a.basket().len(), 1);
+        a.handle(Input::Edit(Edit::Delete));
+        assert!(a.basket().is_empty(), "the second Del unmarks");
+        a.handle(Input::Find); // focus the filter box
+        a.handle(Input::Edit(Edit::Delete));
+        assert!(a.basket().is_empty(), "with the filter box focused, Del edits text and marks nothing");
+        let mut none = app();
+        none.handle(Input::Edit(Edit::Delete));
+        assert!(none.basket().is_empty(), "no tree, nothing selected: nothing happens");
+    }
+
+    #[test]
+    fn a_folder_and_its_child_marked_together_count_the_folder_once() {
+        let mut a = scanned();
+        let (_, dir, child) = picks(&a);
+        a.toggle_mark(child);
+        a.toggle_mark(dir);
+        a.update_map(1.0);
+        let t = a.tree.as_ref().unwrap();
+        assert_eq!(a.basket_label(), Some(format!("1 marked, up to {}", fmt::size(t.subtree_size[dir]))));
+        let (dir_path, dir_size) = (t.path(dir), t.subtree_size[dir]);
+        let req = a.commit_request().unwrap();
+        assert_eq!(req.paths, vec![dir_path], "the commit lists the folder, not its child");
+        assert_eq!(req.bytes, dir_size);
+    }
+
+    #[test]
+    fn roots_and_scans_are_refused_with_a_reason_that_reaches_the_status_line() {
+        let mut a = scanned();
+        let root = a.tree.as_ref().unwrap().roots[0];
+        assert_eq!(a.mark_state(root), MarkState::Refused("a drive root cannot be deleted"));
+        a.toggle_mark(root);
+        assert!(a.basket().is_empty());
+        assert!(a.status_line(true).starts_with("cannot mark: a drive root cannot be deleted"), "{}", a.status_line(true));
+        a.handle(Input::Click(5.0, a.layout.header().y + 5.0)); // any click clears the notice
+        assert!(!a.status_line(true).starts_with("cannot mark"));
+        let (file, ..) = picks(&a);
+        a.refreshing = true;
+        assert_eq!(a.mark_state(file), MarkState::Refused("the drive is being scanned"));
+    }
+
+    #[test]
+    fn marks_survive_a_drive_switch_a_rescan_keeps_them_and_a_first_scan_clears_them() {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        a.toggle_mark(file);
+        let mut other = Parked::default();
+        a.swap_slot(&mut other);
+        assert!(a.basket().is_empty(), "the other drive has no marks");
+        a.swap_slot(&mut other);
+        assert_eq!(a.basket().len(), 1, "coming back finds them");
+        a.refreshing = true;
+        a.refreshing = false;
+        assert_eq!(a.basket().len(), 1, "a background rescan leaves them");
+        a.begin_scan(0);
+        assert!(a.basket().is_empty(), "a fresh scan starts clean");
+    }
+
+    #[test]
+    fn a_marked_path_that_is_gone_at_commit_is_dropped_not_deleted() {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        a.toggle_mark(file);
+        assert!(a.tree.as_mut().unwrap().remove(file));
+        assert!(a.commit_request().is_none());
+        assert!(a.basket().is_empty());
+        assert!(a.status_line(true).starts_with("the marked items are already gone"), "{}", a.status_line(true));
+    }
+
+    #[test]
+    fn a_commit_refuses_a_busy_drive_and_a_second_delete() {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        a.toggle_mark(file);
+        a.refreshing = true;
+        assert!(a.commit_request().is_none());
+        a.refreshing = false;
+        assert!(a.commit_request().is_some());
+        a.set_deleting(true);
+        assert!(a.commit_request().is_none(), "one delete at a time");
+    }
+
+    #[test]
+    fn a_finished_delete_unmarks_what_went_and_keeps_what_failed() {
+        let mut a = scanned();
+        let (file, dir, _) = picks(&a);
+        a.toggle_mark(file);
+        a.toggle_mark(dir);
+        let t = a.tree.as_ref().unwrap();
+        let (gone, kept) = (t.path(file), t.path(dir));
+        a.set_deleting(true);
+        a.finish_delete(std::slice::from_ref(&gone), &[(kept.clone(), "access denied".into())]);
+        assert!(a.basket().contains(&kept) && !a.basket().contains(&gone));
+        assert!(a.status_line(true).starts_with("1 of 2 not deleted: access denied; still marked"), "{}", a.status_line(true));
+        assert!(a.commit_request().is_some(), "the delete is over, so a new commit may start");
+    }
+
+    #[test]
+    fn the_chip_is_clickable_only_while_something_is_marked() {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        let chip = a.layout.with_basket(true).basket_chip();
+        assert!(matches!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0)), Effect::None), "nothing marked: no chip, no effect");
+        a.toggle_mark(file);
+        a.update_map(1.0);
+        assert!(matches!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0)), Effect::Commit));
     }
 }

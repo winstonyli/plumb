@@ -31,6 +31,7 @@ pub const FILTER_REGEX_W: f32 = FILTER_BOX_H - 8.0;
 pub const FILTER_COUNT_W: f32 = 110.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 32.0;
+pub const BASKET_W: f32 = 190.0;
 pub const INDENT: f32 = 20.0;
 /// Starting widths of the Size, % of parent and Items columns; Name takes the rest.
 pub const COL_W: [f32; 3] = [100.0, 130.0, 90.0];
@@ -58,6 +59,8 @@ pub enum Hit {
     Rescan,
     /// The Cancel button in the status bar, shown while a scan runs.
     Cancel,
+    /// The marked-items chip in the status bar.
+    Basket,
     /// The filter text box (not its clear button).
     FilterBox,
     FilterRegex,
@@ -79,6 +82,8 @@ pub struct Layout {
     pub banner: bool,
     /// A Cancel button sits at the right end of the status bar.
     pub cancel: bool,
+    /// The marked-items chip sits in the status bar, left of Cancel and the map button.
+    pub basket: bool,
     /// Widths of the Size, % of parent and Items columns.
     pub col_w: [f32; 3],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
@@ -91,7 +96,7 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
+        Self { w, h, banner: false, cancel: false, basket: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
     /// Sets the width of column `c` (1..=3), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
@@ -145,6 +150,17 @@ impl Layout {
         Rect { x: (s.x + s.w - 8.0 - MAP_BTN_W).max(0.0), y: s.y + 2.0, w: MAP_BTN_W, h: s.h - 4.0 }
     }
 
+
+    pub fn with_basket(&self, basket: bool) -> Self {
+        Self { basket, ..self.clone() }
+    }
+
+    /// The marked-items chip in the status bar, left of the Cancel button (or of the map button when there is none).
+    pub fn basket_chip(&self) -> Rect {
+        let right = if self.cancel { self.cancel_button().x } else { self.map_button().x } - 4.0;
+        let s = self.status();
+        Rect { x: (right - BASKET_W).max(0.0), y: s.y + 2.0, w: BASKET_W, h: s.h - 4.0 }
+    }
 
     pub fn with_cancel(&self, cancel: bool) -> Self {
         Self { cancel, ..self.clone() }
@@ -286,6 +302,9 @@ impl Layout {
         }
         if self.cancel && self.cancel_button().contains(x, y) {
             return Hit::Cancel;
+        }
+        if self.basket && self.basket_chip().contains(x, y) {
+            return Hit::Basket;
         }
         if self.banner && self.rescan_button().contains(x, y) {
             return Hit::Rescan;
@@ -478,5 +497,16 @@ mod tests {
         l.set_map_w(5000.0);
         assert!(l.tree_w() >= l.tree_min(), "{} < {}", l.tree_w(), l.tree_min());
         assert!(l.map().unwrap().w >= MAP_MIN_W);
+    }
+
+    #[test]
+    fn the_basket_chip_sits_left_of_cancel_and_the_map_button_without_overlap() {
+        let l = Layout::new(900.0, 600.0).with_basket(true);
+        let chip = l.basket_chip();
+        assert!(chip.x + chip.w <= l.map_button().x, "left of the map button");
+        let with_cancel = l.with_cancel(true);
+        assert!(with_cancel.basket_chip().x + with_cancel.basket_chip().w <= with_cancel.cancel_button().x, "left of Cancel when it shows");
+        assert_eq!(l.hit(chip.x + 3.0, chip.y + 3.0, 0), Hit::Basket);
+        assert_ne!(Layout::new(900.0, 600.0).hit(chip.x + 3.0, chip.y + 3.0, 0), Hit::Basket, "hidden unless something is marked");
     }
 }

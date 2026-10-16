@@ -1191,6 +1191,7 @@ fn context_menu(hwnd: HWND, path: String, at: (i32, i32)) {
 fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
     match e {
         Effect::None => {}
+        Effect::Commit => {}
         Effect::Scan(i) => {
             with(|w| w.start_scan(i));
         }
