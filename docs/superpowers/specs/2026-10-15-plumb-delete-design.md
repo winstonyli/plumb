@@ -40,10 +40,12 @@ Free space from inside plumb: mark files and folders in the tree or on the map, 
 - `--selftest` gains a block: scan a temp directory, mark a file and a folder, commit *permanently* through `trash::delete` (the recycle path is not run in a selftest: it would leave items in the user's Recycle Bin), check the paths are gone, the outcomes are all `Ok`, and a second commit of the same paths reports them missing, not failed.
 - Manual: recycle then Explorer's Undo; a locked file stays marked with its reason; cancel in the shell's progress window; an unmarkable item's reason; 100% and 200% DPI for the chip.
 
-## Spikes before the plan
+## Spike results, 2026-10-15 (throwaway example, deleted; run non-interactively, no owner window, silent flags)
 
-1. `TaskDialogIndirect` with command links in this exe: does it get ComCtl32 v6 (an embedded manifest) and does an expanded list render? If not, the fallback is a plain message box listing the first few paths.
-2. `IFileOperation` on a worker STA with plumb's window as owner: progress window appears over plumb, a recycle shows in the Recycle Bin and undoes in Explorer, and a locked file yields a per-item error through the sink.
+1. **Dialog.** The exe has no manifest, so it runs comctl32 v5, which has no `TaskDialogIndirect`. Embedding the v6 dependency with linker args from a `build.rs` (`/MANIFEST:EMBED` and `/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'`, as `rustc-link-arg-bins`) made a command-link dialog with expanded text open and take a timer-driven click. The plan adds that `build.rs`. Consequence to check by eye: the whole app now runs comctl32 v6, which themes the tooltip control `window.rs` creates (`make_tooltip`; its `cbSize` comment is about v5).
+2. **Shell operation.** `IFileOperation` on a worker thread with `COINIT_APARTMENTTHREADED`, `CoCreateInstance(FileOperation)` and an `IFileOperationProgressSink` works: a recycled file and folder landed in the Recycle Bin (seen through `Shell.Application`), a file held open with no sharing gave a per-item failure (`0x80270027`) while the other items went through, and `PerformOperations` still returned `Ok` with `GetAnyOperationsAborted` true, so per-item results come from the sink, not from the return value. Success codes arrive as non-negative `HRESULT`s (`0x00270008`), so test `hr.is_ok()`, not `== S_OK`. Recycle items carry flag `0x282`, permanent `0x202`.
+3. **Missing path.** `SHCreateItemFromParsingName` fails for a path that no longer exists; a `?` there aborts the whole batch, so the commit builds each item separately and reports a missing path as "missing" without adding it, as designed.
+4. **Not exercised:** the owner window and the shell's own progress and "too large for the Recycle Bin" prompts (the spike ran silent), Explorer's Undo, and the `windows-core` crate must become a direct dependency for `#[implement]`. The first of these is a manual check after the build.
 
 ## Risks and open questions
 
