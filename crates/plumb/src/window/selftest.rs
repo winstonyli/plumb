@@ -347,6 +347,10 @@ fn answer_dialogs(ids: Vec<i32>) -> std::thread::JoinHandle<bool> {
             };
             let Some(h) = found else { return false };
             last = h;
+            // For a window capture from outside (`PLUMB_SELFTEST_PAUSE_MS`): the dialog stays up this long before it is answered.
+            if let Some(ms) = std::env::var("PLUMB_SELFTEST_PAUSE_MS").ok().and_then(|v| v.parse().ok()) {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
             unsafe { SendMessageW(HWND(h as *mut _), TDM_CLICK_BUTTON.0 as u32, Some(WPARAM(id as usize)), None) };
         }
         true

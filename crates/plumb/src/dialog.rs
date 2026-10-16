@@ -81,7 +81,7 @@ pub fn failed(owner: HWND, failed: &[(String, String)], total: usize) -> bool {
     let (head, list) = failure_text(failed, total);
     let title = wide("plumb");
     let head = wide(&head);
-    let body = wide(&format!("{} still marked. Retry tries them again.", if failed.len() == 1 { "It stays" } else { "They stay" }));
+    let body = wide(if failed.len() == 1 { "It stays marked. Retry tries it again." } else { "They stay marked. Retry tries them again." });
     let list = wide(&list);
     let toggle = wide("Show the reasons");
     let retry = wide("Retry");
