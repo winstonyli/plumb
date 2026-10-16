@@ -240,6 +240,8 @@ pub struct App {
     deleting: bool,
     /// A one-off message (a refused mark, a delete result) shown first on the status line until the next click or key.
     notice: String,
+    /// Every failure of the last delete, one a line: part of the full status line (the hover text).
+    notice_detail: Vec<String>,
     system_root: String,
 }
 
@@ -251,7 +253,7 @@ impl App {
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
-            basket: Basket::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(),
+            basket: Basket::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -323,7 +325,9 @@ impl App {
     pub fn begin_scan(&mut self, drive: usize) {
         self.filter_reset();
         self.map_reset();
-        self.clear_basket();
+        if self.active != Some(drive) {
+            self.clear_basket(); // a rescan of the drive on screen keeps its marks
+        }
         self.active = Some(drive);
         self.tree = None;
         self.model = None;
@@ -382,6 +386,7 @@ impl App {
     /// Replaces the tree with a rescanned one, keeping the sort, the expanded folders and the
     /// selection (by path) and where it sits on screen.
     pub fn swap_tree(&mut self, tree: Tree, summary: String) {
+        self.basket_rev += 1; // the marks are counted against the new tree
         if self.filter.installed.is_some() {
             self.unfilter_rows();
         }
@@ -528,6 +533,7 @@ impl App {
         self.layout.basket = self.basket_active();
         if matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
             self.notice.clear();
+            self.notice_detail.clear();
         }
         match input {
             Input::Resize(w, h) => {
@@ -702,7 +708,7 @@ impl App {
     }
 
     pub fn basket_active(&self) -> bool {
-        !self.basket.is_empty()
+        self.basket_view.items > 0
     }
 
     pub fn marked_tiles(&self) -> &[usize] {
@@ -767,7 +773,7 @@ impl App {
             }
             return;
         }
-        let fingerprint = (tree.len(), tree.dead(), tree.roots.first().map_or(0, |&r| tree.subtree_size[r]));
+        let fingerprint = (tree.len(), tree.dead(), tree.rev());
         let key = (self.basket_rev, fingerprint, self.map_gen);
         if self.basket_view.key == Some(key) {
             return;
@@ -783,8 +789,26 @@ impl App {
             }
             false
         };
-        let tiles = self.map_tiles.iter().enumerate().filter(|(_, t)| t.kind != Kind::Rest && under(t.node)).map(|(i, _)| i).collect();
+        let tiles = self.map_tiles.iter().enumerate().filter(|(_, t)| under(t.node)).map(|(i, _)| i).collect();
         self.basket_view = BasketView { key: Some(key), items: ids.len(), bytes: ids.iter().map(|&i| tree.subtree_size[i]).sum(), tiles };
+    }
+
+    pub fn deleting(&self) -> bool {
+        self.deleting
+    }
+
+    /// Starts a delete if none runs and no scan does; otherwise says why not on the status line.
+    pub fn begin_delete(&mut self) -> bool {
+        if self.deleting {
+            self.notice = "a delete is already running".into();
+            return false;
+        }
+        if self.cancelable() {
+            self.notice = "cannot delete while the drive is being scanned".into();
+            return false;
+        }
+        self.deleting = true;
+        true
     }
 
     pub fn set_deleting(&mut self, on: bool) {
@@ -815,15 +839,19 @@ impl App {
         Some(CommitRequest { drive, paths, bytes })
     }
 
-    /// A delete ended: `gone` (deleted or already missing) leave the basket, `failed` (path, reason) stay.
-    pub fn finish_delete(&mut self, gone: &[String], failed: &[(String, String)]) {
+    /// A delete ended: `gone` (deleted, `missing` of them already absent) leave the basket, `failed` (path, reason) stay.
+    pub fn finish_delete(&mut self, gone: &[String], missing: usize, failed: &[(String, String)]) {
         self.deleting = false;
         self.basket.remove_under(gone);
         self.basket_rev += 1;
+        let deleted = gone.len() - missing.min(gone.len());
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
         self.notice = match failed.first() {
-            None => format!("deleted {} item{}", gone.len(), if gone.len() == 1 { "" } else { "s" }),
+            None if missing == 0 => format!("deleted {deleted} item{}", plural(deleted)),
+            None => format!("deleted {deleted} item{}, {missing} already gone", plural(deleted)),
             Some((_, why)) => format!("{} of {} not deleted: {why}; still marked", failed.len(), gone.len() + failed.len()),
         };
+        self.notice_detail = failed.iter().map(|(p, why)| format!("{p}: {why}")).collect();
     }
 
     pub fn map_tiles(&self) -> &[Tile] {
@@ -960,6 +988,9 @@ impl App {
         let mut parts: Vec<String> = self.selection(full).into_iter().chain([head]).collect();
         if !self.notice.is_empty() {
             parts.insert(0, self.notice.clone());
+            if full && !self.notice_detail.is_empty() {
+                parts.insert(1, self.notice_detail.join("; "));
+            }
         }
         match &self.live {
             LiveStatus::Off => {}
@@ -1739,11 +1770,15 @@ Test GPU", a.status())));
         assert!(a.basket().is_empty(), "the other drive has no marks");
         a.swap_slot(&mut other);
         assert_eq!(a.basket().len(), 1, "coming back finds them");
-        a.refreshing = true;
-        a.refreshing = false;
+        let t = plumb_core::synth::kary_builder(300, 3).finish().unwrap();
+        a.swap_tree(t, "rescanned".into());
+        a.update_map(1.0);
         assert_eq!(a.basket().len(), 1, "a background rescan leaves them");
+        assert!(a.basket_label().is_some());
         a.begin_scan(0);
-        assert!(a.basket().is_empty(), "a fresh scan starts clean");
+        assert_eq!(a.basket().len(), 1, "rescanning the drive on screen keeps its marks");
+        a.begin_scan(1);
+        assert!(a.basket().is_empty(), "a first scan of another drive starts clean");
     }
 
     #[test]
@@ -1779,7 +1814,7 @@ Test GPU", a.status())));
         let t = a.tree.as_ref().unwrap();
         let (gone, kept) = (t.path(file), t.path(dir));
         a.set_deleting(true);
-        a.finish_delete(std::slice::from_ref(&gone), &[(kept.clone(), "access denied".into())]);
+        a.finish_delete(std::slice::from_ref(&gone), 0, &[(kept.clone(), "access denied".into())]);
         assert!(a.basket().contains(&kept) && !a.basket().contains(&gone));
         assert!(a.status_line(true).starts_with("1 of 2 not deleted: access denied; still marked"), "{}", a.status_line(true));
         assert!(a.commit_request().is_some(), "the delete is over, so a new commit may start");
@@ -1806,7 +1841,7 @@ Test GPU", a.status())));
         a.toggle_mark(dir);
         a.toggle_mark(file);
         a.set_deleting(true);
-        a.finish_delete(std::slice::from_ref(&dp), &[]);
+        a.finish_delete(std::slice::from_ref(&dp), 0, &[]);
         assert_eq!(a.basket().len(), 1, "the child's mark went with its folder");
         assert!(a.basket().contains(&fp));
         let mut b = scanned();
@@ -1830,5 +1865,54 @@ Test GPU", a.status())));
         a.toggle_mark_path("nowhere\\at all");
         assert_eq!(a.basket().len(), 1);
         assert!(a.status_line(true).starts_with("that item is gone"));
+    }
+
+    #[test]
+    fn del_with_a_tree_but_nothing_selected_marks_nothing() {
+        let mut a = scanned();
+        a.model = Some(RowModel::new(a.tree.as_ref().unwrap()));
+        assert!(a.model.as_ref().unwrap().selected().is_none());
+        a.handle(Input::Edit(Edit::Delete));
+        assert!(a.basket().is_empty());
+    }
+
+    #[test]
+    fn a_renamed_marked_item_drops_off_the_chip_and_the_tiles() {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        a.toggle_mark(file);
+        a.update_map(1.0);
+        assert!(a.basket_label().is_some());
+        let n: Vec<u16> = "renamed".encode_utf16().collect();
+        a.tree.as_mut().unwrap().rename(file, &n);
+        a.update_map(1.0);
+        assert!(a.basket_label().is_none(), "the mark no longer names anything, so no chip");
+        assert!(!a.basket_active());
+    }
+
+    #[test]
+    fn a_delete_report_counts_missing_apart_and_keeps_every_reason_for_the_hover() {
+        let mut a = scanned();
+        a.set_deleting(true);
+        let gone: Vec<String> = vec!["X-a".into(), "X-b".into()];
+        a.finish_delete(&gone, 1, &[("X-c".into(), "in use".into()), ("X-d".into(), "denied".into())]);
+        let short = a.status_line(false);
+        assert!(short.starts_with("2 of 4 not deleted: in use; still marked"), "{short}");
+        assert!(a.status_line(true).contains("X-d: denied"), "{}", a.status_line(true));
+        let mut b = scanned();
+        b.finish_delete(&gone, 1, &[]);
+        assert!(b.status_line(false).starts_with("deleted 1 item, 1 already gone"), "{}", b.status_line(false));
+    }
+
+    #[test]
+    fn begin_delete_refuses_a_scanning_drive_and_a_second_delete() {
+        let mut a = scanned();
+        assert!(a.begin_delete());
+        assert!(a.deleting());
+        assert!(!a.begin_delete(), "one at a time");
+        a.set_deleting(false);
+        a.refreshing = true;
+        assert!(!a.begin_delete());
+        assert!(a.status_line(true).starts_with("cannot delete while the drive is being scanned"));
     }
 }

@@ -21,8 +21,8 @@ pub struct Outcome {
     pub verdict: Verdict,
 }
 
-/// `HRESULT_FROM_WIN32(ERROR_CANCELLED)`: what an item the shell never reached is reported as.
-const CANCELLED: i32 = 0x800704C7u32 as i32;
+/// `E_ABORT`: what an item the shell skipped or never reached is reported as.
+const CANCELLED: i32 = 0x80004004u32 as i32;
 
 type Results = Arc<Mutex<HashMap<String, i32>>>;
 
@@ -80,7 +80,8 @@ fn perform(paths: &[&str], permanent: bool, owner: isize, results: &Results) -> 
         let op: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
         let silent = owner == 0; // tests: no owner window to show the shell's progress or prompts over
         // Silent only for tests; otherwise the shell's own progress and prompts stay on.
-        let mut flags = if silent { (FOF_SILENT | FOF_NOERRORUI | FOF_NOCONFIRMATION).0 } else { 0 };
+        // Our dialogs already asked; the shell would ask a third time before a permanent delete.
+        let mut flags = if silent { (FOF_SILENT | FOF_NOERRORUI | FOF_NOCONFIRMATION).0 } else if permanent { FOF_NOCONFIRMATION.0 } else { 0 };
         if !permanent {
             flags |= FOF_ALLOWUNDO.0 | FOFX_RECYCLEONDELETE.0;
         }

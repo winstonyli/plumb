@@ -33,6 +33,7 @@ pub struct Tree {
     /// Nodes whose size, name, parent or existence changed (and old parents) since the last
     /// [`Tree::take_touched`].
     touched: Vec<NodeId>,
+    rev: u64,
 }
 
 impl Tree {
@@ -89,6 +90,11 @@ impl Tree {
         Some(cur)
     }
 
+    /// Bumped by every change to a node: a cheap "has the tree changed" check.
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+
     /// Nodes marked dead so far (slots not yet reclaimed).
     pub fn dead(&self) -> usize {
         self.dead
@@ -141,6 +147,7 @@ impl Tree {
         self.pool.extend_from_slice(name);
         self.bump(parent, size, files, true);
         self.touched.push(id);
+        self.rev += 1;
         id
     }
 
@@ -176,6 +183,7 @@ impl Tree {
             self.bump(id, old - new, 0, false);
         }
         self.touched.push(id);
+        self.rev += 1;
     }
 
     /// Gives a node a new name (the old bytes stay in the pool as waste).
@@ -184,6 +192,7 @@ impl Tree {
         self.name_len[id] = name.len() as u16;
         self.pool.extend_from_slice(name);
         self.touched.push(id);
+        self.rev += 1;
     }
 
     /// Marks `id` and everything under it dead and takes its sizes out of its ancestors.
@@ -202,6 +211,7 @@ impl Tree {
             self.dead += 1;
         }
         self.touched.push(id);
+        self.rev += 1;
         true
     }
 
@@ -239,7 +249,9 @@ impl Tree {
         self.first_child[new_parent] = id;
         self.bump(new_parent, size, files, true);
         self.touched.push(old);
+        self.rev += 1;
         self.touched.push(id);
+        self.rev += 1;
         true
     }
 }
@@ -370,6 +382,7 @@ impl TreeBuilder {
             pool: self.pool,
             dead: 0,
             touched: Vec::new(),
+            rev: 0,
         })
     }
 }

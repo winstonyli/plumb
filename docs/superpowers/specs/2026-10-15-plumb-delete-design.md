@@ -37,7 +37,7 @@ Free space from inside plumb: mark files and folders in the tree or on the map, 
 - `basket` unit tests: toggle and exact match, dedupe of nested marks, a path that no longer resolves is dropped, `total_bytes` counts a marked folder once, `refusal` for a root, the system root, a child of it, and a scanning drive.
 - `layout` test: the chip sits between the cancel and map buttons and never overlaps them.
 - `render` test: a marked tile differs from the unmarked frame and the cached tiles are not rebuilt by a mark (`map_builds` unchanged).
-- `--selftest` gains a block: scan a temp directory, mark a file and a folder, commit *permanently* through `trash::delete` (the recycle path is not run in a selftest: it would leave items in the user's Recycle Bin), check the paths are gone, the outcomes are all `Ok`, and a second commit of the same paths reports them missing, not failed.
+- No separate `--selftest` block: `trash`'s unit tests already do that exact sequence (scratch directory, permanent delete of a file and a folder, a missing path reported as missing, a locked file failing alone) and the recycle path is not run automatically because it would fill the user's Recycle Bin.
 - Manual: recycle then Explorer's Undo; a locked file stays marked with its reason; cancel in the shell's progress window; an unmarkable item's reason; 100% and 200% DPI for the chip.
 
 ## Spike results, 2026-10-15 (throwaway example, deleted; run non-interactively, no owner window, silent flags)

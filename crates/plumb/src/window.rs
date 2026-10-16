@@ -699,6 +699,7 @@ impl Win {
     fn finish_delete(&mut self, drive: usize, out: Vec<trash::Outcome>) {
         let reason = |hr: i32| windows::core::Error::from(windows::core::HRESULT(hr)).message();
         let gone: Vec<String> = out.iter().filter(|o| !matches!(o.verdict, trash::Verdict::Failed(_))).map(|o| o.path.clone()).collect();
+        let missing = out.iter().filter(|o| o.verdict == trash::Verdict::Missing).count();
         let failed: Vec<(String, String)> = out
             .iter()
             .filter_map(|o| match o.verdict {
@@ -706,7 +707,7 @@ impl Win {
                 _ => None,
             })
             .collect();
-        if self.in_slot(drive, |w| w.app.finish_delete(&gone, &failed)).is_none() {
+        if self.in_slot(drive, |w| w.app.finish_delete(&gone, missing, &failed)).is_none() {
             self.app.set_deleting(false); // the drive's slot was evicted meanwhile
         }
         self.invalidate();
@@ -1274,7 +1275,10 @@ fn commit(hwnd: HWND) {
         }
         _ if permanent && !dialog::confirm_permanent(hwnd, req.paths.len(), req.bytes) => {}
         _ => {
-            with(|w| w.app.set_deleting(true));
+            if with(|w| w.app.begin_delete()) != Some(true) {
+                with(|w| w.invalidate());
+                return;
+            }
             let (owner, drive, paths) = (hwnd.0 as isize, req.drive, req.paths);
             std::thread::spawn(move || {
                 let out = trash::delete(paths, permanent, owner);
@@ -1640,6 +1644,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
             } else if let (true, true, Some(to)) = (shift, in_box, motion) {
                 send(hwnd, Input::Edit(Edit::Move { to, extend: true }));
+            } else if wp.0 == VK_DELETE.0 as usize && lp.0 & (1 << 30) != 0 && !in_box {
+                // Holding Del must not flip the mark on every repeat.
             } else if let Some(input) = key_input(wp.0 as u16, ctrl, hwnd) {
                 send(hwnd, input);
             }
@@ -1670,8 +1676,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(0)
         }
         WM_DELETED => {
-            let (drive, out) = *unsafe { Box::from_raw(lp.0 as *mut (usize, Vec<trash::Outcome>)) };
-            with(|w| w.finish_delete(drive, out));
+            let raw = lp.0 as *mut (usize, Vec<trash::Outcome>);
+            let done = with(|w| {
+                let (drive, out) = *unsafe { Box::from_raw(raw) };
+                w.finish_delete(drive, out);
+            });
+            if done.is_none() {
+                // The state was borrowed (a nested message loop): try again rather than lose the result.
+                let _ = unsafe { PostMessageW(Some(hwnd), WM_DELETED, WPARAM(0), lp) };
+            }
             LRESULT(0)
         }
         WM_SCAN_DONE => {
@@ -1691,6 +1704,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
             });
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+        }
+        WM_CLOSE if with(|w| w.app.deleting()) == Some(true) => {
+            let text = w!("A delete is still running. Closing now stops it partway.\n\nClose anyway?");
+            let ask = unsafe { MessageBoxW(Some(hwnd), text, w!("plumb"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) };
+            if ask == IDYES {
+                unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+            } else {
+                LRESULT(0)
+            }
         }
         WM_DESTROY => {
             with(|w| {
