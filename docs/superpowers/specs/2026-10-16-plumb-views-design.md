@@ -21,21 +21,12 @@ Goal: plumb as a one-stop place to browse and diagnose the machine. The first ne
 
 `Drive` becomes `View`; `KEPT_DRIVES` becomes `KEPT_VIEWS`. A view is `{ kind: Drive(root) | Processes, state: Parked, source runtime }`. The chip row lists the drives, then a "Processes" chip. The slot mechanics (swap, in_slot, LRU eviction, marks on chips) stay as they are; only what a view *runs* varies, behind:
 
-```rust
-trait Source {
-    fn columns(&self) -> &[Column];             // id, title, width, right-aligned, SortKey, default sort
-    fn cell(&self, tree: &Tree, n: NodeId, col: ColId) -> String;
-    fn metrics(&self) -> &[Metric];             // what the map (and the Size column) can be sized by
-    fn set_metric(&mut self, tree: &mut Tree, m: Metric);   // rewrites Tree::size, see below
-    fn markable(&self) -> bool;                 // basket / delete offered?
-    fn hover(&self, tree: &Tree, n: NodeId) -> String;
-}
-```
+The row table is Name plus four columns (`layout.col_w: [f32; 4]`): Size, % of parent, Items, Modified. A view kind keeps that geometry (same widths, resize and state file) and supplies only data: `ViewKind::{Disk, Processes}` gives the column titles, the `SortKey` of each column, and the text of columns 3 and 4 (Disk: Items, Modified; Processes: CPU, I/O). No trait: there is one implementor per kind and no state to hold.
 
-Two small changes in `plumb-core` keep `RowModel` and `treemap` unchanged in shape and make the trait this small:
+Two small changes in `plumb-core` keep `RowModel` and `treemap` unchanged in shape:
 
-- **The map's weight is `Tree::size`.** `treemap::layout` and the Size sort read `size` / `subtree_size` today. For Processes, `size` holds the selected metric (memory, CPU or I/O), and switching metric rewrites it with `set_size` (the existing roll-up recomputes `subtree_size`; a few hundred nodes, so it is cheap). No weight function, no allocation in `layout`.
-- **`Tree::aux: Vec<[u64; 3]>`** (empty for a disk tree, so it costs nothing there) holds the other per-node numbers a source wants to sort by (PID, CPU, I/O). `SortKey::Aux(i)` sorts by `aux[n][i]`; the closed `match` in `RowModel::sorted_children` gains one arm. Cells are rendered by `Source::cell`, so `draw` no longer formats Size / Items / Modified itself.
+- **The map's weight is `Tree::size`.** For Processes, `size` holds the selected metric (memory, CPU or I/O), and switching metric rewrites it with `set_size` (the roll-up recomputes `subtree_size`; a few hundred nodes, so it is cheap). No weight function, no allocation in `layout`.
+- **`Tree::aux: Vec<[u64; 3]>`** (empty for a disk tree, so it costs nothing there) holds CPU (tenths of a percent), I/O (bytes per second) and PID. `SortKey::Aux(i)` sorts by `aux[n][i]`; the closed `match` in `RowModel::sorted_children` gains one arm.
 
 Disk-only machinery (scan, preview, journal, directory watch, basket, delete, age shading, shell icons by extension) is not part of the trait: it is the `DiskSource` runtime, and `Win` runs it only for a `Drive` view. A view's lifecycle is `Idle -> Loading -> Ready` for both kinds; Processes is `Ready` after its first snapshot (tens of ms) and then updates in place.
 
@@ -44,10 +35,10 @@ Refactor scope is real: `App` and `Win` carry about 4,000 lines of slot / scan l
 ## 2. Process view
 
 - **Source of truth:** a snapshot every 1 s on a worker thread: `NtQuerySystemInformation(SystemProcessInformation)` for PID, parent PID, name, working set, private bytes, I/O counters and kernel + user times; image path via `QueryFullProcessImageNameW` where permitted.
-- **Identity:** a node is keyed by `(PID, creation time)`, so a reused PID is a new node. A process whose parent is gone (or whose parent PID is itself or a descendant) becomes a root.
-- **Tree:** parent / child, `size` = working set, so `subtree_size` is a family's memory. System Idle (PID 0) and System (4) are listed, but PID 0 is excluded from totals.
+- **Identity:** a node is keyed by `(PID, creation time)`, so a reused PID is a new node. A process whose parent is gone, was created after it (a reused PID), or would make a cycle hangs directly under one synthetic root node `Processes` (a forest is impossible: `Tree::add_child` takes no `NONE` parent and `Tree::remove` refuses roots).
+- **Tree:** parent / child, `size` = working set, so `subtree_size` is a family's memory. System Idle (PID 0) and System (4) are listed, but PID 0's memory is forced to 0 so totals are real. Removed nodes stay `DEAD` in the vectors, so the tree grows with churn (about 100 bytes per exited process); past 20,000 dead nodes the window rebuilds it from the next snapshot (selection and expansion reset once).
 - **Update:** each snapshot is reconciled with the tree using the same edit calls `live.rs` uses for the file system (add node, mark dead, change size), so `touched` drives the row refresh and the user's selection, scroll and expansion survive. CPU % and I/O rate are deltas between two snapshots, kept in the source (not in `Tree`), so the first snapshot shows 0 %.
-- **Columns:** Name, PID, Memory (default sort, descending), CPU %, I/O (bytes/s), Path.
+- **Columns:** Name | Memory (default sort, descending) | % of parent | CPU % | I/O (bytes/s). The PID is appended to the name, dimmed (`chrome.exe  (1234)`); the path and start time are in the tooltip.
 - **Map:** the same squarified map over the process tree. Metric choices: Memory (default), CPU, I/O; a small selector beside the map button. Tile colour is the process's class by image location (Windows, Program Files, user profile, other); no age shading.
 - **Hover:** command line is not read in v1 (needs `PEB` reads); the tooltip is the name, PID, path, memory, CPU, I/O, start time.
 - **Not elevated:** every process is listed; path, and later handles, of other users' and protected processes are blank with a "run as administrator for more" note (the existing elevate button).
@@ -55,7 +46,7 @@ Refactor scope is real: `App` and `Win` carry about 4,000 lines of slot / scan l
 
 ## 3. Actions
 
-None in v1 for processes (`markable() == false`, so `Del` and the basket chip do nothing there). The context menu offers Copy path, Open file location, and "Files held" (section 4).
+None in v1 for processes (`Del` and the basket do nothing there: `can_mark` refuses). The context menu offers Copy path, Open file location, and "Files held" (section 4).
 
 ## 4. What holds it
 
