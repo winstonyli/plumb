@@ -81,10 +81,13 @@ impl Tree {
 
     /// The node at `path` ("C:\dir\file", as [`Tree::path`] gives it), matching names exactly.
     pub fn find(&self, path: &str) -> Option<NodeId> {
-        let mut parts = path.split('\\');
-        let first = parts.next()?;
-        let mut cur = *self.roots.iter().find(|&&r| self.name_string(r) == first)?;
-        for part in parts {
+        // A root is named by the whole scanned path ("C:" or "D:\Mounts\Data"), so match it as a prefix.
+        let (mut cur, rest) = self.roots.iter().find_map(|&r| {
+            let name = self.name_string(r);
+            let rest = path.strip_prefix(name.as_str())?;
+            (rest.is_empty() || rest.starts_with('\\')).then_some((r, rest))
+        })?;
+        for part in rest.split('\\').skip(1) {
             cur = self.children(cur).find(|&c| self.name_string(c) == part)?;
         }
         Some(cur)
@@ -390,6 +393,19 @@ impl TreeBuilder {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn find_resolves_below_a_root_named_by_a_whole_folder_path() {
+        let mut b = TreeBuilder::new();
+        let root = b.push_str(NodeId::NONE, r"D:\Mounts\Data", 0, NodeFlags::DIR);
+        let sub = b.push_str(root, "sub", 0, NodeFlags::DIR);
+        b.push_str(sub, "f", 1, NodeFlags::empty());
+        let t = b.finish().unwrap();
+        let f = t.find(r"D:\Mounts\Data\sub\f").unwrap();
+        assert_eq!(t.path(f), r"D:\Mounts\Data\sub\f");
+        assert_eq!(t.find(r"D:\Mounts\Data"), Some(root));
+        assert!(t.find(r"D:\Mounts\DataX").is_none() && t.find(r"D:\Mounts").is_none(), "only at a path boundary");
+    }
 
     /// C: -> big/{f1=100, f2=300}, mid/{g=150}, small=50
     pub(crate) fn sample() -> Tree {

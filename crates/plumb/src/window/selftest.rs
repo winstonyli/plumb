@@ -314,3 +314,144 @@ pub fn selftest_watch() -> Result<String> {
     STATE.with(|s| *s.borrow_mut() = None);
     out
 }
+
+/// Answers the next dialogs this process shows, one button id each, from a helper thread; true if all were answered.
+fn answer_dialogs(ids: Vec<i32>) -> std::thread::JoinHandle<bool> {
+    use windows::Win32::UI::Controls::TDM_CLICK_BUTTON;
+    let pid = std::process::id();
+    std::thread::spawn(move || {
+        let mut last = 0isize;
+        for id in ids {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let found = loop {
+                let mut seen = (0isize, pid, last);
+                unsafe extern "system" fn each(h: HWND, p: LPARAM) -> BOOL {
+                    let seen = unsafe { &mut *(p.0 as *mut (isize, u32, isize)) };
+                    let (mut pid, mut class) = (0u32, [0u16; 16]);
+                    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+                    let n = unsafe { GetClassNameW(h, &mut class) } as usize;
+                    if pid == seen.1 && h.0 as isize != seen.2 && unsafe { IsWindowVisible(h) }.as_bool() && String::from_utf16_lossy(&class[..n]) == "#32770" {
+                        seen.0 = h.0 as isize;
+                        return false.into();
+                    }
+                    true.into()
+                }
+                let _ = unsafe { EnumWindows(Some(each), LPARAM(&mut seen as *mut _ as isize)) };
+                if seen.0 != 0 {
+                    break Some(seen.0);
+                }
+                if Instant::now() > deadline {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            let Some(h) = found else { return false };
+            last = h;
+            unsafe { SendMessageW(HWND(h as *mut _), TDM_CLICK_BUTTON.0 as u32, Some(WPARAM(id as usize)), None) };
+        }
+        true
+    })
+}
+
+/// Not elevated. Marks files in a scratch directory, answers the real commit dialogs, and checks the disk, the
+/// basket and the tree: Cancel keeps everything, a permanent delete (two dialogs) and a recycle each remove only
+/// the marked items and the tree follows. Run it from a normal prompt: `plumb --selftest-delete`.
+/// The file the recycle step sends to the Recycle Bin; named so it is recognisable there.
+const REC: &str = "plumb-selftest-delete.tmp";
+
+pub fn selftest_delete() -> Result<String> {
+    use windows::Win32::Foundation::E_FAIL;
+    use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDYES};
+    let fail = |m: String| windows::core::Error::new(E_FAIL, m);
+    if is_elevated() {
+        return Err(fail("run this from a normal prompt: an elevated delete is not what users see".into()));
+    }
+    let io = |e: std::io::Error| fail(e.to_string());
+    let base = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or_else(|| fail("no LOCALAPPDATA".into()))?);
+    let dir = base.join(format!("plumb-delete-{}", std::process::id()));
+    let shown = dir.to_string_lossy().into_owned();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("folder")).map_err(io)?;
+    for f in ["keep.txt", "a.bin", "b.bin", r"folder\inner.bin", REC] {
+        std::fs::write(dir.join(f), vec![1u8; 4096]).map_err(io)?;
+    }
+    let hwnd = create_window()?;
+    let win = Win::new(hwnd, crate::drives::list())?;
+    STATE.with(|s| *s.borrow_mut() = Some(win));
+    unsafe { SetTimer(Some(hwnd), 99, 50, None) }; // keeps the watch's wake-ups flowing
+    let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
+    let at = |rel: &str| format!(r"{shown}\{rel}");
+    let in_tree = |w: &mut Win, rel: &str| w.app.tree.as_ref().is_some_and(|t| t.find(&at(rel)).is_some());
+    let exists = |rel: &str| dir.join(rel).exists();
+    let mark = |rels: &[&str]| {
+        with(|w| {
+            for r in rels {
+                w.app.toggle_mark_path(&at(r));
+            }
+        });
+    };
+    let run = || -> Result<String> {
+        let i = with(|w| w.app.drives.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
+        let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;
+        with(|w| w.spawn_scan(i, shown.clone(), false));
+        pump_until("the scan and the directory watch", 60, &|w| w.watch.is_some())?;
+        pump_until("the scanned tree to hold the files", 5, &|w| in_tree(w, REC))?;
+
+        // Cancel: nothing is touched, the marks stay.
+        mark(&["a.bin", "folder"]);
+        if with(|w| w.app.basket().len()) != Some(2) {
+            return Err(fail("marking two items did not fill the basket".into()));
+        }
+        let h = answer_dialogs(vec![IDCANCEL.0]);
+        commit(hwnd);
+        if !h.join().unwrap_or(false) || !exists("a.bin") || !exists(r"folder\inner.bin") || with(|w| w.app.basket().len()) != Some(2) {
+            return Err(fail("Cancel on the commit dialog changed something".into()));
+        }
+
+        // Delete permanently: a file and a folder go, the rest stays; the tree and the basket follow.
+        let h = answer_dialogs(vec![crate::dialog::PERMANENT, IDYES.0]);
+        commit(hwnd);
+        if !h.join().unwrap_or(false) {
+            return Err(fail("the permanent delete did not show its two dialogs".into()));
+        }
+        pump_until("the delete result", 30, &|w| !w.app.deleting())?;
+        if exists("a.bin") || exists("folder") || !exists("b.bin") || !exists("keep.txt") {
+            return Err(fail("the permanent delete removed the wrong things".into()));
+        }
+        let t0 = Instant::now();
+        pump_until("the tree to drop the deleted items", 15, &|w| !in_tree(w, "a.bin") && !in_tree(w, "folder") && in_tree(w, "b.bin"))?;
+        let lag = t0.elapsed();
+        if with(|w| w.app.basket().len()) != Some(0) {
+            return Err(fail("deleted items stayed marked".into()));
+        }
+
+        // Recycle: goes to the bin without further questions.
+        mark(&[REC]);
+        let h = answer_dialogs(vec![crate::dialog::RECYCLE]);
+        commit(hwnd);
+        if !h.join().unwrap_or(false) {
+            return Err(fail("the recycle dialog never appeared".into()));
+        }
+        pump_until("the recycle result", 30, &|w| !w.app.deleting())?;
+        if exists(REC) || !exists("keep.txt") {
+            return Err(fail("the recycle removed the wrong things".into()));
+        }
+        pump_until("the tree to drop the recycled file", 15, &|w| !in_tree(w, REC) && in_tree(w, "keep.txt"))?;
+        // It must be in the Recycle Bin (not deleted for good); take it out again so the test leaves nothing behind.
+        let script = format!(
+            "$s = New-Object -ComObject Shell.Application; $n = 0; foreach ($i in $s.Namespace(10).Items()) {{ if ($i.Name -like '{REC}') {{ \
+             $n++; $r = $i.Path; Remove-Item -LiteralPath $r -Force; \
+             $m = Join-Path (Split-Path $r) ((Split-Path $r -Leaf).Replace('$R', '$I')); Remove-Item -LiteralPath $m -Force -ErrorAction SilentlyContinue }} }}; $n"
+        );
+        let bin = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]).stdin(std::process::Stdio::null()).output().map_err(io)?;
+        if String::from_utf8_lossy(&bin.stdout).trim() != "1" {
+            return Err(fail(format!("the recycled file is not in the Recycle Bin exactly once: {:?} {}", String::from_utf8_lossy(&bin.stdout), String::from_utf8_lossy(&bin.stderr))));
+        }
+        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items; tree followed in {lag:.1?}"))
+    };
+    let out = run();
+    let _ = std::fs::remove_dir_all(&dir);
+    unsafe { DestroyWindow(hwnd)? };
+    STATE.with(|s| *s.borrow_mut() = None);
+    out
+}

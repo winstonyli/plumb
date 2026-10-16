@@ -1809,7 +1809,7 @@ pub fn run() -> Result<()> {
 }
 
 mod selftest;
-pub use selftest::{selftest, selftest_live, selftest_watch};
+pub use selftest::{selftest, selftest_delete, selftest_live, selftest_watch};
 
 #[cfg(test)]
 mod tests {

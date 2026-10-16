@@ -37,7 +37,7 @@ Free space from inside plumb: mark files and folders in the tree or on the map, 
 - `basket` unit tests: toggle and exact match, dedupe of nested marks, a path that no longer resolves is dropped, `total_bytes` counts a marked folder once, `refusal` for a root, the system root, a child of it, and a scanning drive.
 - `layout` test: the chip sits between the cancel and map buttons and never overlaps them.
 - `render` test: a marked tile differs from the unmarked frame and the cached tiles are not rebuilt by a mark (`map_builds` unchanged).
-- No separate `--selftest` block: `trash`'s unit tests already do that exact sequence (scratch directory, permanent delete of a file and a folder, a missing path reported as missing, a locked file failing alone) and the recycle path is not run automatically because it would fill the user's Recycle Bin.
+- `plumb --selftest-delete` (opt-in: `cargo test -p plumb -- --ignored`) drives the real commit dialogs on a scratch directory: Cancel changes nothing, a permanent delete (two dialogs) and a recycle remove only the marked items, the recycled file is in the Recycle Bin (the test takes it out again), and the tree drops the items (130 ms on the first run). `trash`'s unit tests cover the silent paths, including a locked file failing alone; the failure path under the shell's own "file in use" prompt is not automated.
 - Manual: recycle then Explorer's Undo; a locked file stays marked with its reason; cancel in the shell's progress window; an unmarkable item's reason; 100% and 200% DPI for the chip.
 
 ## Spike results, 2026-10-15 (throwaway example, deleted; run non-interactively, no owner window, silent flags)
@@ -50,6 +50,6 @@ Free space from inside plumb: mark files and folders in the tree or on the map, 
 ## Risks and open questions
 
 - A destructive tool in what was a read-only one: the disk design's non-goals row is amended (the project has no README).
-- Directory sync lag: a delete on a folder the watcher does not cover would leave rows until the next sync; the selftest and the manual check decide whether an explicit sync of each deleted item's parent is needed (it would be one call per parent, not a second removal path).
+- Directory sync lag: a delete on a folder the watcher does not cover would leave rows until the next sync; the selftest showed the tree follows within ~130 ms for a watched folder; the manual check decides, for folders the watcher does not cover, whether an explicit sync of each deleted item's parent is needed (it would be one call per parent, not a second removal path).
 - Folder sizes after a partial failure are corrected by the same sync.
 - Not in scope, parked: multi-select, drag to the basket, a dockable basket list (the dialog's list is read-only), cleanup suggestions from age and size, undo inside plumb (Explorer's undo covers a recycle).

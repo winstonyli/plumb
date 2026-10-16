@@ -14,8 +14,8 @@ pub enum Choice {
     Cancel,
 }
 
-const RECYCLE: i32 = 1001;
-const PERMANENT: i32 = 1002;
+pub(crate) const RECYCLE: i32 = 1001;
+pub(crate) const PERMANENT: i32 = 1002;
 const CLEAR: i32 = 1003;
 /// The paths shown before "and N more".
 const SHOWN: usize = 20;
