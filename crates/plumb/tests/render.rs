@@ -66,8 +66,13 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
 
 /// Paints `scene` into an offscreen bitmap and returns its BGRA pixels; `PLUMB_SHOT_DIR=<dir>` keeps them as `<stem>.png`.
 fn render_scene(gfx: &Gfx, scene: &Scene, stem: &str) -> Vec<u8> {
+    render_on(&Painter::new(gfx).unwrap(), gfx, scene, stem)
+}
+
+/// Like `render_scene` but on a given painter, so two shots share its shell-icon cache (a fresh one can fetch a different icon).
+fn render_on(painter: &Painter, gfx: &Gfx, scene: &Scene, stem: &str) -> Vec<u8> {
     let target = bitmap(gfx, D2D1_BITMAP_OPTIONS_TARGET);
-    Painter::new(gfx).unwrap().paint(gfx, &target, 96.0, 0.0, scene).expect("EndDraw");
+    painter.paint(gfx, &target, 96.0, 0.0, scene).expect("EndDraw");
     let out = read_back(gfx, &target);
     // PLUMB_SHOT_DIR=<dir> keeps the frames as PNGs.
     if let Some(dir) = std::env::var_os("PLUMB_SHOT_DIR") {
@@ -489,6 +494,7 @@ fn a_marked_row_is_tinted() {
 fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_leaves_it_empty() {
     let gfx = Gfx::warp().expect("WARP device");
     let layout = Layout::new(W as f32, H as f32);
+    let painter = Painter::new(&gfx).unwrap();
     let shot = |mtime: Option<u32>| {
         let mut b = plumb_core::TreeBuilder::new();
         let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
@@ -502,7 +508,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
             message: "", loading: false, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
         };
-        render_scene(&gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
+        render_on(&painter, &gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
     };
     let (known, unknown) = (shot(Some(154_000)), shot(None));
     let (mx, mw) = layout.column(4);
