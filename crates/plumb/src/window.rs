@@ -1,6 +1,7 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
-use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, Parked};
+use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, MarkState, Parked};
+use crate::{dialog, trash};
 use crate::draw::{Mark, Painter};
 use crate::filter_ui::{byte_at, push_utf16, Edit, Motion};
 use crate::fmt;
@@ -75,6 +76,7 @@ use windows::core::{w, Interface, Result, BOOL, PCWSTR, PWSTR};
 const WM_SCAN_DONE: u32 = WM_APP + 1;
 const WM_JOURNAL: u32 = WM_APP + 2;
 const WM_FILTER: u32 = WM_APP + 3;
+const WM_DELETED: u32 = WM_APP + 4;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_PROGRESS: usize = 1;
 const TIMER_LIVE: usize = 2;
@@ -89,6 +91,7 @@ const APPLY_BUDGET: Duration = Duration::from_millis(5);
 const CMD_REVEAL: usize = 1;
 const CMD_COPY: usize = 2;
 const CMD_PROPS: usize = 3;
+const CMD_MARK: usize = 4;
 
 struct Scanned {
     tree: Tree,
@@ -692,6 +695,23 @@ impl Win {
         Some(r)
     }
 
+    /// A delete batch ended: unmark what went, keep what failed, say so on the status line.
+    fn finish_delete(&mut self, drive: usize, out: Vec<trash::Outcome>) {
+        let reason = |hr: i32| windows::core::Error::from(windows::core::HRESULT(hr)).message();
+        let gone: Vec<String> = out.iter().filter(|o| !matches!(o.verdict, trash::Verdict::Failed(_))).map(|o| o.path.clone()).collect();
+        let failed: Vec<(String, String)> = out
+            .iter()
+            .filter_map(|o| match o.verdict {
+                trash::Verdict::Failed(hr) => Some((o.path.clone(), reason(hr))),
+                _ => None,
+            })
+            .collect();
+        if self.in_slot(drive, |w| w.app.finish_delete(&gone, &failed)).is_none() {
+            self.app.set_deleting(false); // the drive's slot was evicted meanwhile
+        }
+        self.invalidate();
+    }
+
     /// Updates the chip marks from what the other drives hold.
     fn sync_marks(&mut self) {
         let marks = (0..self.app.drives.len())
@@ -1169,12 +1189,25 @@ fn relaunch_elevated(drive: Option<&str>) -> bool {
 
 /// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
 /// because `TrackPopupMenu` runs its own message loop.
-fn context_menu(hwnd: HWND, path: String, at: (i32, i32)) {
+fn context_menu(hwnd: HWND, id: NodeId, path: String, mark: MarkState, at: (i32, i32)) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let _ = AppendMenuW(menu, MF_STRING, CMD_REVEAL, w!("Reveal in Explorer"));
         let _ = AppendMenuW(menu, MF_STRING, CMD_COPY, w!("Copy path"));
         let _ = AppendMenuW(menu, MF_STRING, CMD_PROPS, w!("Properties"));
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        match &mark {
+            MarkState::Mark => {
+                let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Mark for deletion\tDel"));
+            }
+            MarkState::Unmark => {
+                let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Unmark\tDel"));
+            }
+            MarkState::Refused(why) => {
+                let text: Vec<u16> = format!("Cannot mark: {why}").encode_utf16().chain([0]).collect();
+                let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_MARK, PCWSTR(text.as_ptr()));
+            }
+        }
         let mut pt = POINT { x: at.0, y: at.1 };
         let _ = ClientToScreen(hwnd, &mut pt);
         let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, Some(0), hwnd, None);
@@ -1183,6 +1216,12 @@ fn context_menu(hwnd: HWND, path: String, at: (i32, i32)) {
             CMD_REVEAL => reveal(&path),
             CMD_COPY => copy_to_clipboard(hwnd, &path),
             CMD_PROPS => properties(&path),
+            CMD_MARK => {
+                with(|w| {
+                    w.app.toggle_mark(id);
+                    w.invalidate();
+                });
+            }
             _ => {}
         }
     }
@@ -1191,7 +1230,7 @@ fn context_menu(hwnd: HWND, path: String, at: (i32, i32)) {
 fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
     match e {
         Effect::None => {}
-        Effect::Commit => {}
+        Effect::Commit => commit(hwnd),
         Effect::Scan(i) => {
             with(|w| w.start_scan(i));
         }
@@ -1211,12 +1250,41 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             }
         }
         Effect::Menu(id) => {
-            let path = with(|w| w.app.tree.as_ref().map(|t| fmt::display_path(&t.path(id)))).flatten();
-            if let Some(p) = path {
-                context_menu(hwnd, p, at);
+            let info = with(|w| w.app.tree.as_ref().map(|t| (fmt::display_path(&t.path(id)), w.app.mark_state(id)))).flatten();
+            if let Some((p, mark)) = info {
+                context_menu(hwnd, id, p, mark, at);
             }
         }
     }
+}
+
+/// Asks what to delete and runs it on a worker thread; the result comes back as `WM_DELETED`.
+/// Runs with no borrow held: the dialogs run their own message loops.
+fn commit(hwnd: HWND) {
+    let Some(req) = with(|w| w.app.commit_request()).flatten() else {
+        with(|w| w.invalidate());
+        return;
+    };
+    let choice = dialog::choose(hwnd, &req.paths, req.bytes);
+    let permanent = choice == dialog::Choice::Permanent;
+    match choice {
+        dialog::Choice::Cancel => {}
+        dialog::Choice::Clear => {
+            with(|w| w.app.clear_basket());
+        }
+        _ if permanent && !dialog::confirm_permanent(hwnd, req.paths.len(), req.bytes) => {}
+        _ => {
+            with(|w| w.app.set_deleting(true));
+            let (owner, drive, paths) = (hwnd.0 as isize, req.drive, req.paths);
+            std::thread::spawn(move || {
+                let out = trash::delete(paths, permanent, owner);
+                let boxed = Box::into_raw(Box::new((drive, out)));
+                // The window may be gone by now; then the box leaks, which is harmless at exit.
+                let _ = unsafe { PostMessageW(Some(HWND(owner as *mut _)), WM_DELETED, WPARAM(0), LPARAM(boxed as isize)) };
+            });
+        }
+    }
+    with(|w| w.invalidate());
 }
 
 fn pos(l: LPARAM) -> (i32, i32) {
@@ -1599,6 +1667,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_JOURNAL => {
             with(|w| w.journal_event());
+            LRESULT(0)
+        }
+        WM_DELETED => {
+            let (drive, out) = *unsafe { Box::from_raw(lp.0 as *mut (usize, Vec<trash::Outcome>)) };
+            with(|w| w.finish_delete(drive, out));
             LRESULT(0)
         }
         WM_SCAN_DONE => {
