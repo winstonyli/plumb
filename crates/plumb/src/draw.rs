@@ -5,7 +5,7 @@ use crate::icons;
 use plumb_core::basket::Basket;
 use plumb_core::age::{shade, FADE_MAX};
 use plumb_core::filter::Matcher;
-use crate::layout::{Layout, Rect, BASKET_W, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, MAP_BTN_W, PICKER_H, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, BASKET_W, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, MAP_BTN_W, METRIC_W, PICKER_H, RESCAN_W, ROW_H};
 use plumb_core::treemap::{Class, Kind, Tile};
 use plumb_core::rows::RowModel;
 use std::cell::{Cell, RefCell};
@@ -183,6 +183,8 @@ pub struct Scene<'a> {
     pub sort: (usize, bool),
     /// Which kind of view the rows belong to: the header titles and the last two columns follow it.
     pub kind: crate::app::ViewKind,
+    /// What a Processes view's first number column and map hold.
+    pub metric: plumb_core::procs::Metric,
     /// `None` while no tree exists; `message` is shown instead.
     pub view: Option<View<'a>>,
     /// Shown in the empty row area (idle, failed, cancelled).
@@ -502,7 +504,7 @@ impl Pen<'_> {
         let h = l.header();
         self.fill(h, t.panel);
         let partial = s.view.as_ref().is_some_and(|v| v.partial);
-        for (c, name) in s.kind.titles().iter().enumerate() {
+        for (c, name) in s.kind.titles(s.metric).iter().enumerate() {
             let (x, w) = l.column(c);
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
             // During a scan the sums are what has been found so far: "at least", said once here.
@@ -528,7 +530,7 @@ impl Pen<'_> {
         self.fill(Rect { h: 1.0, ..st }, t.select);
         // Row 1: the selection, the legend and the buttons; row 2: the scan and live state, the full width.
         let row1 = l.status_top();
-        let reserved = MAP_BTN_W + 8.0 + if l.cancel { CANCEL_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
+        let reserved = MAP_BTN_W + 8.0 + if l.cancel || l.metric { CANCEL_W + 4.0 } else { 0.0 } + if l.metric { METRIC_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
         let right = Rect { x: row1.x + 8.0, w: (row1.w - 16.0 - reserved).max(0.0), ..row1 };
         let legend_w = self.legend(s, right, right.w * 0.6);
         let text_w = if legend_w > 0.0 { right.w - legend_w - 24.0 } else { right.w };
@@ -546,6 +548,13 @@ impl Pen<'_> {
             self.centered(label, r, rgb(0xffffff));
         }
         self.toggle_button(l.map_button(), "\u{E80A}", l.map_on, s); // grid
+        if l.metric {
+            let r = l.metric_button();
+            self.fill(r, s.theme.panel);
+            self.frame(r, s.theme.select);
+            let c = self.state(r, false, s);
+            self.centered(crate::app::metric_label(s.metric), r, c);
+        }
     }
 
     /// What a control looks like when it is on (accent frame and text) or the pointer is over it
@@ -831,7 +840,7 @@ impl Pen<'_> {
             }
             self.text(&name, cell, fg, false);
             let (sx, sw) = l.column(1);
-            self.text(&fmt::size(v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
+            self.text(&s.kind.size_text(s.metric, v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
             let (px, pw) = l.column(2);
             let (bx, bw) = (px + 4.0, pw - 8.0);
             self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);

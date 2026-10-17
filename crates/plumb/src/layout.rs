@@ -34,6 +34,7 @@ pub const FILTER_COUNT_W: f32 = 110.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 32.0;
 pub const BASKET_W: f32 = 190.0;
+pub const METRIC_W: f32 = 72.0;
 pub const INDENT: f32 = 20.0;
 /// Starting widths of the Size, % of parent, Items and Modified columns; Name takes the rest.
 pub const COL_W: [f32; 4] = [100.0, 130.0, 90.0, 96.0];
@@ -73,6 +74,8 @@ pub enum Hit {
     MapDivider,
     /// The status bar's show/hide button.
     MapButton,
+    /// The Processes view's map metric button (Memory / CPU / I/O).
+    MetricButton,
     None,
 }
 
@@ -86,6 +89,8 @@ pub struct Layout {
     pub cancel: bool,
     /// The marked-items chip sits in the status bar, left of Cancel and the map button.
     pub basket: bool,
+    /// The metric button sits in the status bar, left of where Cancel shows (the Processes view).
+    pub metric: bool,
     /// Widths of the Size, % of parent, Items and Modified columns.
     pub col_w: [f32; 4],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
@@ -98,7 +103,7 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false, basket: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
+        Self { w, h, banner: false, cancel: false, basket: false, metric: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
     /// Sets the width of column `c` (1..=4), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
@@ -152,6 +157,16 @@ impl Layout {
         Rect { x: (s.x + s.w - 8.0 - MAP_BTN_W).max(0.0), y: s.y + 2.0, w: MAP_BTN_W, h: s.h - 4.0 }
     }
 
+
+    /// What the map weighs the processes by, left of the Cancel slot so the two never overlap.
+    pub fn metric_button(&self) -> Rect {
+        let c = self.cancel_button();
+        Rect { x: (c.x - 4.0 - METRIC_W).max(0.0), w: METRIC_W, ..c }
+    }
+
+    pub fn with_metric(&self, metric: bool) -> Self {
+        Self { metric, ..self.clone() }
+    }
 
     pub fn with_basket(&self, basket: bool) -> Self {
         Self { basket, ..self.clone() }
@@ -313,6 +328,9 @@ impl Layout {
         if self.basket && self.basket_chip().contains(x, y) {
             return Hit::Basket;
         }
+        if self.metric && self.metric_button().contains(x, y) {
+            return Hit::MetricButton;
+        }
         if self.banner && self.rescan_button().contains(x, y) {
             return Hit::Rescan;
         }
@@ -374,6 +392,16 @@ mod tests {
         for r in [l.map_button(), l.cancel_button(), l.basket_chip()] {
             assert!(r.y >= top.y && r.y + r.h <= top.y + top.h, "{r:?} in the first row");
         }
+    }
+
+    #[test]
+    fn the_metric_button_sits_left_of_the_cancel_slot_and_is_hit_only_when_shown() {
+        let l = Layout::new(900.0, 600.0);
+        let b = l.metric_button();
+        assert!(b.x + b.w <= l.cancel_button().x, "left of the Cancel slot");
+        assert_eq!((b.y, b.h), (l.map_button().y, l.map_button().h), "in the status bar's first row");
+        assert_ne!(l.hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton, "not shown by default");
+        assert_eq!(l.with_metric(true).hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton);
     }
 
     #[test]

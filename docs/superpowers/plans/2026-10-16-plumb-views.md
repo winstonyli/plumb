@@ -133,7 +133,7 @@ This task needs line-level reading before editing; do these reads first and ledg
 
 The first Processes render was one grey block: every node was DIR-flagged, so every tile was `Class::Other`. Fix: `Tree::set_dir`; `Procs` keeps the DIR flag equal to "has children" (leaf processes are file tiles); `treemap::layout_by` takes a class function; `app::location_class` colours a process by its executable (Windows / Program Files / User profile / Elsewhere) and `ViewKind::class_label` names the legend entries.
 
-### Task 7: Map metric (Memory / CPU / I/O)
+### Task 7: Map metric (Memory / CPU / I/O) (done: a status-bar button left of the Cancel slot; `App.proc_metric` is swapped with the slot; the first column follows it)
 
 **Files:** Modify `crates/plumb/src/layout.rs` (a `metric_button()` rect left of the map button, shown only when `kind == Processes`), `crates/plumb/src/draw.rs`, `crates/plumb/src/app.rs` (hit, click cycles the metric, tooltip), `crates/plumb/src/window.rs` (`WM_PROCS` handler / click calls `ProcTree::set_metric` then rebuilds the map and rows).
 

@@ -30,6 +30,17 @@ pub enum Metric {
     Io,
 }
 
+impl Metric {
+    /// The metric a click on the map's metric button moves to: Memory, CPU, I/O, and round again.
+    pub fn next(self) -> Self {
+        match self {
+            Metric::Memory => Metric::Cpu,
+            Metric::Cpu => Metric::Io,
+            Metric::Io => Metric::Memory,
+        }
+    }
+}
+
 struct Known {
     id: NodeId,
     memory: u64,
@@ -144,6 +155,13 @@ impl Procs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_metric_cycles_through_all_three() {
+        let seen = [Metric::Memory, Metric::Memory.next(), Metric::Memory.next().next()];
+        assert!(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2]);
+        assert_eq!(seen[2].next(), Metric::Memory);
+    }
 
     /// The bookkeeping and its tree together, as the tests drive them.
     struct ProcTree {

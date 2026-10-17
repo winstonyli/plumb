@@ -1316,6 +1316,14 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         Effect::Rescan(i) => {
             with(|w| w.start_rescan(i));
         }
+        Effect::Metric(m) => {
+            with(|w| {
+                if let Some(p) = &mut w.procs {
+                    p.set_metric(&mut w.app, m);
+                }
+                w.invalidate();
+            });
+        }
         Effect::Elevate => {
             let title = with(|w| w.app.active.map(|i| w.app.drives[i].title().to_string())).flatten();
             if relaunch_elevated(title.as_deref()) {

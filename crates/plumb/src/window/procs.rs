@@ -71,7 +71,6 @@ impl Poller {
 pub struct ProcState {
     sync: Option<Procs>,
     poller: Option<Poller>,
-    metric: Metric,
     /// Snapshots folded in so far.
     updates: u64,
 }
@@ -92,6 +91,15 @@ impl ProcState {
 
     pub fn polling(&self) -> bool {
         self.poller.is_some()
+    }
+
+    /// Weighs the processes by `m` from now on (the view must be the app's active one).
+    pub fn set_metric(&mut self, app: &mut App, m: Metric) {
+        app.proc_metric = m;
+        if let (Some(sync), Some(tree)) = (self.sync.as_mut(), app.tree.as_mut()) {
+            sync.set_metric(tree, m);
+            app.refresh_rows();
+        }
     }
 
     pub fn updates(&self) -> u64 {
@@ -130,7 +138,7 @@ impl ProcState {
                 app.refresh_rows();
             }
             _ => {
-                let (mut sync, mut tree) = Procs::new(self.metric);
+                let (mut sync, mut tree) = Procs::new(app.proc_metric);
                 sync.apply(&mut tree, &samples, elapsed);
                 app.finish_scan(tree, summary);
                 self.sync = Some(sync);

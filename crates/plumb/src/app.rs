@@ -10,6 +10,7 @@ use crate::restore::Snapshot;
 use crate::state::{MapState, Sort, State};
 use plumb_core::basket::{self, Basket};
 use plumb_core::rows::{Key, RowModel, SortKey};
+use plumb_core::procs::Metric;
 use plumb_core::treemap::{self, Class, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
 use std::collections::{HashMap, HashSet};
@@ -28,10 +29,20 @@ pub enum ViewKind {
 }
 
 impl ViewKind {
-    pub fn titles(self) -> [&'static str; 5] {
+    /// `metric` is what the Processes view's first number column holds; a drive ignores it.
+    pub fn titles(self, metric: Metric) -> [&'static str; 5] {
         match self {
             ViewKind::Disk => ["Name", "Size", "% of parent", "Items", "Modified"],
-            ViewKind::Processes => ["Name", "Memory", "% of parent", "CPU", "I/O"],
+            ViewKind::Processes => ["Name", metric_label(metric), "% of parent", "CPU", "I/O"],
+        }
+    }
+
+    /// The text of a size-column value: bytes for a drive; a process's memory, CPU share or I/O rate by `metric`.
+    pub fn size_text(self, metric: Metric, v: u64) -> String {
+        match (self, metric) {
+            (ViewKind::Processes, Metric::Cpu) => format!("{:.1}%", v as f64 / 10.0),
+            (ViewKind::Processes, Metric::Io) => format!("{}/s", fmt::size(v)),
+            _ => fmt::size(v),
         }
     }
 
@@ -64,6 +75,15 @@ impl ViewKind {
                 (format!("{:.1}%", cpu as f64 / 10.0), Some(format!("{}/s", fmt::size(io))))
             }
         }
+    }
+}
+
+/// The name of a map metric: the button's label and the first column's title.
+pub fn metric_label(m: Metric) -> &'static str {
+    match m {
+        Metric::Memory => "Memory",
+        Metric::Cpu => "CPU",
+        Metric::Io => "I/O",
     }
 }
 
@@ -181,6 +201,8 @@ pub enum Effect {
     Cancel,
     /// Ask what to delete (the basket chip).
     Commit,
+    /// The Processes view's map now weighs by this (the tree's sizes must be rewritten).
+    Metric(Metric),
 }
 
 /// A map tile's tooltip: the path and size of what it stands for, or what a `Rest` tile holds.
@@ -223,6 +245,7 @@ pub struct Parked {
     filter: filter::Filter,
     basket: Basket,
     proc_info: HashMap<u32, ProcInfo>,
+    proc_metric: Metric,
 }
 
 /// What the context menu and `Del` can do with a node.
@@ -321,6 +344,8 @@ pub struct App {
     basket: Basket,
     /// The Processes view's extra facts about each process, by pid.
     proc_info: HashMap<u32, ProcInfo>,
+    /// What the Processes view's map and Memory column weigh by.
+    pub proc_metric: Metric,
     /// Bumped when the marks change or the shown drive's basket is swapped.
     basket_rev: u64,
     basket_view: BasketView,
@@ -345,7 +370,7 @@ impl App {
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
-            basket: Basket::default(), proc_info: HashMap::new(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
+            basket: Basket::default(), proc_info: HashMap::new(), proc_metric: Metric::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -403,6 +428,7 @@ impl App {
         swap(&mut self.filter.ui, &mut p.filter.ui); // the query text belongs to the window
         swap(&mut self.basket, &mut p.basket);
         swap(&mut self.proc_info, &mut p.proc_info);
+        swap(&mut self.proc_metric, &mut p.proc_metric);
         self.basket_rev += 1;
         self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable());
         self.set_scroll(self.scroll);
@@ -602,6 +628,7 @@ impl App {
             Hit::Basket => Some((l.basket_chip(), "Review and delete the marked items".into())),
             Hit::FilterRegex => Some((l.filter_regex(), "Regular expression".into())),
             Hit::MapButton => Some((l.map_button(), "Show or hide the map  (Ctrl+M)".into())),
+            Hit::MetricButton => Some((l.metric_button(), format!("The map and the first column weigh processes by {}; click for the next", metric_label(self.proc_metric)))),
             _ => None,
         }
     }
@@ -626,12 +653,12 @@ impl App {
     /// A map tile of the Processes view: name and pid, the numbers, the executable and when it started.
     fn process_tip(&self, tree: &Tree, t: &Tile) -> String {
         if t.kind == Kind::Rest {
-            return format!("{} smaller processes, {}", fmt::count(t.count as u64), fmt::size(t.bytes));
+            return format!("{} smaller processes, {}", fmt::count(t.count as u64), self.kind().size_text(self.proc_metric, t.bytes));
         }
         let [cpu, io, pid] = tree.aux.get(t.node.idx()).copied().unwrap_or_default();
         let mut tip = format!(
-            "{}  (PID {pid})\n{} of memory in this and its children, CPU {:.1}%, I/O {}/s",
-            tree.name_string(t.node), fmt::size(t.bytes), cpu as f64 / 10.0, fmt::size(io)
+            "{}  (PID {pid})\n{} {} in this and its children; own CPU {:.1}%, I/O {}/s",
+            tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_label(self.proc_metric).to_lowercase(), cpu as f64 / 10.0, fmt::size(io)
         );
         if let Some(info) = self.proc_info.get(&(pid as u32)) {
             if let Some(path) = &info.path {
@@ -689,6 +716,7 @@ impl App {
     pub fn handle(&mut self, input: Input) -> Effect {
         self.layout.cancel = self.cancelable();
         self.layout.basket = self.basket_active();
+        self.layout.metric = self.kind() == ViewKind::Processes;
         if matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
             self.notice.clear();
             self.notice_detail.clear();
@@ -1095,6 +1123,7 @@ impl App {
             }
             Hit::Divider(c) => self.col_drag = Some((c, x, self.layout.col_w[c - 1])),
             Hit::MapButton => self.layout.map_on = !self.layout.map_on,
+            Hit::MetricButton => return Effect::Metric(self.proc_metric.next()),
             Hit::MapDivider => self.map_drag = Some((x, self.layout.map_w)),
             Hit::Map => {
                 if let Some(i) = treemap::hit(&self.map_tiles, x, y) {
@@ -1157,7 +1186,7 @@ impl App {
         let (tree, id) = (self.tree.as_ref()?, self.model.as_ref()?.selected()?);
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]);
-            return Some(format!("{}  (PID {pid})  {}", tree.name_string(id), fmt::size(tree.subtree_size[id])));
+            return Some(format!("{}  (PID {pid})  {}", tree.name_string(id), self.kind().size_text(self.proc_metric, tree.subtree_size[id])));
         }
         let path = fmt::display_path(&tree.path(id));
         let items = if tree.flags[id].contains(NodeFlags::DIR) { format!(", {} items", fmt::count(tree.subtree_files[id] as u64)) } else { String::new() };
@@ -1239,7 +1268,8 @@ impl App {
         };
         let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
         f(&Scene {
-            layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()),
+            layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes),
+            metric: self.proc_metric,
             theme: Theme::new(dark),
             chips: &chips,
             active_chip: self.active,
@@ -1267,7 +1297,7 @@ mod tests {
 
     #[test]
     fn a_disk_view_keeps_its_titles_sorts_and_last_two_columns() {
-        assert_eq!(ViewKind::Disk.titles(), ["Name", "Size", "% of parent", "Items", "Modified"]);
+        assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Size", "% of parent", "Items", "Modified"]);
         let keys: Vec<_> = (0..5).map(|c| ViewKind::Disk.sort_key(c)).collect();
         assert_eq!(keys, [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified]);
         let mut b = plumb_core::TreeBuilder::new();
@@ -1307,6 +1337,26 @@ mod tests {
     }
 
     #[test]
+    fn clicking_the_metric_button_cycles_memory_cpu_io_and_back() {
+        let (mut a, _) = process_app();
+        a.layout.map_on = true;
+        let click = |a: &mut App| {
+            let b = a.layout.with_metric(true).metric_button();
+            a.handle(Input::Click(b.x + 5.0, b.y + 5.0))
+        };
+        assert_eq!(a.proc_metric, Metric::Memory);
+        assert_eq!(click(&mut a), Effect::Metric(Metric::Cpu));
+        a.proc_metric = Metric::Cpu; // the window applies the effect
+        assert_eq!(click(&mut a), Effect::Metric(Metric::Io));
+        a.proc_metric = Metric::Io;
+        assert_eq!(click(&mut a), Effect::Metric(Metric::Memory));
+        assert_eq!(ViewKind::Processes.titles(Metric::Io)[1], "I/O");
+        assert_eq!(ViewKind::Processes.size_text(Metric::Cpu, 123), "12.3%");
+        assert_eq!(ViewKind::Processes.size_text(Metric::Io, 2048), format!("{}/s", fmt::size(2048)));
+        assert_eq!(ViewKind::Disk.size_text(Metric::Cpu, 2048), fmt::size(2048), "a drive ignores the metric");
+    }
+
+    #[test]
     fn a_process_view_cannot_mark() {
         let (a, id) = process_app();
         assert_eq!(a.mark_state(id), MarkState::Refused("processes cannot be deleted"));
@@ -1335,7 +1385,7 @@ mod tests {
 
     #[test]
     fn a_process_view_sorts_cpu_and_io_by_aux_and_shows_them_as_rates() {
-        assert_eq!(ViewKind::Processes.titles()[3..], ["CPU", "I/O"]);
+        assert_eq!(ViewKind::Processes.titles(Metric::Memory)[3..], ["CPU", "I/O"]);
         assert_eq!((ViewKind::Processes.sort_key(3), ViewKind::Processes.sort_key(4)), (SortKey::Aux(0), SortKey::Aux(1)));
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
