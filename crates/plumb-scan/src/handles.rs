@@ -4,21 +4,17 @@
 //! belong to the target, `DuplicateHandle` brings a copy over. Asking a copy what it is (`GetFileType`, a path) can
 //! block forever on a synchronous pipe with a read pending, so every question is asked on a worker thread that is
 //! given up on after a timeout; a pathological process cannot leak more than `MAX_HUNG` threads.
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::Duration;
-use windows::core::s;
 use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
 use windows::Win32::Storage::FileSystem::{GetFileType, GetFinalPathNameByHandleW, GETFINALPATHNAMEBYHANDLE_FLAGS, FILE_NAME_NORMALIZED, FILE_TYPE_DISK, VOLUME_NAME_DOS};
-use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE};
 
 /// Threads given up on before the rest of a process's handles are skipped unread.
 const MAX_HUNG: usize = 8;
 const SYSTEM_EXTENDED_HANDLE_INFORMATION: u32 = 64;
-const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
 
 #[derive(Debug, Default)]
 pub struct HandleList {
@@ -36,8 +32,6 @@ pub enum HandleError {
     Query(i32),
 }
 
-type NtQuery = unsafe extern "system" fn(u32, *mut c_void, u32, *mut u32) -> i32;
-
 /// `SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX` on x64 (40 bytes).
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -54,24 +48,7 @@ struct Entry {
 
 /// Every handle value in the system's table that belongs to `pid`.
 fn handle_values(pid: u32) -> Result<Vec<usize>, HandleError> {
-    let nt: NtQuery = unsafe {
-        let ntdll = GetModuleHandleA(s!("ntdll.dll")).map_err(|e| HandleError::Query(e.code().0))?;
-        std::mem::transmute(GetProcAddress(ntdll, s!("NtQuerySystemInformation")).ok_or(HandleError::Query(0))?)
-    };
-    let mut buf: Vec<u64> = vec![0; (4 << 20) / 8];
-    loop {
-        let mut need = 0u32;
-        let status = unsafe { nt(SYSTEM_EXTENDED_HANDLE_INFORMATION, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut need) };
-        if status == STATUS_INFO_LENGTH_MISMATCH {
-            // The table grows while we ask: leave room.
-            buf = vec![0; ((need as usize).max(buf.len() * 8) * 2) / 8];
-            continue;
-        }
-        if status < 0 {
-            return Err(HandleError::Query(status));
-        }
-        break;
-    }
+    let buf = crate::nt::query(SYSTEM_EXTENDED_HANDLE_INFORMATION, 4 << 20).map_err(HandleError::Query)?;
     let count = buf[0] as usize;
     let entries = unsafe { std::slice::from_raw_parts(buf.as_ptr().add(2).cast::<Entry>(), count) };
     Ok(entries.iter().filter(|e| e.pid == pid as usize).map(|e| e.handle).collect())

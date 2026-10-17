@@ -4,6 +4,10 @@ pub mod journal;
 #[cfg(windows)]
 pub mod handles;
 #[cfg(windows)]
+mod nt;
+#[cfg(windows)]
+pub mod procs;
+#[cfg(windows)]
 pub mod journal_win;
 pub mod listing;
 pub mod merge;
