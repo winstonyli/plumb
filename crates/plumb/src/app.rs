@@ -1248,16 +1248,17 @@ impl App {
             .collect()
     }
 
+    /// What the list says when there is no tree: a heading, then (after a newline) a hint or the reason.
     fn message(&self) -> String {
         match &self.scan {
-            Scan::Idle => "Select a drive above to scan it.".into(),
+            Scan::Idle => "No drive selected\nSelect a drive above to scan it.".into(),
             Scan::Running { view, .. } if self.views[*view].kind == ViewKind::Processes => "Reading processes\u{2026}".into(),
             Scan::Running { view, dirs, files, bytes } => format!(
                 "Scanning {}  {} folders, {} files, {}",
                 self.views[*view].title(), fmt::count(*dirs), fmt::count(*files), fmt::size(*bytes)
             ),
-            Scan::Failed(m) => format!("Scan failed: {m}"),
-            Scan::Cancelled => "Scan cancelled. Select a drive above to scan it again.".into(),
+            Scan::Failed(m) => format!("Scan failed\n{m}"),
+            Scan::Cancelled => "Scan cancelled\nSelect a drive above to scan it again.".into(),
         }
     }
 

@@ -325,7 +325,7 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     let frame = |loading: bool| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None,
-            view: None, message: "", loading, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+            view: None, message: if loading { "" } else { "Scan failed\nThe volume could not be opened." }, loading, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
         };
         render_scene(&gfx, &scene, if loading { "plumb-loading" } else { "plumb-empty" })
     };

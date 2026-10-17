@@ -651,7 +651,10 @@ impl Pen<'_> {
             None if s.loading => self.skeleton(s),
             None => {
                 let a = l.rows_area();
-                self.text(s.message, Rect { x: a.x + 16.0, y: a.y + 16.0, w: a.w - 32.0, h: ROW_H }, t.dim, false);
+                let (head, hint) = s.message.split_once('\n').unwrap_or((s.message, ""));
+                let line = |i: f32| Rect { x: a.x + 16.0, y: a.y + 16.0 + i * ROW_H, w: a.w - 32.0, h: ROW_H };
+                self.text_as(Role::Title, head, line(0.0), t.fg, false);
+                self.text_as(Role::Caption, hint, line(1.0), t.dim, false);
             }
         }
         if let (true, Some((head, lines))) = (l.held, s.held) {
@@ -969,13 +972,13 @@ impl Pen<'_> {
             }
             let marked = !v.basket.is_empty() && v.basket.covers(&v.tree.path(id));
             if marked {
-                self.fill(r, D2D1_COLOR_F { a: 0.6, ..t.danger });
+                self.fill(r, D2D1_COLOR_F { a: 0.35, ..t.danger }); // as the map tints a marked tile
             }
             self.fill(Rect { x: r.x, y: r.y + r.h - 1.0, w: r.w, h: 1.0 }, t.panel); // hairline between rows
             let parent = v.tree.parent[id];
             let denom = if parent.is_none() { v.tree.subtree_size[id] } else { v.tree.subtree_size[parent] };
             let frac = fmt::fraction(v.tree.subtree_size[id], denom);
-            let fg = if row.dim || marked { t.dim } else { t.fg };
+            let fg = if row.dim { t.dim } else { t.fg };
             let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
             let mut name = v.tree.name_string(id).to_string();
