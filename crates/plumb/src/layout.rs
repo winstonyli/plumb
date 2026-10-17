@@ -5,7 +5,7 @@ pub use plumb_core::Rect;
 pub const PICKER_H: f32 = 44.0;
 pub const HEADER_H: f32 = 24.0;
 /// One row of the status bar: the selection, legend and buttons on the first, the scan and live state on the second.
-pub const STATUS_ROW_H: f32 = 26.0;
+pub const STATUS_ROW_H: f32 = 28.0;
 pub const STATUS_H: f32 = 2.0 * STATUS_ROW_H;
 pub const ROW_H: f32 = 22.0;
 pub const SCROLLBAR_W: f32 = 12.0;
@@ -18,7 +18,7 @@ pub const FILTER_PAD: f32 = 8.0;
 pub const CHIP_GAP: f32 = 8.0;
 /// The side of every icon button: administrator (a shield), Rescan (a refresh arrow), Cancel (a cross) and the map toggle.
 /// They are squares, centred in the band they sit in (see `icon_button`).
-pub const ICON_BTN: f32 = 22.0;
+pub const ICON_BTN: f32 = 24.0;
 /// Room kept at the right end of the picker bar for the system's minimize, maximize and close buttons,
 /// which Windows draws over the top of the window (the title bar is part of the client area).
 pub const CAPTION_RESERVE: f32 = 150.0;
