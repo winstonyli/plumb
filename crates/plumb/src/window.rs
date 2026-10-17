@@ -2,7 +2,7 @@
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
 use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, Parked, TipKey, ViewKind};
 use crate::{dialog, trash};
-use crate::draw::{Mark, Painter};
+use crate::draw::{Mark, Painter, Role};
 use crate::filter_ui::{byte_at, push_utf16, Edit, Motion};
 use crate::fmt;
 use crate::state::Placement;
@@ -429,7 +429,7 @@ impl Win {
         let layout = Layout::new(pw as f32 * 96.0 / dpi, ph as f32 * 96.0 / dpi);
         let mut app = App::new(layout, views, gfx.adapter.clone());
         app.can_elevate = !plumb_scan::volume::is_elevated();
-        app.fit_chips(&|s| painter.text_width(&gfx, s));
+        app.fit_chips(&|s| painter.text_width(&gfx, Role::Body, s));
         let dark = dark_mode();
         app.accent = system_accent();
         let (filter_tx, filter_rx) = channel();
@@ -595,7 +595,7 @@ impl Win {
     /// A client point in DIPs, measured from the top of the content (below the overhang).
     /// The filter text's byte offset under device-independent x, for placing the caret.
     fn filter_byte(&self, x: f32) -> usize {
-        byte_at(&self.app.filter_ui().text, x - self.app.filter_origin(), &|s| self.painter.text_width(&self.gfx, s))
+        byte_at(&self.app.filter_ui().text, x - self.app.filter_origin(), &|s| self.painter.text_width(&self.gfx, Role::Body, s))
     }
 
     /// Presses in the filter box place the caret (shift extends the selection, a double-click picks a word).
@@ -614,7 +614,7 @@ impl Win {
     /// Puts the input method's composition and candidate windows under the filter caret.
     fn place_ime(&self) {
         let u = self.app.filter_ui();
-        let x = self.app.filter_origin() + self.painter.text_width(&self.gfx, &format!("{}{}", &u.text[..u.caret], u.preedit));
+        let x = self.app.filter_origin() + self.painter.text_width(&self.gfx, Role::Body, &format!("{}{}", &u.text[..u.caret], u.preedit));
         let b = self.app.filter_box();
         let (px, py) = ((x * self.dpi / 96.0) as i32, ((b.y + b.h + self.inset) * self.dpi / 96.0) as i32);
         unsafe {
@@ -930,7 +930,7 @@ impl Win {
     fn procs_update(&mut self, snap: procs::Snapshot) {
         let Some(st) = &mut self.procs else { return };
         if st.update(&mut self.app, snap) {
-            self.app.fit_chips(&|s| self.painter.text_width(&self.gfx, s));
+            self.app.fit_chips(&|s| self.painter.text_width(&self.gfx, Role::Body, s));
         }
         self.invalidate();
     }

@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{
-    IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
+    IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
     DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     DWRITE_WORD_WRAPPING_NO_WRAP,
@@ -274,9 +274,27 @@ pub struct Scene<'a> {
     pub map: Option<MapView<'a>>,
 }
 
-pub struct Painter {
+/// How a piece of text ranks. Sizes and weights live only in `Painter::new`; every text draw names a role.
+#[derive(Clone, Copy)]
+pub enum Role {
+    /// Content: names, sizes, paths.
+    Body,
+    /// Headings: the column headers and the Files held title.
+    Title,
+    /// Secondary state: the status line, the match count, the legend.
+    Caption,
+}
+
+/// One role's text, set from the left and from the right.
+struct Face {
     left: IDWriteTextFormat,
     right: IDWriteTextFormat,
+}
+
+pub struct Painter {
+    body: Face,
+    title: Face,
+    caption: Face,
     center: IDWriteTextFormat,
     glyph: IDWriteTextFormat,
     /// Shell icons by (extension key, folder, open, large). Device bitmaps, so
@@ -303,11 +321,11 @@ const ICON_CACHE_MAX: usize = 512;
 
 impl Painter {
     pub fn new(gfx: &Gfx) -> Result<Self> {
-        let make = |family: PCWSTR, size, align| unsafe {
+        let make = |family: PCWSTR, size, weight: DWRITE_FONT_WEIGHT, align| unsafe {
             let f = gfx.dw.CreateTextFormat(
                 family,
                 None,
-                DWRITE_FONT_WEIGHT_NORMAL,
+                weight,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
                 size,
@@ -322,24 +340,35 @@ impl Painter {
             Ok::<_, windows::core::Error>(f)
         };
         let ui = w!("Segoe UI");
+        let normal = DWRITE_FONT_WEIGHT_NORMAL;
+        let face = |size, weight| Ok::<_, windows::core::Error>(Face { left: make(ui, size, weight, DWRITE_TEXT_ALIGNMENT_LEADING)?, right: make(ui, size, weight, DWRITE_TEXT_ALIGNMENT_TRAILING)? });
         Ok(Self {
-            left: make(ui, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-            right: make(ui, 13.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-            // Only the Regex toggle's `.*` is centred; it is small, so it is set larger.
-            center: make(ui, 16.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+            body: face(13.0, normal)?,
+            title: face(13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+            caption: face(12.0, normal)?,
+            // The symbols `.*` and `\u{00D7}` are centred; they are small, so they are set larger.
+            center: make(ui, 16.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER)?,
             // Windows' icon font (Segoe MDL2 Assets): one glyph per button.
-            glyph: make(w!("Segoe MDL2 Assets"), 14.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+            glyph: make(w!("Segoe MDL2 Assets"), 14.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER)?,
             icons: RefCell::default(),
             map_cache: RefCell::default(),
             map_builds: Cell::new(0),
         })
     }
 
-    /// The width in DIPs of `s` set on one line in the normal text format.
-    pub fn text_width(&self, gfx: &Gfx, s: &str) -> f32 {
+    fn face(&self, role: Role) -> &Face {
+        match role {
+            Role::Body => &self.body,
+            Role::Title => &self.title,
+            Role::Caption => &self.caption,
+        }
+    }
+
+    /// The width in DIPs of `s` set on one line as `role`.
+    pub fn text_width(&self, gfx: &Gfx, role: Role, s: &str) -> f32 {
         let u: Vec<u16> = s.encode_utf16().collect();
         unsafe {
-            let Ok(layout) = gfx.dw.CreateTextLayout(&u, &self.left, 10_000.0, 100.0) else { return 0.0 };
+            let Ok(layout) = gfx.dw.CreateTextLayout(&u, &self.face(role).left, 10_000.0, 100.0) else { return 0.0 };
             let mut m = DWRITE_TEXT_METRICS::default();
             if layout.GetMetrics(&mut m).is_err() {
                 return 0.0;
@@ -477,8 +506,14 @@ impl Pen<'_> {
         build(lo)
     }
 
+    /// Body text.
     fn text(&self, s: &str, r: Rect, c: D2D1_COLOR_F, right: bool) {
-        self.draw_text(s, if right { &self.painter.right } else { &self.painter.left }, r, c);
+        self.text_as(Role::Body, s, r, c, right);
+    }
+
+    fn text_as(&self, role: Role, s: &str, r: Rect, c: D2D1_COLOR_F, right: bool) {
+        let face = self.painter.face(role);
+        self.draw_text(s, if right { &face.right } else { &face.left }, r, c);
     }
 
     fn draw_text(&self, s: &str, f: &IDWriteTextFormat, r: Rect, c: D2D1_COLOR_F) {
@@ -522,7 +557,7 @@ impl Pen<'_> {
     }
 
     fn text_width(&self, s: &str) -> f32 {
-        self.painter.text_width(self.gfx, s)
+        self.painter.text_width(self.gfx, Role::Body, s)
     }
 
     fn filter_bar(&self, s: &Scene) {
@@ -567,7 +602,7 @@ impl Pen<'_> {
         let r = l.filter_regex();
         let c = self.control(r, s, f.regex, true);
         self.symbol(".*", &self.painter.center, r, c);
-        self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
+        self.text_as(Role::Caption, f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
 
     fn draw(&self, s: &Scene) {
@@ -602,7 +637,7 @@ impl Pen<'_> {
             // During a scan the sums are what has been found so far: "at least", said once here.
             let atleast = if partial && (c == 1 || (c == 3 && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
             let (label, color) = (format!("{atleast}{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
-            self.text(&label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4));
+            self.text_as(Role::Title, &label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4));
             if c > 0 {
                 // The grip for resizing: a hairline at the column's left edge.
                 self.fill(Rect { x, y: h.y + 5.0, w: 1.0, h: h.h - 10.0 }, D2D1_COLOR_F { a: 0.5, ..t.dim });
@@ -623,7 +658,7 @@ impl Pen<'_> {
             let line = |i: usize| Rect { x: pane.x + 8.0, y: pane.y + i as f32 * ROW_H, w: (pane.w - 16.0).max(0.0), h: ROW_H };
             // The title is a band of its own, so it reads as a heading over the list.
             self.fill(Rect { y: pane.y + 1.0, h: ROW_H - 1.0, ..pane }, mix(t.panel, t.fg, 0.06));
-            self.text(head, line(0), t.fg, false);
+            self.text_as(Role::Title, head, line(0), t.fg, false);
             for (i, f) in lines.iter().enumerate() {
                 self.text(&self.fit_middle(f, line(i + 1).w), line(i + 1), t.dim, false);
             }
@@ -641,7 +676,7 @@ impl Pen<'_> {
         let sel = self.fit_middle(s.selection, text_w.max(0.0));
         self.text(&sel, Rect { w: text_w.max(0.0), ..right }, t.dim, false);
         let row2 = Rect { y: st.y + row1.h, h: st.h - row1.h, ..st };
-        self.text(s.status, Rect { x: row2.x + 8.0, w: (row2.w - 16.0).max(0.0), ..row2 }, t.dim, false);
+        self.text_as(Role::Caption, s.status, Rect { x: row2.x + 8.0, w: (row2.w - 16.0).max(0.0), ..row2 }, t.dim, false);
         if l.cancel {
             let r = l.cancel_button();
             self.button(r, "\u{E711}", s); // cancel
@@ -702,7 +737,7 @@ impl Pen<'_> {
                 let share = b * 100 / total.max(1);
                 let name = s.kind.class_label(c);
                 let label = if share == 0 { format!("{name} <1%") } else { format!("{name} {share}%") };
-                let w = self.text_width(&label);
+                let w = self.painter.text_width(self.gfx, Role::Caption, &label);
                 (c, label, w)
             })
             .collect();
@@ -733,7 +768,7 @@ impl Pen<'_> {
         for (c, label, w) in &entries[..n] {
             let w = *w;
             self.fill(Rect { x, y: r.y + (r.h - 10.0) / 2.0, w: 10.0, h: 10.0 }, s.theme.class[c.index()]);
-            self.text(label, Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
+            self.text_as(Role::Caption, label, Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
             x += 14.0 + w + 12.0;
         }
         used + shift
