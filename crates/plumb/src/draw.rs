@@ -5,7 +5,7 @@ use crate::icons;
 use plumb_core::basket::Basket;
 use plumb_core::age::{shade, FADE_MAX};
 use plumb_core::filter::Matcher;
-use crate::layout::{Layout, Rect, BASKET_W, CANCEL_W, CAPTION_RESERVE, FILTER_PAD, INDENT, MAP_BTN_W, METRIC_W, PICKER_H, RESCAN_W, ROW_H};
+use crate::layout::{Layout, Rect, BASKET_W, CAPTION_RESERVE, FILTER_PAD, ICON_BTN, INDENT, METRIC_W, PICKER_H, ROW_H};
 use plumb_core::treemap::{Class, Kind, Tile};
 use plumb_core::rows::RowModel;
 use std::cell::{Cell, RefCell};
@@ -27,7 +27,7 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::core::{w, Result, PCWSTR};
 
 /// Banner text stops this far from the right edge, short of the Rescan button.
-const RESCAN_RESERVED: f32 = RESCAN_W + 24.0;
+const RESCAN_RESERVED: f32 = ICON_BTN + 24.0;
 
 /// `a` moved toward `b` by `f` (0 = `a`, 1 = `b`).
 fn mix(a: D2D1_COLOR_F, b: D2D1_COLOR_F, f: f32) -> D2D1_COLOR_F {
@@ -634,7 +634,7 @@ impl Pen<'_> {
         self.fill(Rect { h: 1.0, ..st }, t.border);
         // Row 1: the selection, the legend and the buttons; row 2: the scan and live state, the full width.
         let row1 = l.status_top();
-        let reserved = MAP_BTN_W + 8.0 + if l.cancel || l.metric { CANCEL_W + 4.0 } else { 0.0 } + if l.metric { METRIC_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
+        let reserved = ICON_BTN + 8.0 + if l.cancel || l.metric { ICON_BTN + 4.0 } else { 0.0 } + if l.metric { METRIC_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
         let right = Rect { x: row1.x + 8.0, w: (row1.w - 16.0 - reserved).max(0.0), ..row1 };
         let legend_w = self.legend(s, right, right.w * 0.6);
         let text_w = if legend_w > 0.0 { right.w - legend_w - 24.0 } else { right.w };

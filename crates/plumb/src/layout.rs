@@ -5,7 +5,7 @@ pub use plumb_core::Rect;
 pub const PICKER_H: f32 = 44.0;
 pub const HEADER_H: f32 = 24.0;
 /// One row of the status bar: the selection, legend and buttons on the first, the scan and live state on the second.
-pub const STATUS_ROW_H: f32 = 22.0;
+pub const STATUS_ROW_H: f32 = 26.0;
 pub const STATUS_H: f32 = 2.0 * STATUS_ROW_H;
 pub const ROW_H: f32 = 22.0;
 pub const SCROLLBAR_W: f32 = 12.0;
@@ -16,13 +16,13 @@ pub const CHIP_PAD: f32 = 8.0;
 /// Space between the filter box's left edge and its text.
 pub const FILTER_PAD: f32 = 8.0;
 pub const CHIP_GAP: f32 = 8.0;
-/// The icon buttons: administrator (a shield), Rescan (a refresh arrow) and Cancel (a cross).
-pub const ADMIN_W: f32 = 32.0;
+/// The side of every icon button: administrator (a shield), Rescan (a refresh arrow), Cancel (a cross) and the map toggle.
+/// They are squares, centred in the band they sit in (see `icon_button`).
+pub const ICON_BTN: f32 = 22.0;
 /// Room kept at the right end of the picker bar for the system's minimize, maximize and close buttons,
 /// which Windows draws over the top of the window (the title bar is part of the client area).
 pub const CAPTION_RESERVE: f32 = 150.0;
 pub const BANNER_H: f32 = 28.0;
-pub const RESCAN_W: f32 = 32.0;
 /// What follows the filter box: gap, match count.
 const FILTER_AFTER_W: f32 = 8.0 + FILTER_COUNT_W;
 pub const FILTER_BOX_H: f32 = 28.0;
@@ -32,7 +32,6 @@ pub const FILTER_BOX_MIN: f32 = 184.0;
 pub const FILTER_REGEX_W: f32 = FILTER_BOX_H - 8.0;
 pub const FILTER_COUNT_W: f32 = 110.0;
 pub const FILTER_CLEAR_W: f32 = 24.0;
-pub const CANCEL_W: f32 = 32.0;
 pub const BASKET_W: f32 = 190.0;
 pub const METRIC_W: f32 = 72.0;
 /// The Processes view's "Files held" pane: a title line and this many file lines.
@@ -49,7 +48,11 @@ const GRIP: f32 = 4.0;
 pub const DIVIDER_W: f32 = 5.0;
 pub const MAP_MIN_W: f32 = 160.0;
 pub const MAP_W: f32 = 420.0;
-pub const MAP_BTN_W: f32 = 32.0;
+
+/// An icon button: a square of `ICON_BTN` with its right edge at `right`, centred vertically in `band`.
+fn icon_button(right: f32, band: Rect) -> Rect {
+    Rect { x: (right - ICON_BTN).max(0.0), y: band.y + (band.h - ICON_BTN) / 2.0, w: ICON_BTN, h: ICON_BTN }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
@@ -159,7 +162,7 @@ impl Layout {
     /// Shows or hides the pane, at the right end of the status bar.
     pub fn map_button(&self) -> Rect {
         let s = self.status_top();
-        Rect { x: (s.x + s.w - 8.0 - MAP_BTN_W).max(0.0), y: s.y + 2.0, w: MAP_BTN_W, h: s.h - 4.0 }
+        icon_button(s.x + s.w - 8.0, s)
     }
 
 
@@ -189,8 +192,7 @@ impl Layout {
     /// The marked-items chip in the status bar, left of the Cancel button (or of the map button when there is none).
     pub fn basket_chip(&self) -> Rect {
         let right = if self.cancel { self.cancel_button().x } else { self.map_button().x } - 4.0;
-        let s = self.status_top();
-        Rect { x: (right - BASKET_W).max(0.0), y: s.y + 2.0, w: BASKET_W, h: s.h - 4.0 }
+        Rect { x: (right - BASKET_W).max(0.0), w: BASKET_W, ..self.map_button() }
     }
 
     pub fn with_cancel(&self, cancel: bool) -> Self {
@@ -248,7 +250,7 @@ impl Layout {
 
     /// "Rescan", right-aligned in the banner.
     pub fn rescan_button(&self) -> Rect {
-        Rect { x: (self.w - 8.0 - RESCAN_W).max(0.0), y: PICKER_H + 3.0, w: RESCAN_W, h: BANNER_H - 6.0 }
+        icon_button(self.w - 8.0, self.banner_strip())
     }
 
     pub fn chip(&self, i: usize) -> Rect {
@@ -257,7 +259,7 @@ impl Layout {
 
     /// "Run as administrator" (a shield), right-aligned in the picker bar.
     pub fn admin_button(&self) -> Rect {
-        Rect { x: (self.w - CAPTION_RESERVE - 8.0 - ADMIN_W).max(0.0), y: 6.0, w: ADMIN_W, h: PICKER_H - 12.0 }
+        icon_button(self.w - CAPTION_RESERVE - 8.0, Rect { x: 0.0, y: 0.0, w: self.w, h: PICKER_H })
     }
 
     pub fn header(&self) -> Rect {
@@ -279,7 +281,7 @@ impl Layout {
     /// "Cancel", right-aligned in the status bar.
     pub fn cancel_button(&self) -> Rect {
         let s = self.status_top();
-        Rect { x: (s.x + s.w - 8.0 - MAP_BTN_W - 4.0 - CANCEL_W).max(0.0), y: s.y + 2.0, w: CANCEL_W, h: s.h - 4.0 }
+        icon_button(self.map_button().x - 4.0, s)
     }
 
     /// The status bar's first row, where the buttons sit.
@@ -417,6 +419,17 @@ mod tests {
         assert_eq!((b.y, b.h), (l.map_button().y, l.map_button().h), "in the status bar's first row");
         assert_ne!(l.hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton, "not shown by default");
         assert_eq!(l.with_metric(true).hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton);
+    }
+
+    #[test]
+    fn every_icon_button_is_the_same_square_inside_its_band() {
+        let l = Layout::new(900.0, 600.0).with_banner(true).with_cancel(true);
+        let bands = [(l.admin_button(), 0.0, PICKER_H), (l.rescan_button(), PICKER_H, PICKER_H + BANNER_H), (l.cancel_button(), l.status_top().y, l.status_top().y + STATUS_ROW_H), (l.map_button(), l.status_top().y, l.status_top().y + STATUS_ROW_H)];
+        for (b, top, bottom) in bands {
+            assert_eq!((b.w, b.h), (ICON_BTN, ICON_BTN));
+            assert!(b.y >= top && b.y + b.h <= bottom, "{b:?} inside {top}..{bottom}");
+            assert_eq!(b.y - top, bottom - (b.y + b.h), "centred");
+        }
     }
 
     #[test]
