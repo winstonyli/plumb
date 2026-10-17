@@ -28,10 +28,9 @@ const FILTER_AFTER_W: f32 = 8.0 + FILTER_COUNT_W;
 pub const FILTER_BOX_H: f32 = 28.0;
 pub const FILTER_BOX_W: f32 = 304.0;
 pub const FILTER_BOX_MIN: f32 = 184.0;
-/// The Regex toggle sits inside the right end of the filter box, inset 4 px from its edges: a square.
-pub const FILTER_REGEX_W: f32 = FILTER_BOX_H - 8.0;
+/// The Regex toggle and the clear button sit inside the right end of the filter box: icon buttons.
+const FILTER_INSET: f32 = 4.0;
 pub const FILTER_COUNT_W: f32 = 110.0;
-pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const BASKET_W: f32 = 190.0;
 pub const METRIC_W: f32 = 72.0;
 /// The Processes view's "Files held" pane: a title line and this many file lines.
@@ -229,7 +228,7 @@ impl Layout {
     /// The Regex toggle: at the right end inside the filter box.
     pub fn filter_regex(&self) -> Rect {
         let b = self.filter_box();
-        Rect { x: b.x + b.w - 4.0 - FILTER_REGEX_W, y: b.y + 4.0, w: FILTER_REGEX_W, h: b.h - 8.0 }
+        icon_button(b.x + b.w - FILTER_INSET, b)
     }
 
     /// Match count or status text, after the filter box.
@@ -240,8 +239,7 @@ impl Layout {
 
     /// The clear button: inside the box, left of the Regex toggle.
     pub fn filter_clear(&self) -> Rect {
-        let (b, r) = (self.filter_box(), self.filter_regex());
-        Rect { x: r.x - FILTER_CLEAR_W, y: b.y, w: FILTER_CLEAR_W, h: b.h }
+        icon_button(self.filter_regex().x - 2.0, self.filter_box())
     }
 
     pub fn banner_strip(&self) -> Rect {
@@ -523,6 +521,7 @@ mod tests {
         let (b, r, c, n) = (l.filter_box(), l.filter_regex(), l.filter_clear(), l.filter_count());
         assert!(c.x + c.w <= r.x && r.x + r.w <= b.x + b.w && b.x + b.w <= n.x && n.x + n.w <= l.w, "{b:?} {r:?} {c:?} {n:?}");
         assert!(c.x >= b.x + 8.0 + 40.0, "the buttons leave the text some room");
+        assert_eq!((c.w, c.h, r.w, r.h), (ICON_BTN, ICON_BTN, ICON_BTN, ICON_BTN), "both are icon buttons");
         assert_eq!(l.hit(b.x + b.w / 2.0, b.y + 2.0, 3), Hit::FilterBox);
         assert_eq!(l.hit(c.x + 2.0, c.y + 2.0, 3), Hit::FilterClear);
         assert_eq!(l.hit(r.x + 2.0, r.y + 2.0, 3), Hit::FilterRegex);

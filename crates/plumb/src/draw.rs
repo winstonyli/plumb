@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_ROUNDED_RECT, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_ROUNDED_RECT, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{
@@ -554,7 +554,8 @@ impl Pen<'_> {
             }
             if !f.text.is_empty() {
                 let c = l.filter_clear();
-                self.text("\u{00D7}", Rect { w: c.w - 6.0, ..c }, t.dim, true);
+                let lit = self.control(c, s, false, true);
+                self.symbol("\u{00D7}", &self.painter.center, c, lit);
             }
         }
         if f.focus && f.sel.is_none() {
@@ -565,8 +566,7 @@ impl Pen<'_> {
         }
         let r = l.filter_regex();
         let c = self.control(r, s, f.regex, true);
-        // The line box centres the text, but `.*` sits low in it (a period on the baseline and a raised star).
-        self.centered(".*", Rect { y: r.y - 1.5, ..r }, c);
+        self.symbol(".*", &self.painter.center, r, c);
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
     }
 
@@ -686,7 +686,7 @@ impl Pen<'_> {
     /// An icon button that shows the accent frame while `active`.
     fn toggle_button(&self, r: Rect, glyph: &str, active: bool, s: &Scene) {
         let c = self.control(r, s, active, false);
-        self.draw_text(glyph, &self.painter.glyph, r, c);
+        self.symbol(glyph, &self.painter.glyph, r, c);
     }
 
     /// The map's class legend, right-aligned in `r`: each class present with its share of the drawn files, largest
@@ -798,6 +798,21 @@ impl Pen<'_> {
             }
             Kind::Solid => self.fill(r, D2D1_COLOR_F { a: 0.45, ..t.dim }),
             Kind::Rest => self.fill(r, D2D1_COLOR_F { a: 0.22, ..t.dim }),
+        }
+    }
+
+    /// A symbol centred in `r` by its ink, not its line box: a period and a raised star, or a glyph with uneven
+    /// side bearings, would sit off-centre under the font's metrics. (Words are centred by line box instead, so
+    /// descenders do not pull them up.)
+    fn symbol(&self, s: &str, f: &IDWriteTextFormat, r: Rect, c: D2D1_COLOR_F) {
+        let u: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let Ok(layout) = self.gfx.dw.CreateTextLayout(&u, f, r.w, r.h) else { return };
+            // The overhangs say how far the ink reaches past each edge of the layout box (negative: inside it).
+            let Ok(o) = layout.GetOverhangMetrics() else { return self.draw_text(s, f, r, c) };
+            self.brush.SetColor(&c);
+            let at = Vector2 { X: r.x - (o.right - o.left) / 2.0, Y: r.y - (o.bottom - o.top) / 2.0 };
+            self.gfx.d2d.DrawTextLayout(at, &layout, &self.brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
     }
 
