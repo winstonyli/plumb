@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb: live updates without admin (directory watch)
 
 Status: implemented, 2026-10-12 (plan: `docs/superpowers/plans/2026-10-12-plumb-dirwatch.md`). Builds on `2026-10-12-plumb-live-updates-design.md` (tree mutation, `Pacer`, `RescanPolicy`, the stale banner), `2026-10-12-plumb-partial-tree-design.md` and the filter design. The live-updates spec parked this as "different mechanism and lower fidelity; after this".

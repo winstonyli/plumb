@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb: partial tree while a scan runs (milestone M3, part 2)
 
 Status: implemented, 2026-10-12 (plan: `docs/superpowers/plans/2026-10-12-plumb-partial-tree.md`). Builds on `2026-10-11-plumb-disk-design.md` ("no partial tree while a scan runs" was a v0.1 limitation), on the live-updates design (`Live`, `Tree` mutation, `swap_tree`, `Pacer`) and on the filter design (the filter follows tree changes through the touched-id log).

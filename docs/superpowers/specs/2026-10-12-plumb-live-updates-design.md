@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb: live updates design (milestone M2)
 
 Status: draft for review, 2026-10-12. Builds on `2026-10-11-plumb-disk-design.md`, which parked this work as M2 and which this spec amends (the "finished tree is read-only" rule).

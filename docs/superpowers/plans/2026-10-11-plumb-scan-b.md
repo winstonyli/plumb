@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb-scan (b): MFT Scanner Implementation Plan (Plan 2b of 3)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (inline; the tasks depend on each other) to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Task 4 needs the user to run commands in an elevated terminal; stop there and ask.**

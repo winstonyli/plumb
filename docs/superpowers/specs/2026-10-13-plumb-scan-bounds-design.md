@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Soft upper bound on the % of parent bar during a scan
 
 While a scan runs, a row's bar is its current share of its parent's current size. The bar gets a faded extension to the most that share could still grow.

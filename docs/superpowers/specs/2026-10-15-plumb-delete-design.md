@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb: deleting from the tree and the map (stage, then commit)
 
 Status: implemented 2026-10-15. Reverses the "Delete and cleanup suggestions: read-only tool by decision" row of `2026-10-11-plumb-disk-design.md`; that row is superseded for deletion only (cleanup suggestions stay out). Left to check by hand: the shell progress window, Explorer Undo after a recycle, tooltip look under comctl32 v6, the chip at 200% DPI.

@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Partial tree while a scan runs: implementation plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (inline) to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

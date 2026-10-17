@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Shell icons in the name column
 
 Rows show Explorer's icon for the node: one shared folder icon, and for files the icon of the extension.

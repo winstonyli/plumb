@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb live updates, plan 3: UI wiring
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Task 4 step 2 needs the user** (an elevated shell); stop there and ask.

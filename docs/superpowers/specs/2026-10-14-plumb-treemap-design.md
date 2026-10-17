@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb: treemap pane design
 
 Status: implemented, 2026-10-14 (unreleased; the real window has not been looked at yet). Extends `2026-10-11-plumb-disk-design.md` (the treemap was parked there).

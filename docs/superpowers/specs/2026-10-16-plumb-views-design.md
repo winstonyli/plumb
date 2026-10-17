@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Views: more than drives (design)
 
 Status: implemented 2026-10-16 (unreleased). Target 0.9.0 (one release: the refactor, the process view, and "what holds it").

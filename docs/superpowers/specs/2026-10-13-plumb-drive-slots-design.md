@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Per-drive slots (design)
 
 Status: implemented 2026-10-13.

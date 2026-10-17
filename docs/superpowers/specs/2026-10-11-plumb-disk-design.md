@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb: disk pane design (v1)
 
 Status: draft for review, 2026-10-11.

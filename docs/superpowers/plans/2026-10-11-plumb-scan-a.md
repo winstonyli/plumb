@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb-scan (a): Merge Pass and WalkScanner Implementation Plan (Plan 2a of 3)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (inline; the tasks depend on each other) to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

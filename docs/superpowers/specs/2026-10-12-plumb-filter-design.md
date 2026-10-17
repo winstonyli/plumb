@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb: name filter design (milestone M3, part 1)
 
 Status: implemented (plans A and B), 2026-10-12. Builds on `2026-10-11-plumb-disk-design.md` (search and filter were parked "after v1") and on the live-updates design, whose tree mutation, `RowModel::refresh` and `restore` module this reuses.

@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # plumb: modified age on the treemap
 
 Status: design, reviewed against the code in two rounds, 2026-10-15; implemented 2026-10-15 (constants pending a real-drive look). Extends `2026-10-14-plumb-treemap-design.md`, where colour by modified age was parked.
