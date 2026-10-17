@@ -32,7 +32,7 @@ fn u64_at(b: &[u8], off: usize) -> u64 {
 
 pub(crate) fn image_path(pid: u32) -> Option<String> {
     let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
-    let mut buf = vec![0u16; 1024];
+    let mut buf = vec![0u16; 32768]; // the longest path Windows allows
     let mut n = buf.len() as u32;
     let ok = unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_FORMAT(0), PWSTR(buf.as_mut_ptr()), &mut n) }.is_ok();
     let _ = unsafe { CloseHandle(h) };

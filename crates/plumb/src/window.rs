@@ -244,6 +244,9 @@ impl View {
             p.stop();
         }
         self.progress.cancel();
+        if let Some(p) = &mut self.procs {
+            p.stop();
+        }
         if self.watch.is_none() && self.dir_pending.is_none() {
             return;
         }
@@ -803,6 +806,9 @@ impl Win {
     /// Ends every scan and watch, for exit.
     fn shutdown(&mut self) {
         self.progress.cancel();
+        if let Some(p) = &mut self.procs {
+            p.stop();
+        }
         for d in self.parked.drain(..).flatten() {
             d.discard();
         }
@@ -825,6 +831,9 @@ impl Win {
             return;
         }
         self.progress.cancel();
+        if let Some(p) = &mut self.procs {
+            p.stop();
+        }
         self.preview = None;
         self.background = false;
         self.drop_pending();
