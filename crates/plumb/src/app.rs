@@ -10,7 +10,7 @@ use crate::restore::Snapshot;
 use crate::state::{MapState, Sort, State};
 use plumb_core::basket::{self, Basket};
 use plumb_core::rows::{Key, RowModel, SortKey};
-use plumb_core::treemap::{self, Kind, Tile};
+use plumb_core::treemap::{self, Class, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
 use std::collections::{HashMap, HashSet};
 
@@ -43,6 +43,18 @@ impl ViewKind {
         }
     }
 
+    /// What a map class is called in this view. Processes borrows four file classes to show where the executable
+    /// lives (see `location_class`).
+    pub fn class_label(self, c: Class) -> &'static str {
+        match (self, c) {
+            (ViewKind::Processes, Class::Executable) => "Windows",
+            (ViewKind::Processes, Class::Document) => "Program Files",
+            (ViewKind::Processes, Class::Code) => "User profile",
+            (ViewKind::Processes, Class::Other) => "Elsewhere",
+            _ => c.label(),
+        }
+    }
+
     /// The text of the last two columns for `id`; the second is `None` when the node has nothing to show there.
     pub fn last_two(self, tree: &Tree, id: NodeId) -> (String, Option<String>) {
         match self {
@@ -62,6 +74,22 @@ pub struct ProcInfo {
     pub path: Option<String>,
     /// Creation time, FILETIME.
     pub created: u64,
+}
+
+/// The map class of a process by where its executable is: the Windows folder, Program Files, a user profile, or
+/// elsewhere (and unknown).
+pub fn location_class(path: Option<&str>, system_root: &str) -> Class {
+    let Some(path) = path else { return Class::Other };
+    let (p, root) = (path.to_lowercase(), system_root.trim_end_matches('\\').to_lowercase());
+    if !root.is_empty() && p.starts_with(&root) && p[root.len()..].starts_with('\\') {
+        Class::Executable
+    } else if p.contains("\\program files") {
+        Class::Document
+    } else if p.contains("\\users\\") {
+        Class::Code
+    } else {
+        Class::Other
+    }
 }
 
 /// The status line of the Processes view.
@@ -826,7 +854,15 @@ impl App {
         if !self.map_dirty && self.map_key == Some(key) {
             return;
         }
-        self.map_tiles = treemap::layout(tree, root, rect, px);
+        self.map_tiles = if self.kind() == ViewKind::Processes {
+            let by_location = |id: NodeId| {
+                let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]) as u32;
+                location_class(self.proc_info.get(&pid).and_then(|i| i.path.as_deref()), &self.system_root)
+            };
+            treemap::layout_by(tree, root, rect, px, &by_location)
+        } else {
+            treemap::layout(tree, root, rect, px)
+        };
         self.map_classes = treemap::class_bytes(&self.map_tiles);
         self.map_now = today();
         (self.map_key, self.map_dirty, self.map_hover) = (Some(key), false, None);
@@ -1254,6 +1290,20 @@ mod tests {
         let id = tree.find("Processes\\ping.exe").expect("the process is under the root");
         a.finish_scan(tree, "x".into());
         (a, id)
+    }
+
+    #[test]
+    fn a_process_is_coloured_by_where_its_executable_lives() {
+        let sys = r"C:\Windows";
+        assert_eq!(location_class(Some(r"C:\Windows\System32\svchost.exe"), sys), Class::Executable);
+        assert_eq!(location_class(Some(r"c:\windows\explorer.exe"), sys), Class::Executable);
+        assert_eq!(location_class(Some(r"C:\WindowsApps\x.exe"), sys), Class::Other, "a sibling folder is not the Windows folder");
+        assert_eq!(location_class(Some(r"C:\Program Files (x86)\A\a.exe"), sys), Class::Document);
+        assert_eq!(location_class(Some(r"C:\Users\me\AppData\Local\b.exe"), sys), Class::Code);
+        assert_eq!(location_class(Some(r"D:\tools\c.exe"), sys), Class::Other);
+        assert_eq!(location_class(None, sys), Class::Other);
+        assert_eq!(ViewKind::Processes.class_label(Class::Code), "User profile");
+        assert_eq!(ViewKind::Disk.class_label(Class::Code), "Code");
     }
 
     #[test]

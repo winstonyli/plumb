@@ -164,6 +164,23 @@ impl Tree {
         self.mtime[id] = m;
     }
 
+    /// Makes `id` a folder (it can be expanded, and the map frames what is in it) or a file (one item in its
+    /// parents' counts, a tile of its own). Ignored when it already is, or for a dead node.
+    pub fn set_dir(&mut self, id: NodeId, dir: bool) {
+        if self.flags[id].contains(NodeFlags::DEAD) || self.flags[id].contains(NodeFlags::DIR) == dir {
+            return;
+        }
+        self.flags[id].set(NodeFlags::DIR, dir);
+        let mut up = id;
+        while !up.is_none() {
+            // A folder counts no item of its own, a file counts itself.
+            self.subtree_files[up] = if dir { self.subtree_files[up] - 1 } else { self.subtree_files[up] + 1 };
+            up = self.parent[up];
+        }
+        self.touched.push(id);
+        self.rev += 1;
+    }
+
     /// Sets the node's aux numbers (the first call gives every node zeros), and counts the node as changed so a
     /// sort by them repositions it.
     pub fn set_aux(&mut self, id: NodeId, v: [u64; 3]) {
@@ -429,6 +446,23 @@ pub(crate) mod tests {
         assert!(t.touched().is_empty(), "an unchanged value is not a change");
         t.set_aux(NodeId(1), [5, 6, 8]);
         assert_eq!(t.touched(), &[NodeId(1)]);
+    }
+
+    #[test]
+    fn set_dir_moves_a_node_between_file_and_folder_and_fixes_the_item_counts_above() {
+        let mut b = TreeBuilder::new();
+        let root = b.push_str(NodeId::NONE, "r", 0, NodeFlags::DIR);
+        let a = b.push_str(root, "a", 5, NodeFlags::empty());
+        let mut t = b.finish().unwrap();
+        assert_eq!((t.subtree_files[a], t.subtree_files[root]), (1, 1));
+        t.take_touched();
+        t.set_dir(a, true);
+        assert_eq!((t.subtree_files[a], t.subtree_files[root]), (0, 0));
+        assert_eq!(t.touched(), &[a]);
+        t.set_dir(a, true);
+        assert_eq!(t.touched(), &[a], "no change, no touch");
+        t.set_dir(a, false);
+        assert_eq!((t.subtree_files[a], t.subtree_files[root]), (1, 1));
     }
 
     #[test]

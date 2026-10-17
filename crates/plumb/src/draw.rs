@@ -583,7 +583,8 @@ impl Pen<'_> {
             .iter()
             .map(|&(c, b)| {
                 let share = b * 100 / total.max(1);
-                let label = if share == 0 { format!("{} <1%", c.label()) } else { format!("{} {share}%", c.label()) };
+                let name = s.kind.class_label(c);
+                let label = if share == 0 { format!("{name} <1%") } else { format!("{name} {share}%") };
                 let w = self.text_width(&label);
                 (c, label, w)
             })

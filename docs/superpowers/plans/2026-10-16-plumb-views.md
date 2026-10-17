@@ -129,6 +129,10 @@ This task needs line-level reading before editing; do these reads first and ledg
 - [ ] **Step 4:** `cargo test --release --workspace` and `plumb.exe --selftest-processes`, `--selftest-delete`, `--selftest-live`, `--selftest-watch` → all ok. Capture a window screenshot of the Processes view (`cap.ps1`-style, no focus steal) and look at it: columns, chip, tree.
 - [ ] **Step 5: Measure the poll's cost:** `(Get-Process plumb).CPU` over 60 s with the view on screen and idle; record the number in the spec (section 2). If it exceeds 1 % of one core, lower the work (skip `QueryFullProcessImageNameW` after the first time for a known identity) and re-measure. Commit.
 
+### Task 6b: Map colouring (done, unplanned)
+
+The first Processes render was one grey block: every node was DIR-flagged, so every tile was `Class::Other`. Fix: `Tree::set_dir`; `Procs` keeps the DIR flag equal to "has children" (leaf processes are file tiles); `treemap::layout_by` takes a class function; `app::location_class` colours a process by its executable (Windows / Program Files / User profile / Elsewhere) and `ViewKind::class_label` names the legend entries.
+
 ### Task 7: Map metric (Memory / CPU / I/O)
 
 **Files:** Modify `crates/plumb/src/layout.rs` (a `metric_button()` rect left of the map button, shown only when `kind == Processes`), `crates/plumb/src/draw.rs`, `crates/plumb/src/app.rs` (hit, click cycles the metric, tooltip), `crates/plumb/src/window.rs` (`WM_PROCS` handler / click calls `ProcTree::set_metric` then rebuilds the map and rows).

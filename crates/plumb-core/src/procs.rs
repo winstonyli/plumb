@@ -81,7 +81,7 @@ impl Procs {
         for s in samples {
             if !self.known.contains_key(&(s.pid, s.created)) {
                 let name: Vec<u16> = s.name.encode_utf16().collect();
-                let id = tree.add_child(self.root, &name, 0, NodeFlags::DIR);
+                let id = tree.add_child(self.root, &name, 0, NodeFlags::empty());
                 self.known.insert((s.pid, s.created), Known { id, memory: 0, cpu_tenths: 0, io_rate: 0, prev: (s.cpu_100ns, s.io_bytes) });
             }
         }
@@ -105,7 +105,11 @@ impl Procs {
                 tree.remove(k.id);
             }
         }
-        // 4. Numbers.
+        // 4. A process is a folder while it has children and a file (one tile in the map) when it has none.
+        for k in self.known.values() {
+            tree.set_dir(k.id, tree.has_children(k.id));
+        }
+        // 5. Numbers.
         for s in samples {
             let k = self.known.get_mut(&(s.pid, s.created)).unwrap();
             let (dcpu, dio) = (s.cpu_100ns.saturating_sub(k.prev.0), s.io_bytes.saturating_sub(k.prev.1));
@@ -173,6 +177,21 @@ mod tests {
     fn parent_pid(p: &ProcTree, pid: u32) -> u32 {
         let par = p.tree.parent[node(p, pid)];
         if par == p.root { 0 } else { p.pid(par) }
+    }
+
+    #[test]
+    fn a_process_is_a_folder_only_while_it_has_children() {
+        let mut p = ProcTree::new();
+        p.apply(&[s(10, 1, 1, "a.exe", 100)], 0);
+        let a = node(&p, 10);
+        assert!(!p.tree.flags[a].contains(NodeFlags::DIR));
+        assert_eq!(p.tree.subtree_files[p.root], 1);
+        p.apply(&[s(10, 1, 1, "a.exe", 100), s(11, 10, 2, "b.exe", 50)], 10_000_000);
+        assert!(p.tree.flags[a].contains(NodeFlags::DIR));
+        assert_eq!(p.tree.subtree_files[p.root], 1, "a family counts its leaves");
+        p.apply(&[s(10, 1, 1, "a.exe", 100)], 10_000_000);
+        assert!(!p.tree.flags[a].contains(NodeFlags::DIR), "the last child left");
+        assert_eq!(p.tree.subtree_files[p.root], 1);
     }
 
     #[test]

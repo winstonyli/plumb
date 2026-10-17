@@ -151,6 +151,12 @@ impl Box64 {
 /// The tiles of `root`'s descendants filling `rect`, parent before child; `px` is the size of one
 /// physical pixel in the caller's units (96 / dpi for DIPs). See the spec for the rules.
 pub fn layout(tree: &Tree, root: NodeId, rect: Rect, px: f32) -> Vec<Tile> {
+    layout_by(tree, root, rect, px, &|id| classify(tree.name(id)))
+}
+
+/// [`layout`] with the class of each file tile chosen by `class` (a view that is not a file system says what its
+/// nodes are by something other than their names).
+pub fn layout_by(tree: &Tree, root: NodeId, rect: Rect, px: f32, class: &dyn Fn(NodeId) -> Class) -> Vec<Tile> {
     let mut out = Vec::new();
     if root.is_none() || root.idx() >= tree.len() || tree.flags[root].contains(NodeFlags::DEAD) {
         return out;
@@ -159,7 +165,7 @@ pub fn layout(tree: &Tree, root: NodeId, rect: Rect, px: f32) -> Vec<Tile> {
     if !(area.w() > 0.0 && area.h() > 0.0) {
         return out;
     }
-    let ctx = Ctx { tree, px: px as f64 };
+    let ctx = Ctx { tree, px: px as f64, class };
     if tree.flags[root].contains(NodeFlags::DIR) {
         ctx.fill(root, area, 0, &mut out);
     } else if tree.size[root] > 0 {
@@ -171,6 +177,7 @@ pub fn layout(tree: &Tree, root: NodeId, rect: Rect, px: f32) -> Vec<Tile> {
 struct Ctx<'a> {
     tree: &'a Tree,
     px: f64,
+    class: &'a dyn Fn(NodeId) -> Class,
 }
 
 impl Ctx<'_> {
@@ -217,7 +224,7 @@ impl Ctx<'_> {
         let t = self.tree;
         let tile = |kind, class, count| Tile { node: c, rect: b.rect(), depth, class, kind, bytes: t.subtree_size[c], count, mtime: None };
         if !t.flags[c].contains(NodeFlags::DIR) {
-            out.push(Tile { mtime: t.mtime[c], ..tile(Kind::File, classify(t.name(c)), 1) });
+            out.push(Tile { mtime: t.mtime[c], ..tile(Kind::File, (self.class)(c), 1) });
             return;
         }
         let inset = self.px;
