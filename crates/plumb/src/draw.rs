@@ -917,7 +917,8 @@ impl Pen<'_> {
             // The bars sit inside the rounded frame, clear of its corners.
             let inner = Rect { x: r.x + RADIUS, w: r.w - 2.0 * RADIUS, ..r };
             self.fill(Rect { y: r.y + r.h - 4.0, w: inner.w * chip.used.clamp(0.0, 1.0), h: 3.0, ..inner }, t.accent);
-            self.text(&chip.label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h - 3.0 }, if active { lit } else { t.fg }, false);
+            // Chips are sized for the semibold label, so the active one can take it without moving its neighbours.
+            self.text_as(if active { Role::Title } else { Role::Body }, &chip.label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h - 3.0 }, if active { lit } else { t.fg }, false);
             // A strip along the top edge: neutral for a kept tree, the accent for a running scan.
             let strip = match chip.mark {
                 Mark::None => None,

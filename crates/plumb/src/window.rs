@@ -429,7 +429,7 @@ impl Win {
         let layout = Layout::new(pw as f32 * 96.0 / dpi, ph as f32 * 96.0 / dpi);
         let mut app = App::new(layout, views, gfx.adapter.clone());
         app.can_elevate = !plumb_scan::volume::is_elevated();
-        app.fit_chips(&|s| painter.text_width(&gfx, Role::Body, s));
+        app.fit_chips(&|s| painter.text_width(&gfx, Role::Title, s));
         let dark = dark_mode();
         app.accent = system_accent();
         let (filter_tx, filter_rx) = channel();
@@ -930,7 +930,7 @@ impl Win {
     fn procs_update(&mut self, snap: procs::Snapshot) {
         let Some(st) = &mut self.procs else { return };
         if st.update(&mut self.app, snap) {
-            self.app.fit_chips(&|s| self.painter.text_width(&self.gfx, Role::Body, s));
+            self.app.fit_chips(&|s| self.painter.text_width(&self.gfx, Role::Title, s));
         }
         self.invalidate();
     }
