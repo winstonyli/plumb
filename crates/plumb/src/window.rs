@@ -502,15 +502,16 @@ impl Win {
         };
         // The caption buttons are drawn by DWM on the frame behind a transparent corner of our picker bar
         // (see `draw`): colour that frame like the bar, and extend it over the bar's whole height.
-        let bg: u32 = if self.dark { 0x1e1e1e } else { 0xffffff };
+        let theme = crate::draw::Theme::new(self.dark);
+        let (bg, edge) = (crate::draw::colorref(theme.bg), crate::draw::colorref(theme.border));
         let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_CAPTION_COLOR, &bg as *const _ as *const _, 4) };
-        let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_BORDER_COLOR, &bg as *const _ as *const _, 4) };
+        let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_BORDER_COLOR, &edge as *const _ as *const _, 4) };
         // The tooltip control has no dark visual style: without one it takes the colours we set; in light it keeps the default.
         unsafe {
             if self.dark {
                 let _ = SetWindowTheme(self.tooltip, w!(""), w!(""));
-                SendMessageW(self.tooltip, TTM_SETTIPBKCOLOR, Some(WPARAM(0x2b2b2b)), None);
-                SendMessageW(self.tooltip, TTM_SETTIPTEXTCOLOR, Some(WPARAM(0xe6e6e6)), None);
+                SendMessageW(self.tooltip, TTM_SETTIPBKCOLOR, Some(WPARAM(crate::draw::colorref(theme.panel) as usize)), None);
+                SendMessageW(self.tooltip, TTM_SETTIPTEXTCOLOR, Some(WPARAM(crate::draw::colorref(theme.fg) as usize)), None);
             } else {
                 let _ = SetWindowTheme(self.tooltip, PCWSTR::null(), PCWSTR::null());
             }

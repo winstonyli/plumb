@@ -47,6 +47,12 @@ fn soften(c: D2D1_COLOR_F, f: f32) -> D2D1_COLOR_F {
 /// How much colour the map's tile fills give up, so they sit calmly beside the interface.
 const TILE_SOFTEN: f32 = 0.18;
 
+/// `c` as a Win32 COLORREF (`0x00BBGGRR`), for the window frame and the tooltip, which are not drawn by us.
+pub fn colorref(c: D2D1_COLOR_F) -> u32 {
+    let b = |v: f32| (v * 255.0).round() as u32;
+    b(c.b) << 16 | b(c.g) << 8 | b(c.r)
+}
+
 fn rgb(hex: u32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: ((hex >> 16) & 255) as f32 / 255.0,
@@ -984,6 +990,11 @@ mod tests {
                 assert!(contrast(t.accent, t.raised) >= 4.5, "{dark} {hex:06x} is {}", contrast(t.accent, t.raised));
             }
         }
+    }
+
+    #[test]
+    fn a_colorref_is_blue_green_red() {
+        assert_eq!(colorref(rgb(0x112233)), 0x332211);
     }
 
     #[test]
