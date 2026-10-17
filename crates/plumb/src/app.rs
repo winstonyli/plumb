@@ -5,7 +5,7 @@ mod filter;
 use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{Hit, Layout, Rect, CHIP_PAD, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
+use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
 use crate::restore::Snapshot;
 use crate::state::{MapState, Sort, State};
 use plumb_core::basket::{self, Basket};
@@ -401,7 +401,7 @@ impl App {
 
     /// Sizes each chip to its label: `measure` gives a text's width in DIPs.
     pub fn fit_chips(&mut self, measure: &dyn Fn(&str) -> f32) {
-        self.layout.chips = self.chips().iter().map(|c| (measure(&c.label) + 2.0 * CHIP_PAD).ceil()).collect();
+        self.layout.chips = self.chips().iter().map(|c| chip_width(measure(&c.label))).collect();
     }
 
     /// The header column the rows are sorted by, and whether descending.

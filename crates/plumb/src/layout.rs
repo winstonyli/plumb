@@ -12,7 +12,12 @@ pub const SCROLLBAR_W: f32 = 12.0;
 /// A drive chip's width until its label has been measured (see `App::fit_chips`).
 pub const CHIP_W: f32 = 104.0;
 /// Space either side of a chip's label.
-pub const CHIP_PAD: f32 = 8.0;
+const CHIP_PAD: f32 = 8.0;
+
+/// A chip's width for a label `text_w` wide.
+pub fn chip_width(text_w: f32) -> f32 {
+    (text_w + 2.0 * CHIP_PAD).ceil()
+}
 /// Space between the filter box's left edge and its text.
 pub const FILTER_PAD: f32 = 8.0;
 pub const CHIP_GAP: f32 = 8.0;

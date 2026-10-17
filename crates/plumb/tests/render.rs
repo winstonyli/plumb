@@ -3,7 +3,7 @@
 //! Opens no window and never touches the physical GPU.
 use plumb::draw::{Chip, FilterBar, MapView, Mark, Painter, Role, Scene, Theme, View};
 use plumb::gfx::Gfx;
-use plumb::layout::{Layout, Rect, CHIP_PAD, CHIP_W};
+use plumb::layout::{chip_width, Layout, Rect, CHIP_W};
 use plumb_core::basket::Basket;
 use plumb_core::rows::RowModel;
 use plumb_core::synth::kary_builder;
@@ -68,7 +68,7 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
 /// Each chip as wide as the app makes it (`App::fit_chips`), so a frame shows labels the way the window does.
 fn chip_widths(gfx: &Gfx, chips: &[Chip]) -> Vec<f32> {
     let painter = Painter::new(gfx).unwrap();
-    chips.iter().map(|c| (painter.text_width(gfx, Role::Title, &c.label) + 2.0 * CHIP_PAD).ceil()).collect()
+    chips.iter().map(|c| chip_width(painter.text_width(gfx, Role::Title, &c.label))).collect()
 }
 
 fn render_scene(gfx: &Gfx, scene: &Scene, stem: &str) -> Vec<u8> {
