@@ -18,14 +18,18 @@ const W: u32 = 800;
 const H: u32 = 600;
 
 fn bitmap(gfx: &Gfx, options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OPTIONS) -> ID2D1Bitmap1 {
+    bitmap_sized(gfx, options, W, H, 96.0)
+}
+
+fn bitmap_sized(gfx: &Gfx, options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OPTIONS, w: u32, h: u32, dpi: f32) -> ID2D1Bitmap1 {
     let props = D2D1_BITMAP_PROPERTIES1 {
         pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
-        dpiX: 96.0,
-        dpiY: 96.0,
+        dpiX: dpi,
+        dpiY: dpi,
         bitmapOptions: options,
         colorContext: std::mem::ManuallyDrop::new(None),
     };
-    unsafe { gfx.d2d.CreateBitmap(D2D_SIZE_U { width: W, height: H }, None, 0, &props).unwrap() }
+    unsafe { gfx.d2d.CreateBitmap(D2D_SIZE_U { width: w, height: h }, None, 0, &props).unwrap() }
 }
 
 fn render(dark: bool, error: bool) -> Vec<u8> {
@@ -82,20 +86,24 @@ fn render_on(painter: &Painter, gfx: &Gfx, scene: &Scene, stem: &str) -> Vec<u8>
     let out = read_back(gfx, &target);
     // PLUMB_SHOT_DIR=<dir> keeps the frames as PNGs.
     if let Some(dir) = std::env::var_os("PLUMB_SHOT_DIR") {
-        write_png(&std::path::Path::new(&dir).join(format!("{stem}.png")), &out);
+        write_png(&std::path::Path::new(&dir).join(format!("{stem}.png")), &out, W, H);
     }
     out
 }
 
 /// The BGRA pixels of `target`.
 fn read_back(gfx: &Gfx, target: &ID2D1Bitmap1) -> Vec<u8> {
-    let cpu = bitmap(gfx, D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW);
+    read_back_sized(gfx, target, W, H)
+}
+
+fn read_back_sized(gfx: &Gfx, target: &ID2D1Bitmap1, w: u32, h: u32) -> Vec<u8> {
+    let cpu = bitmap_sized(gfx, D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, w, h, 96.0);
     unsafe {
         cpu.CopyFromBitmap(None, target, None).unwrap();
         let m = cpu.Map(D2D1_MAP_OPTIONS_READ).unwrap();
-        let mut out = Vec::with_capacity((W * H * 4) as usize);
-        for y in 0..H as usize {
-            out.extend_from_slice(std::slice::from_raw_parts(m.bits.add(y * m.pitch as usize), W as usize * 4));
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h as usize {
+            out.extend_from_slice(std::slice::from_raw_parts(m.bits.add(y * m.pitch as usize), w as usize * 4));
         }
         cpu.Unmap().unwrap();
         out
@@ -103,7 +111,7 @@ fn read_back(gfx: &Gfx, target: &ID2D1Bitmap1) -> Vec<u8> {
 }
 
 /// Writes `buf` (BGRA) as an uncompressed PNG, for looking at a frame by eye.
-fn write_png(path: &std::path::Path, buf: &[u8]) {
+fn write_png(path: &std::path::Path, buf: &[u8], w: u32, h: u32) {
     fn crc(data: &[u8]) -> u32 {
         let mut c = !0u32;
         for &b in data {
@@ -122,10 +130,10 @@ fn write_png(path: &std::path::Path, buf: &[u8]) {
         out.extend(crc(&body).to_be_bytes());
     }
     let mut raw = Vec::new();
-    for y in 0..H as usize {
+    for y in 0..h as usize {
         raw.push(0);
-        for x in 0..W as usize {
-            let i = (y * W as usize + x) * 4;
+        for x in 0..w as usize {
+            let i = (y * w as usize + x) * 4;
             raw.extend([buf[i + 2], buf[i + 1], buf[i]]);
         }
     }
@@ -145,8 +153,8 @@ fn write_png(path: &std::path::Path, buf: &[u8]) {
     z.extend(((d << 16) | a).to_be_bytes());
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut ihdr = Vec::new();
-    ihdr.extend(W.to_be_bytes());
-    ihdr.extend(H.to_be_bytes());
+    ihdr.extend(w.to_be_bytes());
+    ihdr.extend(h.to_be_bytes());
     ihdr.extend([8, 2, 0, 0, 0]);
     chunk(&mut out, b"IHDR", &ihdr);
     chunk(&mut out, b"IDAT", &z);
@@ -608,4 +616,46 @@ fn the_processes_map_follows_the_metric_button() {
         render_scene(&gfx, &scene, &format!("plumb-processes-{m:?}").to_lowercase());
     }
     assert!(areas[0] > areas[1] * 4.0 && areas[0] > areas[2] * 4.0, "the memory hog fills the map by memory only: {areas:?}");
+}
+
+/// The Processes scene at 100, 125, 150 and 200 % scaling: a bitmap of `W x H` DIPs in physical pixels,
+/// drawn with the real paint path. Frames go to `PLUMB_SHOT_DIR` for looking at.
+#[test]
+fn the_processes_view_paints_at_every_scale() {
+    use plumb_core::procs::{Metric, Procs, Sample};
+    let gfx = Gfx::warp().expect("WARP device");
+    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, cpu_100ns: cpu, io_bytes: io };
+    let (mut procs, mut tree) = Procs::new(Metric::Memory);
+    let list = |k: u64| vec![sample(2000, 1, "big-memory.exe", 900_000_000, k, 0), sample(2200, 1, "chatty.exe", 10_000_000, k, 400 * k)];
+    procs.apply(&mut tree, &list(0), 0);
+    procs.apply(&mut tree, &list(1_000_000), 10_000_000);
+    let mut model = RowModel::new(&tree);
+    model.set_sort(&tree, plumb_core::rows::SortKey::Size, true);
+    let root = model.rows()[0].id;
+    model.expand(&tree, root);
+    model.select(model.rows()[1].id);
+    let chips = [Chip { label: "C:  123 GB".into(), used: 0.7, mark: Mark::None }, Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
+    let held_lines = vec!["C:/Users/me/notes.txt".to_string(), "C:/Windows/Temp/x.log".to_string()];
+    let filter = FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() };
+    let painter = Painter::new(&gfx).unwrap();
+    for (dark, scale) in [(false, 1.0f32), (false, 1.25), (true, 1.5), (false, 2.0)] {
+        let layout = Layout { chips: chip_widths(&gfx, &chips), map_on: true, ..Layout::new(W as f32, H as f32) }.with_metric(true).with_held(true);
+        let tiles = plumb_core::treemap::layout(&tree, root, layout.map().unwrap(), 1.0);
+        let classes = plumb_core::treemap::class_bytes(&tiles);
+        let scene = Scene {
+            layout, theme: Theme::new(dark), chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot: None,
+            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+            message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Metric::Memory, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB", selection: "", banner: None,
+            filter: FilterBar { ..filter }, basket: None,
+            map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
+        };
+        let (pw, ph) = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
+        let target = bitmap_sized(&gfx, D2D1_BITMAP_OPTIONS_TARGET, pw, ph, 96.0 * scale);
+        painter.paint(&gfx, &target, 96.0 * scale, 0.0, &scene).expect("EndDraw");
+        let out = read_back_sized(&gfx, &target, pw, ph);
+        assert_eq!(out.len(), (pw * ph * 4) as usize);
+        if let Some(dir) = std::env::var_os("PLUMB_SHOT_DIR") {
+            write_png(&std::path::Path::new(&dir).join(format!("plumb-processes-{}pct.png", (scale * 100.0) as u32)), &out, pw, ph);
+        }
+    }
 }

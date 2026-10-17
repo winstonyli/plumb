@@ -296,6 +296,8 @@ pub struct Painter {
     title: Face,
     caption: Face,
     center: IDWriteTextFormat,
+    /// Body-sized text centred in a button: the metric and marked-items labels.
+    middle: IDWriteTextFormat,
     glyph: IDWriteTextFormat,
     /// Shell icons by (extension key, folder, open, large). Device bitmaps, so
     /// they live and die with the painter.
@@ -347,6 +349,7 @@ impl Painter {
             title: face(13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
             caption: face(12.0, normal)?,
             // The symbols `.*` and `\u{00D7}` are centred; they are small, so they are set larger.
+            middle: make(ui, 13.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER)?,
             center: make(ui, 16.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER)?,
             // Windows' icon font (Segoe MDL2 Assets): one glyph per button.
             glyph: make(w!("Segoe MDL2 Assets"), 14.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER)?,
@@ -853,7 +856,7 @@ impl Pen<'_> {
 
     /// `s` centred in `r`, both ways.
     fn centered(&self, s: &str, r: Rect, c: D2D1_COLOR_F) {
-        self.draw_text(s, &self.painter.center, r, c);
+        self.draw_text(s, &self.painter.middle, r, c);
     }
 
     /// The shell's icon for `name` (or for a folder) in a 16-DIP square at `x`, `y`; a small drawn
