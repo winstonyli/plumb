@@ -1,6 +1,6 @@
 # Views: more than drives (design)
 
-Status: design, 2026-10-16. Target 0.9.0 (one release: the refactor, the process view, and "what holds it").
+Status: implemented 2026-10-16 (unreleased). Target 0.9.0 (one release: the refactor, the process view, and "what holds it").
 
 Goal: plumb as a one-stop place to browse and diagnose the machine. The first new view is Processes; disks stay as they are. Later views (startup items, services, registry, network) are out of scope here, but the design must make each one a new `Source`, not a new special case.
 
@@ -78,3 +78,12 @@ End / suspend / priority (risk; read-only first), command line and environment (
 ## Review log
 
 Round 1 (against the code): found that the map and sort read `Tree` vectors directly, so the first draft's `weight` / `sort_key` trait methods would have forced changes in `treemap` and `rows`; replaced by "`size` is the selected metric" plus `Tree::aux`. Found that Restart Manager answers file -> processes only, so the first draft's "Files held by a process via `RmGetList`" was wrong; split into section 4's two directions with the handle-enumeration spike. Still to do in the plan: `TreeBuilder` and `Tree::add_child` must keep `aux` the same length as the other vectors (empty `aux` meaning "none"), and `Tree` equality / serialisation, if any, must ignore it.
+
+## As built (2026-10-16)
+
+- No `Source` trait and no `Drive` to `View` rename (Task 11 stays optional): `ViewKind` carries the per-kind text and sorts, and the Processes view is a slot like a drive.
+- The map colours a leaf process as a file tile and a parent as a folder (`Tree::set_dir`, `treemap::layout_by`), classed by `app::location_class`.
+- The metric (`App.proc_metric`) is swapped with the slot; the metric button is in the status bar, left of the Cancel slot.
+- "Who is using this": holders ride on `trash::Outcome.held_by` (looked up on the delete worker); the menu item answers by `WM_HOLDERS`.
+- Files held: `App::held_sync` / `held_request` / `held_done` with an epoch; the window arms a 300 ms timer from `WM_PAINT`. The list shows six files and "and N more" (no scrolling). It is fetched once per selection and does not refresh while the same process stays selected.
+- Parked: pausing or slowing the poll while minimized; a parent process's own memory is not drawn in the map; the tooltip's start time uses the UTC day; scrolling and refreshing the Files held list.

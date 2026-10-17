@@ -4,6 +4,15 @@ All notable changes to plumb. Format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+- `plumb`: a **Processes** view, after the drives in the picker bar. It lists the running processes as a tree by parent (a snapshot every second while it is on screen; a parked view stops polling), with Memory, % of parent, CPU and I/O columns, sortable, and the same map pane: tile area is the process's memory (or CPU or I/O: a button left of the Cancel slot cycles the metric, and the first column follows it), tile colour is where the executable lives (Windows, Program Files, user profile, elsewhere). The tooltip gives name, PID, numbers, path and start time. Read-only: processes cannot be marked or ended. Idle cost is about 1.5% of one core on the reference machine, mostly the kernel call (see the views spec).
+- `plumb`: a **Files held** pane under the Processes table lists the files the selected process has open (handles duplicated into plumb and named on a worker with a per-handle timeout), once the selection has rested 300 ms. Another user's or protected processes say to run as administrator.
+- `plumb`: **who is using this**. A failed delete now names the program that holds the file ("in use by chrome.exe (1234)", via the Restart Manager), and a file's context menu gains "Who is using this".
+- `plumb-core`: `procs` (the process list reconciled in place from snapshots), `Tree::aux` and `SortKey::Aux`, `Tree::set_dir`, `treemap::layout_by`. `plumb-scan`: `procs`, `handles`, `holders`, a shared `NtQuerySystemInformation` helper. `plumb --selftest-processes` checks the live list, a spawned child, parking, and the Files held pane; `--selftest-delete` now asserts the holder is named.
+
+### Changed
+- `plumb`: the row table's titles, sort keys and last two columns follow the kind of view (`ViewKind`); drive views are unchanged.
+
 ## [0.8.0] - 2026-10-16
 
 ### Added
