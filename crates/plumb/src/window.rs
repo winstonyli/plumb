@@ -1,6 +1,6 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
-use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, MarkState, Parked, TipKey};
+use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, MarkState, Parked, TipKey, ViewKind};
 use crate::{dialog, trash};
 use crate::draw::{Mark, Painter};
 use crate::filter_ui::{byte_at, push_utf16, Edit, Motion};
@@ -77,6 +77,7 @@ const WM_SCAN_DONE: u32 = WM_APP + 1;
 const WM_JOURNAL: u32 = WM_APP + 2;
 const WM_FILTER: u32 = WM_APP + 3;
 const WM_DELETED: u32 = WM_APP + 4;
+const WM_PROCS: u32 = WM_APP + 5;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_PROGRESS: usize = 1;
 const TIMER_LIVE: usize = 2;
@@ -220,13 +221,18 @@ struct Drive {
     watch: Option<Watch>,
     dir_pending: Option<Watcher>,
     dir_failed: Option<String>,
+    /// The Processes view's poller and reconciler.
+    procs: Option<procs::ProcState>,
     /// Order of last use, for eviction.
     used: u64,
 }
 
 impl Drive {
     /// Ends the drive's scan and watches. The watches may be mid-wait, so they stop off the UI thread.
-    fn discard(self) {
+    fn discard(mut self) {
+        if let Some(p) = &mut self.procs {
+            p.stop();
+        }
         self.progress.cancel();
         if self.watch.is_none() && self.dir_pending.is_none() {
             return;
@@ -266,6 +272,8 @@ struct Win {
     dir_pending: Option<Watcher>,
     /// Why the directory watch for the scan in flight could not start.
     dir_failed: Option<String>,
+    /// The Processes view's poller and reconciler, while it is the one on screen.
+    procs: Option<procs::ProcState>,
     policy: RescanPolicy,
     /// When the user last clicked, scrolled or pressed a key.
     last_input: Instant,
@@ -401,7 +409,7 @@ impl Win {
         let (filter_tx, filter_rx) = channel();
         let win = Self {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, progress: Arc::default(), rx: None,
-            background: false, watch: None, dir_pending: None, dir_failed: None, policy: RescanPolicy::default(), last_input: Instant::now(),
+            background: false, watch: None, dir_pending: None, dir_failed: None, procs: None, policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
             parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false,
@@ -613,6 +621,13 @@ impl Win {
     /// that kept running), else a new scan of `root`. The drive on screen is kept, not cancelled.
     /// Choosing the drive already on screen scans it afresh.
     fn open(&mut self, drive: usize, root: String) {
+        if self.app.active == Some(drive) && self.procs.is_some() {
+            // The Processes view has nothing to rescan: look again now.
+            if let Some(p) = &self.procs {
+                p.kick();
+            }
+            return;
+        }
         if self.app.active != Some(drive) {
             self.park_active();
             if self.unpark(drive) {
@@ -638,6 +653,7 @@ impl Win {
         swap(&mut self.watch, &mut d.watch);
         swap(&mut self.dir_pending, &mut d.dir_pending);
         swap(&mut self.dir_failed, &mut d.dir_failed);
+        swap(&mut self.procs, &mut d.procs);
     }
 
     /// Takes the drive on screen away, keeping its tree, scan and watch unless there is nothing
@@ -646,6 +662,9 @@ impl Win {
         let Some(old) = self.app.active.take() else { return };
         let mut d = Drive::default();
         self.swap_drive(&mut d);
+        if let Some(p) = &mut d.procs {
+            p.stop(); // the list is not followed while away
+        }
         if d.app.has_tree() || d.rx.is_some() {
             self.clock += 1;
             d.used = self.clock;
@@ -663,6 +682,9 @@ impl Win {
         let Some(mut d) = self.parked.get_mut(drive).and_then(Option::take) else { return false };
         self.swap_drive(&mut d);
         self.app.active = Some(drive);
+        if let Some(p) = &mut self.procs {
+            p.start(self.hwnd, drive, WM_PROCS);
+        }
         if self.preview.is_some() {
             // The scan kept building its tree while the drive was away: make the rows for it as it is now.
             self.app.preview_installed();
@@ -778,7 +800,9 @@ impl Win {
 
     /// Rescans in the background, keeping the old tree on screen until the new one is ready.
     fn start_rescan(&mut self, drive: usize) {
-        if self.rx.is_none() {
+        if let Some(p) = &self.procs {
+            p.kick();
+        } else if self.rx.is_none() {
             let root = self.app.drives[drive].root.clone();
             self.spawn_scan(drive, root, true);
         }
@@ -800,6 +824,9 @@ impl Win {
     }
 
     fn spawn_scan(&mut self, drive: usize, root: String, background: bool) {
+        if self.app.drives[drive].kind == ViewKind::Processes {
+            return self.start_procs(drive);
+        }
         if self.rx.is_some() {
             // The drive on screen is scanned afresh mid-scan: the old scan is abandoned, not waited for.
             self.progress.cancel();
@@ -847,6 +874,30 @@ impl Win {
         });
         self.sync_timers();
         self.invalidate();
+    }
+
+    /// Puts the Processes view on screen: nothing to scan, the first snapshot builds the tree. Call with nothing on screen.
+    fn start_procs(&mut self, drive: usize) {
+        self.app.begin_scan(drive);
+        let mut st = procs::ProcState::default();
+        st.start(self.hwnd, drive, WM_PROCS);
+        self.procs = Some(st);
+        self.sync_timers();
+        self.invalidate();
+    }
+
+    /// `WM_PROCS`: a snapshot of the processes.
+    fn procs_update(&mut self, snap: procs::Snapshot) {
+        let Some(st) = &mut self.procs else { return };
+        if st.update(&mut self.app, snap) {
+            self.app.fit_chips(&|s| self.painter.text_width(&self.gfx, s));
+        }
+        self.invalidate();
+    }
+
+    /// Whether the Processes view on screen is following the list.
+    pub fn procs_polling(&self) -> bool {
+        self.procs.as_ref().is_some_and(procs::ProcState::polling)
     }
 
     /// (Re)starts the debounce: the scan begins 100 ms after the last keystroke.
@@ -1272,7 +1323,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             }
         }
         Effect::Menu(id) => {
-            let info = with(|w| w.app.tree.as_ref().map(|t| (t.path(id), fmt::display_path(&t.path(id)), w.app.mark_state(id)))).flatten();
+            let info = with(|w| w.app.menu_target(id)).flatten();
             if let Some((raw, p, mark)) = info {
                 context_menu(hwnd, raw, p, mark, at);
             }
@@ -1726,6 +1777,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             LRESULT(0)
         }
+        WM_PROCS => {
+            let snap = unsafe { Box::from_raw(lp.0 as *mut procs::Snapshot) };
+            with(move |w| {
+                let drive = snap.drive;
+                w.in_slot(drive, |w| w.procs_update(*snap));
+            });
+            LRESULT(0)
+        }
         WM_SCAN_DONE => {
             with(|w| {
                 w.in_slot(wp.0, |w| w.scan_done());
@@ -1855,8 +1914,9 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+mod procs;
 mod selftest;
-pub use selftest::{selftest, selftest_delete, selftest_live, selftest_watch};
+pub use selftest::{selftest, selftest_delete, selftest_live, selftest_processes, selftest_watch};
 
 #[cfg(test)]
 mod tests {

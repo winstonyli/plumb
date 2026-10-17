@@ -55,6 +55,20 @@ impl ViewKind {
     }
 }
 
+/// What the Processes view knows about a process besides what its tree holds.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProcInfo {
+    /// The executable's path; `None` when the process could not be opened (another user's, protected).
+    pub path: Option<String>,
+    /// Creation time, FILETIME.
+    pub created: u64,
+}
+
+/// The status line of the Processes view.
+pub fn process_summary(count: usize, used: u64, total: u64) -> String {
+    format!("{count} processes, {} in use of {}", fmt::size(used), fmt::size(total))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DriveInfo {
     /// Where the volume is mounted: a drive root like `C:\`, or a folder like `D:\Mounts\Data\`.
@@ -180,6 +194,7 @@ pub struct Parked {
     preview_paused: bool,
     filter: filter::Filter,
     basket: Basket,
+    proc_info: HashMap<u32, ProcInfo>,
 }
 
 /// What the context menu and `Del` can do with a node.
@@ -276,6 +291,8 @@ pub struct App {
     map_drag: Option<(f32, f32)>,
     filter: filter::Filter,
     basket: Basket,
+    /// The Processes view's extra facts about each process, by pid.
+    proc_info: HashMap<u32, ProcInfo>,
     /// Bumped when the marks change or the shown drive's basket is swapped.
     basket_rev: u64,
     basket_view: BasketView,
@@ -300,7 +317,7 @@ impl App {
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
-            basket: Basket::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
+            basket: Basket::default(), proc_info: HashMap::new(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -357,6 +374,7 @@ impl App {
         swap(&mut self.filter, &mut p.filter);
         swap(&mut self.filter.ui, &mut p.filter.ui); // the query text belongs to the window
         swap(&mut self.basket, &mut p.basket);
+        swap(&mut self.proc_info, &mut p.proc_info);
         self.basket_rev += 1;
         self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable());
         self.set_scroll(self.scroll);
@@ -572,7 +590,53 @@ impl App {
 {}", self.status(), self.adapter)));
         }
         let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map))?)?;
-        Some((TipKey::Tile(t.node, t.kind), tile_tip(self.tree.as_ref()?, t, self.map_now)))
+        let tree = self.tree.as_ref()?;
+        let text = if self.kind() == ViewKind::Processes { self.process_tip(tree, t) } else { tile_tip(tree, t, self.map_now) };
+        Some((TipKey::Tile(t.node, t.kind), text))
+    }
+
+    /// A map tile of the Processes view: name and pid, the numbers, the executable and when it started.
+    fn process_tip(&self, tree: &Tree, t: &Tile) -> String {
+        if t.kind == Kind::Rest {
+            return format!("{} smaller processes, {}", fmt::count(t.count as u64), fmt::size(t.bytes));
+        }
+        let [cpu, io, pid] = tree.aux.get(t.node.idx()).copied().unwrap_or_default();
+        let mut tip = format!(
+            "{}  (PID {pid})\n{} of memory in this and its children, CPU {:.1}%, I/O {}/s",
+            tree.name_string(t.node), fmt::size(t.bytes), cpu as f64 / 10.0, fmt::size(io)
+        );
+        if let Some(info) = self.proc_info.get(&(pid as u32)) {
+            if let Some(path) = &info.path {
+                tip.push('\n');
+                tip.push_str(path);
+            }
+            if info.created > 0 {
+                let day = (info.created / 864_000_000_000) as u32;
+                tip.push_str(&format!("\nstarted {}, {} ago", fmt::date(day), fmt::age(today(), day)));
+            }
+        }
+        tip
+    }
+
+    /// The Processes view took a new snapshot: the facts about each process, the status line, and the chip's memory.
+    pub fn set_procs(&mut self, drive: usize, info: HashMap<u32, ProcInfo>, summary: String, ram: (u64, u64)) {
+        self.proc_info = info;
+        self.summary = summary;
+        if let Some(d) = self.drives.get_mut(drive) {
+            (d.total, d.free) = ram;
+        }
+    }
+
+    /// What the context menu of `id` acts on: the path in the tree's terms (to mark by) and as a file system path
+    /// (to reveal and copy). A process offers its executable; none when that is unknown.
+    pub fn menu_target(&self, id: NodeId) -> Option<(String, String, MarkState)> {
+        let tree = self.tree.as_ref()?;
+        if self.kind() == ViewKind::Processes {
+            let pid = tree.aux.get(id.idx())?[2] as u32;
+            let path = self.proc_info.get(&pid)?.path.clone()?;
+            return Some((String::new(), path, self.mark_state(id)));
+        }
+        Some((tree.path(id), fmt::display_path(&tree.path(id)), self.mark_state(id)))
     }
 
     pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
@@ -800,6 +864,9 @@ impl App {
 
     pub fn mark_state(&self, id: NodeId) -> MarkState {
         let Some(tree) = &self.tree else { return MarkState::Refused("no drive is shown") };
+        if self.kind() == ViewKind::Processes {
+            return MarkState::Refused("processes cannot be deleted");
+        }
         if self.basket.contains(&tree.path(id)) {
             return MarkState::Unmark;
         }
@@ -1039,6 +1106,7 @@ impl App {
     fn message(&self) -> String {
         match &self.scan {
             Scan::Idle => "Select a drive above to scan it.".into(),
+            Scan::Running { drive, .. } if self.drives[*drive].kind == ViewKind::Processes => "Reading processes\u{2026}".into(),
             Scan::Running { drive, dirs, files, bytes } => format!(
                 "Scanning {}  {} folders, {} files, {}",
                 self.drives[*drive].title(), fmt::count(*dirs), fmt::count(*files), fmt::size(*bytes)
@@ -1051,6 +1119,10 @@ impl App {
     /// The selected row's size and (for a folder) item count, led by its full path when `full`; first in the status line.
     fn selection(&self, full: bool) -> Option<String> {
         let (tree, id) = (self.tree.as_ref()?, self.model.as_ref()?.selected()?);
+        if self.kind() == ViewKind::Processes {
+            let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]);
+            return Some(format!("{}  (PID {pid})  {}", tree.name_string(id), fmt::size(tree.subtree_size[id])));
+        }
         let path = fmt::display_path(&tree.path(id));
         let items = if tree.flags[id].contains(NodeFlags::DIR) { format!(", {} items", fmt::count(tree.subtree_files[id] as u64)) } else { String::new() };
         let size = format!("{}{items}", fmt::size(tree.subtree_size[id]));
@@ -1169,6 +1241,46 @@ mod tests {
         let t = b.finish().unwrap();
         assert_eq!(ViewKind::Disk.last_two(&t, f), (fmt::count(1), Some(fmt::date(154_000))));
         assert_eq!(ViewKind::Disk.last_two(&t, r), (fmt::count(1), None), "no date, no fourth cell");
+    }
+
+    /// An app with a Processes view as its third drive, showing one process `ping.exe` (pid 77) under the root.
+    fn process_app() -> (App, NodeId) {
+        use plumb_core::procs::{Metric, Procs, Sample};
+        let mut a = app();
+        a.drives.push(DriveInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
+        a.begin_scan(2);
+        let (mut procs, mut tree) = Procs::new(Metric::Memory);
+        procs.apply(&mut tree, &[Sample { pid: 77, parent: 1, created: 5, name: "ping.exe".into(), memory: 4096, cpu_100ns: 0, io_bytes: 0 }], 0);
+        let id = tree.find("Processes\\ping.exe").expect("the process is under the root");
+        a.finish_scan(tree, "x".into());
+        (a, id)
+    }
+
+    #[test]
+    fn a_process_view_cannot_mark() {
+        let (a, id) = process_app();
+        assert_eq!(a.mark_state(id), MarkState::Refused("processes cannot be deleted"));
+    }
+
+    #[test]
+    fn the_process_status_line_names_the_count_and_memory() {
+        assert_eq!(process_summary(412, 6 << 30, 16 << 30), format!("412 processes, {} in use of {}", fmt::size(6 << 30), fmt::size(16 << 30)));
+        let (mut a, _) = process_app();
+        a.set_procs(2, HashMap::new(), process_summary(1, 4096, 16 << 30), (16 << 30, 3 << 30));
+        assert!(a.status().contains("1 processes, "), "{}", a.status());
+        assert_eq!(a.drives[2].free, 3 << 30, "the chip follows the machine's free memory");
+    }
+
+    #[test]
+    fn a_process_row_names_its_pid_and_its_menu_acts_on_its_executable() {
+        let (mut a, id) = process_app();
+        a.model.as_mut().unwrap().select(id);
+        assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
+        assert!(a.menu_target(id).is_none(), "no executable known: no menu");
+        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0 })]), String::new(), (1, 1));
+        let (raw, path, mark) = a.menu_target(id).unwrap();
+        assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));
+        assert_eq!(mark, MarkState::Refused("processes cannot be deleted"));
     }
 
     #[test]

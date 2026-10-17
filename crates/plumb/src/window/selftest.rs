@@ -546,3 +546,90 @@ pub fn selftest_delete() -> Result<String> {
     STATE.with(|s| *s.borrow_mut() = None);
     out
 }
+
+/// The Processes view in a hidden window: it lists this process with a plausible size, follows a child that starts
+/// and exits, stops polling while another view is on screen, and comes back without a burst of CPU.
+/// Run it with `plumb --selftest-processes`.
+pub fn selftest_processes() -> Result<String> {
+    use windows::Win32::Foundation::E_FAIL;
+    let fail = |m: String| windows::core::Error::new(E_FAIL, m);
+    let dir = std::fs::canonicalize(std::env::temp_dir()).map_err(|e| fail(e.to_string()))?.join(format!("plumb-procs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
+    std::fs::write(dir.join("f.bin"), vec![1u8; 4096]).map_err(|e| fail(e.to_string()))?;
+    let hwnd = create_window()?;
+    let win = Win::new(hwnd, crate::drives::list())?;
+    STATE.with(|s| *s.borrow_mut() = Some(win));
+    unsafe { SetTimer(Some(hwnd), 99, 50, None) }; // wakes the message wait so deadlines are checked
+    let wait = |what: &str, secs: u64, cond: &dyn Fn(&mut Win) -> bool| -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        let mut msg = MSG::default();
+        while with(|w| !cond(w)) == Some(true) {
+            if Instant::now() > deadline {
+                return Err(fail(format!("timed out waiting for: {what}")));
+            }
+            unsafe {
+                if GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+        Ok(())
+    };
+    // The live node of a process, by pid.
+    let node = |w: &Win, pid: u32| -> Option<NodeId> {
+        let t = w.app.tree.as_ref()?;
+        (0..t.len() as u32).map(NodeId).find(|&n| !t.flags[n].contains(plumb_core::NodeFlags::DEAD) && t.aux.get(n.idx()).is_some_and(|a| a[2] == u64::from(pid)) && n.0 != 0)
+    };
+    let parent_pid = |w: &Win, id: NodeId| -> u32 {
+        let t = w.app.tree.as_ref().unwrap();
+        t.aux.get(t.parent[id].idx()).map_or(0, |a| a[2] as u32)
+    };
+    let run = || -> Result<String> {
+        let me = std::process::id();
+        let pi = with(|w| w.app.drives.iter().position(|d| d.kind == ViewKind::Processes)).flatten().ok_or_else(|| fail("no Processes view in the list".into()))?;
+        with(|w| w.start_scan(pi));
+        wait("this process in the list", 20, &|w| node(w, me).is_some_and(|n| w.app.tree.as_ref().unwrap().size[n] > 0))?;
+        let ws = with(|w| w.app.tree.as_ref().unwrap().size[node(w, me).unwrap()]).unwrap_or(0);
+        let status = with(|w| w.app.with_scene(false, |s| s.status.to_string())).unwrap_or_default();
+        if !status.contains(" processes, ") {
+            return Err(fail(format!("status line: {status:?}")));
+        }
+        let mut child = std::process::Command::new("cmd").args(["/c", "ping -n 4 127.0.0.1 >nul"]).spawn().map_err(|e| fail(e.to_string()))?;
+        let cpid = child.id();
+        wait("the child under this process", 5, &|w| node(w, cpid).is_some_and(|n| parent_pid(w, n) == me))?;
+        let _ = child.wait();
+        wait("the child gone", 10, &|w| node(w, cpid).is_none())?;
+        // Another view on screen: the list is not followed, and comes back whole.
+        let z = with(|w| {
+            w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0, kind: ViewKind::Disk });
+            let z = w.app.drives.len() - 1;
+            w.open(z, dir.to_string_lossy().into_owned());
+            z
+        })
+        .unwrap_or(0);
+        wait("the other view's scan", 30, &|w| w.app.tree.is_some() && w.app.active == Some(z) && matches!(w.app.scan, crate::app::Scan::Idle))?;
+        let parked_polling = with(|w| w.parked[pi].as_ref().and_then(|d| d.procs.as_ref()).map(procs::ProcState::polling)).flatten();
+        if parked_polling != Some(false) || with(|w| w.procs_polling()) != Some(false) {
+            return Err(fail(format!("polling while away: {parked_polling:?}")));
+        }
+        with(|w| w.open(pi, String::new()));
+        let before = with(|w| w.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
+        wait("polling again", 10, &|w| w.procs_polling() && w.procs.as_ref().is_some_and(|p| p.updates() > before))?;
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
+        let worst = with(|w| {
+            let t = w.app.tree.as_ref().unwrap();
+            (0..t.len()).filter(|&i| !t.flags[i].contains(plumb_core::NodeFlags::DEAD)).map(|i| t.aux.get(i).map_or(0, |a| a[0])).max().unwrap_or(0)
+        })
+        .unwrap_or(0);
+        if worst > cores * 1500 {
+            return Err(fail(format!("a burst of CPU after returning: {worst} tenths of a percent")));
+        }
+        Ok(format!("this process {} in memory, a child followed, polling stopped while away", fmt::size(ws)))
+    };
+    let out = run();
+    let _ = std::fs::remove_dir_all(&dir);
+    unsafe { DestroyWindow(hwnd)? };
+    STATE.with(|s| *s.borrow_mut() = None);
+    out
+}

@@ -8,11 +8,13 @@ use windows::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOTE, DRIV
 use windows::core::PCWSTR;
 
 /// Fixed, removable and network drives that report a size, in letter order, then volumes that are
-/// only mounted on a folder (no drive letter), by path.
+/// only mounted on a folder (no drive letter), by path; then the Processes view, whose "size" is the machine's memory.
 pub fn list() -> Vec<DriveInfo> {
     let mask = unsafe { GetLogicalDrives() };
     let letters = (0..26u32).filter(|i| mask >> i & 1 == 1).filter_map(|i| probe(format!("{}:\\", (b'A' + i as u8) as char)));
-    letters.chain(folder_mounts().into_iter().filter_map(probe)).collect()
+    let (total, free) = plumb_scan::procs::physical_memory();
+    let processes = DriveInfo { root: "Processes".into(), total, free, kind: crate::app::ViewKind::Processes };
+    letters.chain(folder_mounts().into_iter().filter_map(probe)).chain([processes]).collect()
 }
 
 /// The drive at `root` if it is a kind the picker offers and reports a size.
@@ -64,6 +66,9 @@ mod tests {
     #[test]
     fn lists_the_system_drive_with_sane_sizes() {
         let d = super::list();
+        let (processes, d): (Vec<_>, Vec<_>) = d.into_iter().partition(|d| d.kind == crate::app::ViewKind::Processes);
+        assert_eq!(processes.len(), 1, "one Processes view, after the drives");
+        assert!(processes[0].total > 0 && processes[0].free <= processes[0].total);
         let c = d.iter().find(|d| d.root == "C:\\").expect("C: present");
         assert!(c.total > 0 && c.free <= c.total);
         let letters: Vec<&str> = d.iter().map(|d| d.root.as_str()).filter(|r| r.len() == 3).collect();
