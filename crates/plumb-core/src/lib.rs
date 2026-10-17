@@ -6,6 +6,7 @@ pub(crate) mod bits;
 pub mod filter;
 pub mod mft;
 pub mod node;
+pub mod procs;
 pub mod rect;
 pub mod rows;
 #[doc(hidden)]
