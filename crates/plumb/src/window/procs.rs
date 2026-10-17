@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::Win32::UI::WindowsAndMessaging::{IsWindow, PostMessageW};
 
 /// How often the poller looks.
 const POLL: Duration = Duration::from_secs(1);
@@ -46,7 +46,10 @@ impl Poller {
                     last = Some(now);
                     let boxed = Box::into_raw(Box::new(Snapshot { view, entries, elapsed, ram: physical_memory() }));
                     if unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), msg, WPARAM(0), LPARAM(boxed as isize)) }.is_err() {
-                        drop(unsafe { Box::from_raw(boxed) }); // the window is gone
+                        drop(unsafe { Box::from_raw(boxed) });
+                        if !unsafe { IsWindow(Some(HWND(hwnd as *mut _))) }.as_bool() {
+                            return; // the window is gone; a failed post to a live one (full queue) just loses this snapshot
+                        }
                         return;
                     }
                 }
