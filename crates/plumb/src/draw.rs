@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    ID2D1Bitmap1, ID2D1RenderTarget, ID2D1SolidColorBrush, D2D1_ROUNDED_RECT, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{
@@ -33,9 +33,8 @@ const RESCAN_RESERVED: f32 = RESCAN_W + 24.0;
 fn mix(a: D2D1_COLOR_F, b: D2D1_COLOR_F, f: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r: a.r + (b.r - a.r) * f, g: a.g + (b.g - a.g) * f, b: a.b + (b.b - a.b) * f, a: a.a }
 }
-/// Marked for deletion: the tint of rows, tiles and the basket chip, in both themes.
-const DANGER: D2D1_COLOR_F = D2D1_COLOR_F { r: 0.82, g: 0.25, b: 0.25, a: 1.0 };
-
+/// Corner radius of controls: chips, buttons, the filter box.
+const RADIUS: f32 = 4.0;
 
 fn rgb(hex: u32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -60,10 +59,19 @@ pub struct Theme {
     /// Which of the two palettes this is (a cache key: colours are not comparable).
     pub dark: bool,
     pub bg: D2D1_COLOR_F,
+    /// Chrome strips: the header, the status bar, the Files held pane.
     pub panel: D2D1_COLOR_F,
+    /// A control's resting surface (chips, buttons, the filter box), a step above `bg` and `panel`.
+    pub raised: D2D1_COLOR_F,
+    /// Lines: a control's frame, the edge of a strip, the divider.
+    pub border: D2D1_COLOR_F,
     pub fg: D2D1_COLOR_F,
     pub dim: D2D1_COLOR_F,
     pub accent: D2D1_COLOR_F,
+    /// A control that is on: the accent, faint.
+    pub accent_soft: D2D1_COLOR_F,
+    /// Marked for deletion: the tint of rows, tiles and the basket chip.
+    pub danger: D2D1_COLOR_F,
     pub bar: D2D1_COLOR_F,
     /// The faded part of a bar: how much more it could still grow while scanning.
     pub bound: D2D1_COLOR_F,
@@ -83,16 +91,16 @@ impl Theme {
         if dark {
             Self {
                 dark: true,
-                bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
-                accent: rgb(0x4c9aff), bar: rgb(0x3b5f8f), bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
+                bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), raised: rgb(0x333336), border: rgb(0x454548), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
+                accent: rgb(0x4c9aff), accent_soft: mix(rgb(0x333336), rgb(0x4c9aff), 0.22), danger: rgb(0xd14040), bar: rgb(0x3b5f8f), bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
                 hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
                 class: [0xd0605e, 0xd98c3f, 0x4fae72, 0xb59a3c, 0x5a8fd6, 0x8f6fd0, 0x3fb0b0, 0xb06fa8, 0x7f9fb0, 0xa5b84a, 0x9a8c78].map(rgb),
             }
         } else {
             Self {
                 dark: false,
-                bg: rgb(0xffffff), panel: rgb(0xf0f0f0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
-                accent: rgb(0x0b63ce), bar: rgb(0xb5d1f5), bound: rgb(0xf0b860), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
+                bg: rgb(0xffffff), panel: rgb(0xf0f0f0), raised: rgb(0xf7f7f7), border: rgb(0xd0d0d0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
+                accent: rgb(0x0b63ce), accent_soft: mix(rgb(0xf7f7f7), rgb(0x0b63ce), 0.14), danger: rgb(0xd14040), bar: rgb(0xb5d1f5), bound: rgb(0xf0b860), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
                 hover: rgb(0xedf3fc), folder: rgb(0xd09a2a),
                 class: [0xc4423f, 0xcf7a22, 0x2f9a58, 0xa08420, 0x2f6fc0, 0x7650c0, 0x1f9696, 0x9a4f92, 0x5f8296, 0x7f9a22, 0xb0a28c].map(rgb),
             }
@@ -371,6 +379,23 @@ impl Pen<'_> {
         }
     }
 
+    /// `r` filled with rounded corners.
+    fn round(&self, r: Rect, c: D2D1_COLOR_F) {
+        unsafe {
+            self.brush.SetColor(&c);
+            self.gfx.d2d.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rc(r), radiusX: RADIUS, radiusY: RADIUS }, &self.brush);
+        }
+    }
+
+    /// A one-pixel rounded frame inside `r`.
+    fn outline(&self, r: Rect, c: D2D1_COLOR_F) {
+        let h = Rect { x: r.x + 0.5, y: r.y + 0.5, w: r.w - 1.0, h: r.h - 1.0 };
+        unsafe {
+            self.brush.SetColor(&c);
+            self.gfx.d2d.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rc(h), radiusX: RADIUS - 0.5, radiusY: RADIUS - 0.5 }, &self.brush, 1.0, None);
+        }
+    }
+
     /// `s` shortened to fit `w` by replacing the middle with an ellipsis: a path keeps its drive and its name.
     fn fit_middle(&self, s: &str, w: f32) -> String {
         if self.text_width(s) <= w {
@@ -438,8 +463,8 @@ impl Pen<'_> {
     fn filter_bar(&self, s: &Scene) {
         let (t, l, f) = (&s.theme, &s.layout, &s.filter);
         let b = l.filter_box();
-        self.fill(b, if f.error { t.error } else { t.panel });
-        self.frame(b, if f.focus { t.accent } else { t.select });
+        self.round(b, if f.error { t.error } else { t.raised });
+        self.outline(b, if f.focus { t.accent } else { t.border });
         let inner = Rect { x: b.x + FILTER_PAD, y: b.y, w: (l.filter_clear().x - b.x - FILTER_PAD).max(0.0), h: b.h };
         let head = f.text.get(..f.caret).unwrap_or(f.text);
         let composing = !f.preedit.is_empty();
@@ -474,7 +499,7 @@ impl Pen<'_> {
             }
         }
         let r = l.filter_regex();
-        let c = self.state(r, f.regex, s);
+        let c = self.control(r, s, f.regex, true);
         // The line box centres the text, but `.*` sits low in it (a period on the baseline and a raised star).
         self.centered(".*", Rect { y: r.y - 1.5, ..r }, c);
         self.text(f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
@@ -529,7 +554,7 @@ impl Pen<'_> {
         if let (true, Some((head, lines))) = (l.held, s.held) {
             let pane = l.held_pane();
             self.fill(pane, t.panel);
-            self.fill(Rect { h: 1.0, ..pane }, t.select);
+            self.fill(Rect { h: 1.0, ..pane }, t.border);
             let line = |i: usize| Rect { x: pane.x + 8.0, y: pane.y + i as f32 * ROW_H, w: (pane.w - 16.0).max(0.0), h: ROW_H };
             self.text(head, line(0), t.fg, false);
             for (i, f) in lines.iter().enumerate() {
@@ -539,7 +564,7 @@ impl Pen<'_> {
         self.map(s);
         let st = l.status();
         self.fill(st, t.panel);
-        self.fill(Rect { h: 1.0, ..st }, t.select);
+        self.fill(Rect { h: 1.0, ..st }, t.border);
         // Row 1: the selection, the legend and the buttons; row 2: the scan and live state, the full width.
         let row1 = l.status_top();
         let reserved = MAP_BTN_W + 8.0 + if l.cancel || l.metric { CANCEL_W + 4.0 } else { 0.0 } + if l.metric { METRIC_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
@@ -556,28 +581,34 @@ impl Pen<'_> {
         }
         if let (true, Some(label)) = (l.basket, s.basket) {
             let r = l.basket_chip();
-            self.fill(r, D2D1_COLOR_F { a: 0.8, ..DANGER });
+            self.round(r, t.danger);
             self.centered(label, r, rgb(0xffffff));
         }
         self.toggle_button(l.map_button(), "\u{E80A}", l.map_on, s); // grid
         if l.metric {
             let r = l.metric_button();
-            self.fill(r, s.theme.panel);
-            self.frame(r, s.theme.select);
-            let c = self.state(r, false, s);
+            let c = self.control(r, s, false, false);
             self.centered(crate::app::metric_label(s.metric), r, c);
         }
     }
 
-    /// What a control looks like when it is on (accent frame and text) or the pointer is over it
-    /// (gray frame, bright text), over whatever idle look was drawn first. Returns the text colour.
-    fn state(&self, r: Rect, active: bool, s: &Scene) -> D2D1_COLOR_F {
+    /// A control's surface, the one look chips, buttons and toggles share: raised and framed at rest, lifted with
+    /// a brighter frame under the pointer, accent-tinted while on. A `ghost` control (one inside another surface)
+    /// shows nothing at rest. Returns the text colour.
+    fn control(&self, r: Rect, s: &Scene, active: bool, ghost: bool) -> D2D1_COLOR_F {
         let (t, hot) = (&s.theme, s.hot == Some(r));
-        if active || hot {
-            self.fill(r, t.select);
-            self.frame(r, if active { t.accent } else { t.dim });
+        let (fill, line, text) = if active {
+            (t.accent_soft, t.accent, t.accent)
+        } else if hot {
+            (mix(t.raised, t.fg, 0.10), t.dim, t.fg)
+        } else {
+            (t.raised, t.border, t.dim)
+        };
+        if !ghost || active || hot {
+            self.round(r, fill);
+            self.outline(r, line);
         }
-        if active { t.accent } else if hot { t.fg } else { t.dim }
+        text
     }
 
     /// A framed icon button: quiet until the pointer is over it.
@@ -587,9 +618,7 @@ impl Pen<'_> {
 
     /// An icon button that shows the accent frame while `active`.
     fn toggle_button(&self, r: Rect, glyph: &str, active: bool, s: &Scene) {
-        self.fill(r, s.theme.panel);
-        self.frame(r, s.theme.select);
-        let c = self.state(r, active, s);
+        let c = self.control(r, s, active, false);
         self.draw_text(glyph, &self.painter.glyph, r, c);
     }
 
@@ -649,7 +678,7 @@ impl Pen<'_> {
         let Some(pane) = l.map() else { return };
         let area = pane;
         if let Some(d) = l.map_divider() {
-            self.fill(Rect { x: d.x + d.w / 2.0 - 0.5, w: 1.0, ..d }, t.select);
+            self.fill(Rect { x: d.x + d.w / 2.0 - 0.5, w: 1.0, ..d }, t.border);
         }
         self.fill(pane, if s.view.is_some() { t.bg } else { t.panel }); // blank until there is a tree
         let Some(m) = &s.map else { return };
@@ -666,7 +695,7 @@ impl Pen<'_> {
         for tile in m.marked.iter().filter_map(|&i| m.tiles.get(i)) {
             // Stripes and a light frame, not just a red tint: a tint alone reads as the Video class.
             let r = tile.rect;
-            self.fill(r, D2D1_COLOR_F { a: 0.35, ..DANGER });
+            self.fill(r, D2D1_COLOR_F { a: 0.35, ..t.danger });
             let mut y = r.y + 3.0;
             while y + 2.0 < r.y + r.h {
                 self.fill(Rect { y, h: 2.0, ..r }, D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.3 });
@@ -766,10 +795,11 @@ impl Pen<'_> {
         let t = &s.theme;
         for (i, chip) in s.chips.iter().enumerate() {
             let r = s.layout.chip(i);
-            self.fill(r, t.panel);
             let active = s.active_chip == Some(i);
-            let lit = self.state(r, active, s);
-            self.fill(Rect { x: r.x, y: r.y + r.h - 3.0, w: r.w * chip.used.clamp(0.0, 1.0), h: 3.0 }, t.accent);
+            let lit = self.control(r, s, active, false);
+            // The bars sit inside the rounded frame, clear of its corners.
+            let inner = Rect { x: r.x + RADIUS, w: r.w - 2.0 * RADIUS, ..r };
+            self.fill(Rect { y: r.y + r.h - 4.0, w: inner.w * chip.used.clamp(0.0, 1.0), h: 3.0, ..inner }, t.accent);
             self.text(&chip.label, Rect { x: r.x + 8.0, y: r.y, w: r.w - 16.0, h: r.h - 3.0 }, if active { lit } else { t.fg }, false);
             // A strip along the top edge: neutral for a kept tree, the accent for a running scan.
             let strip = match chip.mark {
@@ -778,7 +808,7 @@ impl Pen<'_> {
                 Mark::Scanning => Some(t.accent),
             };
             if let Some(c) = strip {
-                self.fill(Rect { x: r.x, y: r.y, w: r.w, h: 3.0 }, c);
+                self.fill(Rect { y: r.y + 1.0, h: 3.0, ..inner }, c);
             }
         }
     }
@@ -818,7 +848,7 @@ impl Pen<'_> {
             }
             let marked = !v.basket.is_empty() && v.basket.covers(&v.tree.path(id));
             if marked {
-                self.fill(r, D2D1_COLOR_F { a: 0.6, ..DANGER });
+                self.fill(r, D2D1_COLOR_F { a: 0.6, ..t.danger });
             }
             self.fill(Rect { x: r.x, y: r.y + r.h - 1.0, w: r.w, h: 1.0 }, t.panel); // hairline between rows
             let parent = v.tree.parent[id];

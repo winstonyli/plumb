@@ -185,7 +185,7 @@ fn a_selection_and_an_input_method_composition_are_drawn_in_the_box() {
     assert!(differs(&plain, &composing), "the composition changes the box");
     // The match tint appears inside the box when selected, and nowhere when not.
     let mix = |p: f32, a: f32| to8(p * 0.65 + a * 0.35);
-    let want = [mix(t.panel.r, t.accent.r), mix(t.panel.g, t.accent.g), mix(t.panel.b, t.accent.b)];
+    let want = [mix(t.raised.r, t.accent.r), mix(t.raised.g, t.accent.g), mix(t.raised.b, t.accent.b)];
     let near = |p: [u8; 3]| p.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 3);
     let has = |buf: &[u8]| (b.x as u32 + 9..(b.x + b.w) as u32).any(|x| near(pixel(buf, x, (b.y + b.h / 2.0) as u32)));
     assert!(has(&selected) && !has(&plain));
@@ -209,7 +209,7 @@ fn the_filter_strip_draws_and_an_invalid_pattern_tints_the_box() {
         let bad = render(dark, true);
         let col = |c: windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F| [to8(c.r), to8(c.g), to8(c.b)];
         assert_eq!(pixel(&ok, 3, y), col(t.bg), "bar (dark={dark})");
-        assert_eq!(pixel(&ok, x, y), col(t.panel), "box (dark={dark})");
+        assert_eq!(pixel(&ok, x, y), col(t.raised), "box (dark={dark})");
         assert_eq!(pixel(&bad, x, y), col(t.error), "error tint (dark={dark})");
     }
 }
