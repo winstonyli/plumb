@@ -30,7 +30,7 @@ fn u64_at(b: &[u8], off: usize) -> u64 {
     u64::from_le_bytes(b[off..off + 8].try_into().unwrap())
 }
 
-fn image_path(pid: u32) -> Option<String> {
+pub(crate) fn image_path(pid: u32) -> Option<String> {
     let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
     let mut buf = vec![0u16; 1024];
     let mut n = buf.len() as u32;

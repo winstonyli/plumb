@@ -525,8 +525,8 @@ pub fn selftest_delete() -> Result<String> {
         })
         .flatten()
         .unwrap_or_default();
-        if !tip.contains("not deleted: in use by another program; still marked") {
-            return Err(fail(format!("the failure's reason is not on the status line: {tip:?}")));
+        if !tip.contains("not deleted: in use by plumb.exe (") {
+            return Err(fail(format!("the failure's reason does not name this process on the status line: {tip:?}")));
         }
         drop(held);
         let h = answer_dialogs(vec![crate::dialog::PERMANENT, IDYES.0]);

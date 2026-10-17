@@ -684,14 +684,16 @@ impl App {
 
     /// What the context menu of `id` acts on: the path in the tree's terms (to mark by) and as a file system path
     /// (to reveal and copy). A process offers its executable; none when that is unknown.
-    pub fn menu_target(&self, id: NodeId) -> Option<(String, String, MarkState)> {
+    /// The last element is whether to offer "Who is using this": a file on a drive.
+    pub fn menu_target(&self, id: NodeId) -> Option<(String, String, MarkState, bool)> {
         let tree = self.tree.as_ref()?;
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx())?[2] as u32;
             let path = self.proc_info.get(&pid)?.path.clone()?;
-            return Some((String::new(), path, self.mark_state(id)));
+            return Some((String::new(), path, self.mark_state(id), false));
         }
-        Some((tree.path(id), fmt::display_path(&tree.path(id)), self.mark_state(id)))
+        let file = !tree.flags[id].contains(NodeFlags::DIR);
+        Some((tree.path(id), fmt::display_path(&tree.path(id)), self.mark_state(id), file))
     }
 
     pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
@@ -1357,6 +1359,19 @@ mod tests {
     }
 
     #[test]
+    fn who_is_using_this_is_offered_for_a_file_on_a_drive_only() {
+        let a = scanned();
+        let tree = a.tree.as_ref().unwrap();
+        let dir = a.model.as_ref().unwrap().rows()[0].id;
+        let mut file = dir;
+        while tree.flags[file].contains(NodeFlags::DIR) {
+            file = tree.children(file).next().expect("every folder in the tree has something in it");
+        }
+        assert!(a.menu_target(file).unwrap().3, "a file");
+        assert!(!a.menu_target(dir).unwrap().3, "a folder has no holders to ask about");
+    }
+
+    #[test]
     fn a_process_view_cannot_mark() {
         let (a, id) = process_app();
         assert_eq!(a.mark_state(id), MarkState::Refused("processes cannot be deleted"));
@@ -1378,7 +1393,8 @@ mod tests {
         assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
         assert!(a.menu_target(id).is_none(), "no executable known: no menu");
         a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0 })]), String::new(), (1, 1));
-        let (raw, path, mark) = a.menu_target(id).unwrap();
+        let (raw, path, mark, who) = a.menu_target(id).unwrap();
+        assert!(!who, "a process has no holders to ask about");
         assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));
         assert_eq!(mark, MarkState::Refused("processes cannot be deleted"));
     }

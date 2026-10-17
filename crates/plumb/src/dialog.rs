@@ -1,5 +1,6 @@
 //! The commit dialog: what is about to be deleted, and how.
 use crate::fmt;
+use plumb_scan::holders::Holder;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDYES};
@@ -105,6 +106,34 @@ pub fn failed(owner: HWND, failed: &[(String, String)], total: usize) -> bool {
     unsafe { TaskDialogIndirect(&cfg, Some(&mut id), None, None) }.is_ok() && id == RETRY
 }
 
+/// The words of the "who is using this" answer: the headline, and one `PID  name` line each.
+fn holders_text(path: &str, held_by: &[Holder]) -> (String, String) {
+    let list = held_by.iter().map(|h| format!("{}  {}", h.pid, h.name)).collect::<Vec<_>>().join("\n");
+    let head = match held_by.len() {
+        0 => format!("Nothing is using {path}."),
+        1 => format!("1 program is using {path}."),
+        n => format!("{n} programs are using {path}."),
+    };
+    (head, list)
+}
+
+/// Says which programs hold `path` open (or that none do).
+pub fn holders(owner: HWND, path: &str, held_by: &[Holder]) {
+    let (head, list) = holders_text(path, held_by);
+    let (title, head, list) = (wide("plumb"), wide(&head), wide(&list));
+    let cfg = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        hwndParent: owner,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
+        dwCommonButtons: TDCBF_CLOSE_BUTTON,
+        pszWindowTitle: PCWSTR(title.as_ptr()),
+        pszMainInstruction: PCWSTR(head.as_ptr()),
+        pszContent: if held_by.is_empty() { PCWSTR::null() } else { PCWSTR(list.as_ptr()) },
+        ..Default::default()
+    };
+    let _ = unsafe { TaskDialogIndirect(&cfg, None, None, None) };
+}
+
 /// The second question before a permanent delete.
 pub fn confirm_permanent(owner: HWND, count: usize, bytes: u64) -> bool {
     let title = wide("plumb");
@@ -128,6 +157,14 @@ pub fn confirm_permanent(owner: HWND, count: usize, bytes: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_holders_text_says_nothing_one_or_many() {
+        let h = |name: &str, pid| Holder { pid, name: name.into() };
+        assert_eq!(holders_text("f.txt", &[]), ("Nothing is using f.txt.".into(), String::new()));
+        assert_eq!(holders_text("f.txt", &[h("x.exe", 7)]), ("1 program is using f.txt.".into(), "7  x.exe".into()));
+        assert_eq!(holders_text("f.txt", &[h("x.exe", 7), h("y.exe", 8)]), ("2 programs are using f.txt.".into(), "7  x.exe\n8  y.exe".into()));
+    }
 
     #[test]
     fn the_failure_text_counts_and_lists_each_reason_and_caps_a_long_list() {

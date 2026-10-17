@@ -1,4 +1,5 @@
 //! Deleting paths through the shell: one `IFileOperation` batch to the Recycle Bin or for good, with a verdict per path.
+use plumb_scan::holders::{holders, Holder};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::HWND;
@@ -19,6 +20,8 @@ pub enum Verdict {
 pub struct Outcome {
     pub path: String,
     pub verdict: Verdict,
+    /// For a path another program holds open: who (looked up after the batch, on the same worker).
+    pub held_by: Vec<Holder>,
 }
 
 /// `E_ABORT`: what an item the shell skipped or never reached is reported as.
@@ -140,6 +143,15 @@ pub fn reason(hr: i32) -> String {
     }
 }
 
+/// `reason`, with the programs holding the file named when known: "in use by chrome.exe (1234) and 2 more".
+pub fn with_holders(reason: &str, held_by: &[Holder]) -> String {
+    match held_by {
+        [] => reason.into(),
+        [h] => format!("in use by {} ({})", h.name, h.pid),
+        [h, rest @ ..] => format!("in use by {} ({}) and {} more", h.name, h.pid, rest.len()),
+    }
+}
+
 /// What happened to a path the batch was given: the disk decides. A path still there was not deleted, whatever the
 /// shell reported (it also returns success codes for items the user skipped in its own prompts).
 fn judge(report: Option<i32>, still_there: bool, setup: Option<i32>) -> Verdict {
@@ -169,7 +181,9 @@ pub fn delete(paths: Vec<String>, permanent: bool, owner: isize) -> Vec<Outcome>
             } else {
                 judge(results.get(&path).copied(), std::fs::symlink_metadata(&path).is_ok(), setup.as_ref().map(|e| e.code().0))
             };
-            Outcome { path, verdict }
+            let sharing = matches!(verdict, Verdict::Failed(hr) if hr == COPYENGINE_E_SHARING_VIOLATION_SRC.0);
+            let held_by = if sharing { holders(&path) } else { Vec::new() };
+            Outcome { path, verdict, held_by }
         })
         .collect()
 }
@@ -178,6 +192,14 @@ pub fn delete(paths: Vec<String>, permanent: bool, owner: isize) -> Vec<Outcome>
 mod tests {
     use super::*;
     use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn a_sharing_violation_reason_names_the_holder_when_there_is_one() {
+        let h = |name: &str, pid| Holder { pid, name: name.into() };
+        assert_eq!(with_holders("in use by another program", &[]), "in use by another program");
+        assert_eq!(with_holders("x", &[h("chrome.exe", 1234)]), "in use by chrome.exe (1234)");
+        assert_eq!(with_holders("x", &[h("chrome.exe", 1234), h("a.exe", 1), h("b.exe", 2)]), "in use by chrome.exe (1234) and 2 more");
+    }
 
     /// A fresh directory under `%LOCALAPPDATA%` (long path form, which the shell reports back).
     fn scratch(tag: &str) -> std::path::PathBuf {

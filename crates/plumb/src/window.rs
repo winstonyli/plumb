@@ -78,6 +78,8 @@ const WM_JOURNAL: u32 = WM_APP + 2;
 const WM_FILTER: u32 = WM_APP + 3;
 const WM_DELETED: u32 = WM_APP + 4;
 const WM_PROCS: u32 = WM_APP + 5;
+/// `lparam`: a leaked `Box<(String, Vec<Holder>)>`, the programs holding that file.
+const WM_HOLDERS: u32 = WM_APP + 6;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_PROGRESS: usize = 1;
 const TIMER_LIVE: usize = 2;
@@ -92,6 +94,7 @@ const APPLY_BUDGET: Duration = Duration::from_millis(5);
 const CMD_REVEAL: usize = 1;
 const CMD_COPY: usize = 2;
 const CMD_PROPS: usize = 3;
+const CMD_WHO: usize = 5;
 const CMD_MARK: usize = 4;
 
 struct Scanned {
@@ -743,7 +746,7 @@ impl Win {
         let failed: Vec<(String, String)> = out
             .iter()
             .filter_map(|o| match o.verdict {
-                trash::Verdict::Failed(hr) => Some((o.path.clone(), trash::reason(hr))),
+                trash::Verdict::Failed(hr) => Some((o.path.clone(), trash::with_holders(&trash::reason(hr), &o.held_by))),
                 _ => None,
             })
             .collect();
@@ -1262,12 +1265,15 @@ fn relaunch_elevated(drive: Option<&str>) -> bool {
 
 /// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
 /// because `TrackPopupMenu` runs its own message loop.
-fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, at: (i32, i32)) {
+fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: bool, at: (i32, i32)) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let _ = AppendMenuW(menu, MF_STRING, CMD_REVEAL, w!("Reveal in Explorer"));
         let _ = AppendMenuW(menu, MF_STRING, CMD_COPY, w!("Copy path"));
         let _ = AppendMenuW(menu, MF_STRING, CMD_PROPS, w!("Properties"));
+        if who {
+            let _ = AppendMenuW(menu, MF_STRING, CMD_WHO, w!("Who is using this"));
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         match &mark {
             MarkState::Mark => {
@@ -1289,6 +1295,17 @@ fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, at: (i32
             CMD_REVEAL => reveal(&path),
             CMD_COPY => copy_to_clipboard(hwnd, &path),
             CMD_PROPS => properties(&path),
+            CMD_WHO => {
+                // Restart Manager can be slow: ask on a worker, answer by message.
+                let owner = hwnd.0 as isize;
+                std::thread::spawn(move || {
+                    let found = plumb_scan::holders::holders(&path);
+                    let boxed = Box::into_raw(Box::new((path, found)));
+                    if PostMessageW(Some(HWND(owner as *mut _)), WM_HOLDERS, WPARAM(0), LPARAM(boxed as isize)).is_err() {
+                        drop(Box::from_raw(boxed));
+                    }
+                });
+            }
             CMD_MARK => {
                 with(|w| {
                     w.app.toggle_mark_path(&raw);
@@ -1332,8 +1349,8 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         }
         Effect::Menu(id) => {
             let info = with(|w| w.app.menu_target(id)).flatten();
-            if let Some((raw, p, mark)) = info {
-                context_menu(hwnd, raw, p, mark, at);
+            if let Some((raw, p, mark, who)) = info {
+                context_menu(hwnd, raw, p, mark, who, at);
             }
         }
     }
@@ -1783,6 +1800,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
                 Some(None) => {}
             }
+            LRESULT(0)
+        }
+        WM_HOLDERS => {
+            let (path, found) = *unsafe { Box::from_raw(lp.0 as *mut (String, Vec<plumb_scan::holders::Holder>)) };
+            dialog::holders(hwnd, &path, &found);
             LRESULT(0)
         }
         WM_PROCS => {

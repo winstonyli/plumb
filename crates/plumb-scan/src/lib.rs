@@ -4,6 +4,8 @@ pub mod journal;
 #[cfg(windows)]
 pub mod handles;
 #[cfg(windows)]
+pub mod holders;
+#[cfg(windows)]
 mod nt;
 #[cfg(windows)]
 pub mod procs;

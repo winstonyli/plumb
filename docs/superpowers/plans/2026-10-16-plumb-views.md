@@ -142,7 +142,7 @@ The first Processes render was one grey block: every node was DIR-flagged, so ev
 - [ ] **Step 1: Failing tests:** `layout`: `the_metric_button_sits_left_of_the_map_button_only_for_processes`; `app`: `clicking_the_metric_button_cycles_memory_cpu_io_and_back` (headless with a scripted `ProcTree` installed); `render`: the Processes frame with each metric paints (no panic) and the map's tile areas differ between Memory and CPU for a tree with unequal values.
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement as described. **Step 4:** `cargo test --release --workspace`; screenshot each metric. Commit.
 
-### Task 8: Who is using this file (Restart Manager)
+### Task 8: Who is using this file (Restart Manager) (done: the holders ride on `trash::Outcome.held_by`, looked up on the delete worker, so the `WM_DELETED` payload is unchanged; the menu item answers via `WM_HOLDERS`)
 
 **Files:** Create `crates/plumb-scan/src/holders.rs`; modify `crates/plumb-scan/src/lib.rs`, `crates/plumb-scan/Cargo.toml` (`Win32_System_RestartManager`); modify `crates/plumb/src/window.rs` (`finish_delete` reasons), `crates/plumb/src/trash.rs` (`Outcome` / reason enrichment), `crates/plumb/src/dialog.rs` (nothing: the reason string carries it), `crates/plumb/src/app.rs` (context item).
 
