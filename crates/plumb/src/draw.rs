@@ -135,7 +135,7 @@ impl Theme {
             accent: a,
             accent_soft: mix(self.raised, a, if dark { 0.22 } else { 0.14 }),
             bar: mix(self.bg, a, if dark { 0.5 } else { 0.3 }),
-            select: if dark { self.select } else { mix(self.bg, a, 0.146) },
+            select: mix(self.bg, a, if dark { 0.2 } else { 0.146 }),
             hover: if dark { self.hover } else { mix(self.bg, a, 0.07) },
             ..self
         }
@@ -146,7 +146,7 @@ impl Theme {
             Self {
                 dark: true,
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), raised: rgb(0x333336), border: rgb(0x454548), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
-                accent: DERIVED, accent_soft: DERIVED, danger: rgb(0xd14040), bar: DERIVED, bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
+                accent: DERIVED, accent_soft: DERIVED, danger: rgb(0xd14040), bar: DERIVED, bound: rgb(0xb07a2a), select: DERIVED, error: rgb(0x5c2b2e),
                 hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
                 class: [0xd0605e, 0xd98c3f, 0x4fae72, 0xaa8138, 0x5a8fd6, 0x8f6fd0, 0x3fb0b0, 0xb06fa8, 0x7f9fb0, 0xa5b84a, 0x9a8c78].map(|h| soften(rgb(h), TILE_SOFTEN)),
             }
@@ -615,6 +615,8 @@ impl Pen<'_> {
             self.fill(pane, t.panel);
             self.fill(Rect { h: 1.0, ..pane }, t.border);
             let line = |i: usize| Rect { x: pane.x + 8.0, y: pane.y + i as f32 * ROW_H, w: (pane.w - 16.0).max(0.0), h: ROW_H };
+            // The title is a band of its own, so it reads as a heading over the list.
+            self.fill(Rect { y: pane.y + 1.0, h: ROW_H - 1.0, ..pane }, mix(t.panel, t.fg, 0.06));
             self.text(head, line(0), t.fg, false);
             for (i, f) in lines.iter().enumerate() {
                 self.text(&self.fit_middle(f, line(i + 1).w), line(i + 1), t.dim, false);
