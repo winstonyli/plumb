@@ -48,48 +48,40 @@ impl Known {
     }
 }
 
-pub struct ProcTree {
-    pub tree: Tree,
+/// The bookkeeping that keeps a process [`Tree`] in step with snapshots; the tree itself belongs to the caller (the
+/// app holds it like any other).
+pub struct Procs {
     root: NodeId,
     metric: Metric,
     known: HashMap<(u32, u64), Known>,
 }
 
-impl Default for ProcTree {
-    fn default() -> Self {
-        Self::new()
-    }
+/// The pid of a process node (0 for the synthetic root).
+pub fn pid(tree: &Tree, id: NodeId) -> u32 {
+    tree.aux.get(id.idx()).map_or(0, |a| a[2] as u32)
 }
 
-impl ProcTree {
-    pub fn new() -> Self {
+impl Procs {
+    /// A new, empty process tree (just the synthetic root `Processes`) and the bookkeeping for it.
+    pub fn new(metric: Metric) -> (Self, Tree) {
         let mut b = TreeBuilder::new();
         let root = b.push_str(NodeId::NONE, "Processes", 0, NodeFlags::DIR);
-        Self { tree: b.finish().expect("a one-node tree"), root, metric: Metric::Memory, known: HashMap::new() }
-    }
-
-    pub fn root(&self) -> NodeId {
-        self.root
+        (Self { root, metric, known: HashMap::new() }, b.finish().expect("a one-node tree"))
     }
 
     pub fn metric(&self) -> Metric {
         self.metric
     }
 
-    /// The pid of a process node (0 for the synthetic root).
-    pub fn pid(&self, id: NodeId) -> u32 {
-        self.tree.aux.get(id.idx()).map_or(0, |a| a[2] as u32)
-    }
-
-    /// Brings the tree in line with `samples`; `elapsed_100ns` is the time since the previous call (0 = unknown,
-    /// which gives zero rates).
-    pub fn apply(&mut self, samples: &[Sample], elapsed_100ns: u64) {
+    /// Brings `tree` in line with `samples`; `elapsed_100ns` is the time since the previous call (0 = unknown, which
+    /// gives zero rates).
+    pub fn apply(&mut self, tree: &mut Tree, samples: &[Sample], elapsed_100ns: u64) {
         let seen: HashSet<(u32, u64)> = samples.iter().map(|s| (s.pid, s.created)).collect();
         // 1. Add what is new, under the root; they are moved to their parents below.
         for s in samples {
             if !self.known.contains_key(&(s.pid, s.created)) {
                 let name: Vec<u16> = s.name.encode_utf16().collect();
-                let id = self.tree.add_child(self.root, &name, 0, NodeFlags::DIR);
+                let id = tree.add_child(self.root, &name, 0, NodeFlags::DIR);
                 self.known.insert((s.pid, s.created), Known { id, memory: 0, cpu_tenths: 0, io_rate: 0, prev: (s.cpu_100ns, s.io_bytes) });
             }
         }
@@ -102,15 +94,15 @@ impl ProcTree {
                 .get(&s.parent)
                 .filter(|p| s.pid > 4 && p.pid != s.pid && p.created <= s.created)
                 .map_or(self.root, |p| self.known[&(p.pid, p.created)].id);
-            if self.tree.parent[id] != wanted && !self.tree.reparent(id, wanted) {
-                self.tree.reparent(id, self.root);
+            if tree.parent[id] != wanted && !tree.reparent(id, wanted) {
+                tree.reparent(id, self.root);
             }
         }
         // 3. What exited (its children already moved away).
         let gone: Vec<(u32, u64)> = self.known.keys().filter(|k| !seen.contains(k)).copied().collect();
         for k in gone {
             if let Some(k) = self.known.remove(&k) {
-                self.tree.remove(k.id);
+                tree.remove(k.id);
             }
         }
         // 4. Numbers.
@@ -125,21 +117,21 @@ impl ProcTree {
                 ((u128::from(dcpu) * 1000 / e) as u64, (u128::from(dio) * 10_000_000 / e) as u64)
             };
             k.memory = if s.pid == 0 { 0 } else { s.memory };
-            self.tree.set_aux(k.id, [k.cpu_tenths, k.io_rate, u64::from(s.pid)]);
+            tree.set_aux(k.id, [k.cpu_tenths, k.io_rate, u64::from(s.pid)]);
             let v = k.value(self.metric);
-            if self.tree.size[k.id] != v {
-                self.tree.set_size(k.id, v);
+            if tree.size[k.id] != v {
+                tree.set_size(k.id, v);
             }
         }
     }
 
     /// Switches what `Tree::size` holds; the roll-up follows.
-    pub fn set_metric(&mut self, m: Metric) {
+    pub fn set_metric(&mut self, tree: &mut Tree, m: Metric) {
         self.metric = m;
         for k in self.known.values() {
             let v = k.value(m);
-            if self.tree.size[k.id] != v {
-                self.tree.set_size(k.id, v);
+            if tree.size[k.id] != v {
+                tree.set_size(k.id, v);
             }
         }
     }
@@ -148,6 +140,28 @@ impl ProcTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bookkeeping and its tree together, as the tests drive them.
+    struct ProcTree {
+        sync: Procs,
+        tree: Tree,
+        root: NodeId,
+    }
+    impl ProcTree {
+        fn new() -> Self {
+            let (sync, tree) = Procs::new(Metric::Memory);
+            Self { sync, tree, root: NodeId(0) }
+        }
+        fn apply(&mut self, samples: &[Sample], elapsed: u64) {
+            self.sync.apply(&mut self.tree, samples, elapsed);
+        }
+        fn set_metric(&mut self, m: Metric) {
+            self.sync.set_metric(&mut self.tree, m);
+        }
+        fn pid(&self, id: NodeId) -> u32 {
+            pid(&self.tree, id)
+        }
+    }
 
     fn s(pid: u32, parent: u32, created: u64, name: &str, memory: u64) -> Sample {
         Sample { pid, parent, created, name: name.into(), memory, cpu_100ns: 0, io_bytes: 0 }
