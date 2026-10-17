@@ -1,9 +1,9 @@
 #![cfg(windows)]
 //! Draws a fixed small tree through a WARP (software) device into an offscreen bitmap.
 //! Opens no window and never touches the physical GPU.
-use plumb::draw::{Chip, FilterBar, MapView, Mark, Painter, Scene, Theme, View};
+use plumb::draw::{Chip, FilterBar, MapView, Mark, Painter, Role, Scene, Theme, View};
 use plumb::gfx::Gfx;
-use plumb::layout::{Layout, Rect, CHIP_W};
+use plumb::layout::{Layout, Rect, CHIP_PAD, CHIP_W};
 use plumb_core::basket::Basket;
 use plumb_core::rows::RowModel;
 use plumb_core::synth::kary_builder;
@@ -41,7 +41,7 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
     model.expand(&tree, root);
     model.select(model.rows()[1].id);
     let chips = [Chip { label: "C:  123 GB free".into(), used: 0.7, mark: Mark::Kept }, Chip { label: "D:  1 TB free".into(), used: 0.2, mark: Mark::Scanning }];
-    let layout = Layout { chips: vec![CHIP_W; chips.len()], ..Layout::new(W as f32, H as f32) };
+    let layout = Layout { chips: chip_widths(&gfx, &chips), ..Layout::new(W as f32, H as f32) };
     let found = plumb_core::filter::Query { text: "n1".into(), regex: false }.compile().unwrap();
     let admin = layout.admin_button();
     let scene = Scene {
@@ -65,6 +65,12 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
 }
 
 /// Paints `scene` into an offscreen bitmap and returns its BGRA pixels; `PLUMB_SHOT_DIR=<dir>` keeps them as `<stem>.png`.
+/// Each chip as wide as the app makes it (`App::fit_chips`), so a frame shows labels the way the window does.
+fn chip_widths(gfx: &Gfx, chips: &[Chip]) -> Vec<f32> {
+    let painter = Painter::new(gfx).unwrap();
+    chips.iter().map(|c| (painter.text_width(gfx, Role::Title, &c.label) + 2.0 * CHIP_PAD).ceil()).collect()
+}
+
 fn render_scene(gfx: &Gfx, scene: &Scene, stem: &str) -> Vec<u8> {
     render_on(&Painter::new(gfx).unwrap(), gfx, scene, stem)
 }
@@ -551,7 +557,7 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
     let tiles = map_layout(&tree, root, area, 1.0);
     let classes = plumb_core::treemap::class_bytes(&tiles);
     let chips = [Chip { label: "C:  123 GB".into(), used: 0.7, mark: Mark::None }, Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
-    let layout = Layout { chips: vec![CHIP_W; chips.len()], ..layout };
+    let layout = Layout { chips: chip_widths(&gfx, &chips), ..layout };
     let scene = Scene {
         layout, theme: Theme::new(false), chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot: None,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
@@ -587,7 +593,7 @@ fn the_processes_map_follows_the_metric_button() {
         model.set_sort(&tree, plumb_core::rows::SortKey::Size, true);
         let root = model.rows()[0].id;
         model.expand(&tree, root);
-        let layout = Layout { chips: vec![CHIP_W; 1], map_on: true, ..Layout::new(W as f32, H as f32) }.with_metric(true).with_held(true);
+        let layout = Layout { chips: chip_widths(&gfx, &chips), map_on: true, ..Layout::new(W as f32, H as f32) }.with_metric(true).with_held(true);
         let tiles = plumb_core::treemap::layout(&tree, root, layout.map().unwrap(), 1.0);
         // a process too small to draw folds into the "rest" tile and has none of its own
         areas.push(tiles.iter().find(|t| t.kind != plumb_core::treemap::Kind::Rest && tree.name_string(t.node) == "big-memory.exe").map_or(0.0, |t| t.rect.w * t.rect.h));
