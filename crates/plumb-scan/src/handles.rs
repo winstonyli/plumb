@@ -69,9 +69,21 @@ enum Found {
     Failed,
 }
 
-fn probe(target: isize, value: usize) -> Found {
+/// The target process, closed when the last holder (the caller or a worker still blocked on it) lets go.
+struct Target(HANDLE);
+
+unsafe impl Send for Target {}
+unsafe impl Sync for Target {}
+
+impl Drop for Target {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
+fn probe(target: &Target, value: usize) -> Found {
     let mut dup = HANDLE::default();
-    let ok = unsafe { DuplicateHandle(HANDLE(target as *mut _), HANDLE(value as *mut _), GetCurrentProcess(), &mut dup, 0, false, DUPLICATE_SAME_ACCESS) };
+    let ok = unsafe { DuplicateHandle(target.0, HANDLE(value as *mut _), GetCurrentProcess(), &mut dup, 0, false, DUPLICATE_SAME_ACCESS) };
     if ok.is_err() {
         return Found::NoCopy;
     }
@@ -94,16 +106,20 @@ fn probe(target: isize, value: usize) -> Found {
 /// The files `pid` has open. `per_handle` bounds each question; see the module comment.
 pub fn open_files(pid: u32, per_handle: Duration) -> Result<HandleList, HandleError> {
     let process = unsafe { OpenProcess(PROCESS_DUP_HANDLE, false, pid) }.map_err(|_| HandleError::Denied)?;
-    let target = process.0 as isize;
+    let target = Arc::new(Target(process));
     let values = Arc::new(handle_values(pid)?);
     let next = Arc::new(AtomicUsize::new(0));
+    let current = Arc::new(AtomicUsize::new(0)); // the worker generation allowed to take handles
     let (tx, rx) = channel::<Msg>();
     // One worker at a time asks the questions; a worker that hangs is left behind and a new one takes over, so a
     // late message from an old generation is ignored.
     let spawn = |epoch: usize| {
-        let (values, next, tx) = (values.clone(), next.clone(), tx.clone());
+        let (values, next, tx, current, target) = (values.clone(), next.clone(), tx.clone(), current.clone(), target.clone());
         std::thread::spawn(move || {
             loop {
+                if current.load(Ordering::SeqCst) != epoch {
+                    return; // given up on while it was blocked: its handle was counted as skipped, and a newer worker has the rest
+                }
                 let Some(&v) = values.get(next.fetch_add(1, Ordering::SeqCst)) else {
                     let _ = tx.send(Msg::Finished(epoch));
                     return;
@@ -111,7 +127,7 @@ pub fn open_files(pid: u32, per_handle: Duration) -> Result<HandleList, HandleEr
                 if tx.send(Msg::Started(epoch)).is_err() {
                     return;
                 }
-                if tx.send(Msg::Done(epoch, probe(target, v))).is_err() {
+                if tx.send(Msg::Done(epoch, probe(&target, v))).is_err() {
                     return; // the caller is gone
                 }
             }
@@ -144,13 +160,14 @@ pub fn open_files(pid: u32, per_handle: Duration) -> Result<HandleList, HandleEr
                     break;
                 }
                 epoch += 1;
+                current.store(epoch, Ordering::SeqCst);
                 asking = false;
                 spawn(epoch);
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-    let _ = unsafe { CloseHandle(process) };
+    current.store(usize::MAX, Ordering::SeqCst); // nobody takes more handles for a caller that has left
     list.files.sort_by_key(|f| f.to_lowercase());
     list.files.dedup_by_key(|f| f.to_lowercase());
     Ok(list)

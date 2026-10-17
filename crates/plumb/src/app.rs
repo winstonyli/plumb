@@ -451,9 +451,9 @@ impl App {
         swap(&mut self.basket, &mut p.basket);
         swap(&mut self.proc_info, &mut p.proc_info);
         swap(&mut self.proc_metric, &mut p.proc_metric);
-        self.held = Held::default(); // asked for again once this view's selection is looked at
         self.basket_rev += 1;
-        self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable());
+        let procs = self.kind() == ViewKind::Processes;
+        self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable()).with_metric(procs).with_held(procs);
         self.set_scroll(self.scroll);
         self.map_reset();
     }
@@ -1458,6 +1458,26 @@ mod tests {
         assert_eq!(a.held_request().map(|r| r.1), Some(77));
         assert_eq!(a.held_request(), None, "asked once");
         assert!(a.held_text().unwrap().0.contains("ping.exe (PID 77)"), "{:?}", a.held_text());
+    }
+
+    #[test]
+    fn a_lookup_in_flight_survives_slot_swaps_and_epochs_never_repeat() {
+        let (mut a, id) = process_app();
+        a.model.as_mut().unwrap().select(id);
+        a.held_sync();
+        let (first, _) = a.held_request().unwrap();
+        let mut other = Parked::default();
+        a.swap_slot(&mut other); // a parked drive's journal event swaps a slot in and out
+        a.swap_slot(&mut other);
+        a.held_done(first, Ok(HandleList { files: vec!["C:/x".into()], skipped: 0 }));
+        assert!(a.held_text().unwrap().0.ends_with("1 file"), "{:?}", a.held_text());
+        let root = a.model.as_ref().unwrap().rows()[0].id;
+        a.model.as_mut().unwrap().select(root);
+        a.held_sync();
+        a.model.as_mut().unwrap().select(id);
+        a.held_sync();
+        let (second, _) = a.held_request().unwrap();
+        assert!(second > first, "{second} after {first}");
     }
 
     #[test]

@@ -131,6 +131,10 @@ impl Procs {
                 let e = u128::from(elapsed_100ns);
                 ((u128::from(dcpu) * 1000 / e) as u64, (u128::from(dio) * 10_000_000 / e) as u64)
             };
+            // System Idle is not a program: its time is the machine's idle time, so it weighs nothing.
+            if s.pid == 0 {
+                (k.cpu_tenths, k.io_rate) = (0, 0);
+            }
             k.memory = if s.pid == 0 { 0 } else { s.memory };
             tree.set_aux(k.id, [k.cpu_tenths, k.io_rate, u64::from(s.pid)]);
             let v = k.value(self.metric);
@@ -195,6 +199,20 @@ mod tests {
     fn parent_pid(p: &ProcTree, pid: u32) -> u32 {
         let par = p.tree.parent[node(p, pid)];
         if par == p.root { 0 } else { p.pid(par) }
+    }
+
+    #[test]
+    fn system_idle_weighs_nothing_under_any_metric() {
+        let idle = |cpu| Sample { cpu_100ns: cpu, io_bytes: cpu, ..s(0, 0, 1, "System Idle Process", 1 << 20) };
+        let busy = |cpu| Sample { cpu_100ns: cpu, io_bytes: cpu, ..s(10, 1, 2, "a.exe", 100) };
+        for m in [Metric::Memory, Metric::Cpu, Metric::Io] {
+            let mut p = ProcTree::new();
+            p.set_metric(m);
+            p.apply(&[idle(0), busy(0)], 0);
+            p.apply(&[idle(15_000_000), busy(1_000_000)], 10_000_000);
+            assert_eq!(p.tree.size[node(&p, 0)], 0, "{m:?}");
+            assert!(p.tree.size[node(&p, 10)] > 0, "{m:?}");
+        }
     }
 
     #[test]

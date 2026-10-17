@@ -1189,7 +1189,7 @@ impl Win {
 
     fn selected_path(&self) -> Option<String> {
         let id = self.app.model.as_ref()?.selected()?;
-        Some(fmt::display_path(&self.app.tree.as_ref()?.path(id)))
+        self.app.menu_target(id).map(|t| t.1)
     }
 }
 

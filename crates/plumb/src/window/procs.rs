@@ -66,6 +66,12 @@ impl Poller {
     }
 }
 
+impl Drop for Poller {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 /// What a Processes view keeps besides the app's tree: the reconciler, and the poller while it is on screen.
 #[derive(Default)]
 pub struct ProcState {
