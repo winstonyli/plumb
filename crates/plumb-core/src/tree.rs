@@ -24,6 +24,9 @@ pub struct Tree {
     pub flags: Vec<NodeFlags>,
     /// Last-write day (days since 1601-01-01); `None` when unknown.
     pub mtime: Vec<Option<NonZeroU32>>,
+    /// Three more numbers per node for a source to sort by (the process view: CPU, I/O, PID). Empty for a tree
+    /// that never called [`Tree::set_aux`]; otherwise one entry per node.
+    pub aux: Vec<[u64; 3]>,
     pub roots: Vec<NodeId>,
     name_off: Vec<u32>,
     name_len: Vec<u16>,
@@ -145,6 +148,9 @@ impl Tree {
         self.subtree_files.push(files);
         self.flags.push(flags);
         self.mtime.push(None);
+        if !self.aux.is_empty() {
+            self.aux.push([0; 3]);
+        }
         self.name_off.push(self.pool.len() as u32);
         self.name_len.push(name.len() as u16);
         self.pool.extend_from_slice(name);
@@ -156,6 +162,19 @@ impl Tree {
 
     pub fn set_mtime(&mut self, id: NodeId, m: Option<NonZeroU32>) {
         self.mtime[id] = m;
+    }
+
+    /// Sets the node's aux numbers (the first call gives every node zeros), and counts the node as changed so a
+    /// sort by them repositions it.
+    pub fn set_aux(&mut self, id: NodeId, v: [u64; 3]) {
+        if self.aux.is_empty() {
+            self.aux = vec![[0; 3]; self.parent.len()];
+        }
+        if self.aux[id.idx()] != v {
+            self.aux[id.idx()] = v;
+            self.touched.push(id);
+            self.rev += 1;
+        }
     }
 
     /// Makes room for `nodes` more nodes and `pool_units` more name units, so a tree that is
@@ -379,6 +398,7 @@ impl TreeBuilder {
             subtree_files,
             flags: self.flags,
             mtime: self.mtime,
+            aux: Vec::new(),
             roots,
             name_off: self.name_off,
             name_len: self.name_len,
@@ -393,6 +413,23 @@ impl TreeBuilder {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn aux_is_empty_for_a_built_tree_and_set_aux_fills_it_in_step_with_the_nodes() {
+        let mut t = sample();
+        assert!(t.aux.is_empty());
+        t.set_aux(NodeId(1), [5, 6, 7]);
+        assert_eq!(t.aux.len(), t.len());
+        assert_eq!(t.aux[1], [5, 6, 7]);
+        let n = t.add_child(NodeId(0), &[b'x' as u16], 1, NodeFlags::empty());
+        assert_eq!(t.aux.len(), t.len());
+        assert_eq!(t.aux[n.idx()], [0; 3]);
+        t.take_touched();
+        t.set_aux(NodeId(1), [5, 6, 7]);
+        assert!(t.touched().is_empty(), "an unchanged value is not a change");
+        t.set_aux(NodeId(1), [5, 6, 8]);
+        assert_eq!(t.touched(), &[NodeId(1)]);
+    }
 
     #[test]
     fn find_resolves_below_a_root_named_by_a_whole_folder_path() {

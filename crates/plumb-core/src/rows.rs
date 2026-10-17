@@ -13,6 +13,8 @@ pub enum SortKey {
     Items,
     /// Last-write day of the node itself; unknown sorts as oldest.
     Modified,
+    /// Slot `i` of [`Tree::aux`] (a source's own numbers); a tree without them sorts as all zeros.
+    Aux(u8),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -182,6 +184,10 @@ impl RowModel {
             SortKey::Items => tree.subtree_files[a].cmp(&tree.subtree_files[b]),
             SortKey::Modified => tree.mtime[a].cmp(&tree.mtime[b]),
             SortKey::Name => cmp_names(tree.name(a), tree.name(b)),
+            SortKey::Aux(i) => {
+                let at = |n: NodeId| tree.aux.get(n.idx()).map_or(0, |v| v[i as usize]);
+                at(a).cmp(&at(b))
+            }
         };
         (if self.desc { o.reverse() } else { o }).then(a.cmp(&b))
     }
@@ -415,6 +421,23 @@ mod tests {
             want.sort_unstable_by(|&a, &b| m.order(tree, a, b));
             assert_eq!(&list[..], &want[..], "stale sorted list for parent {p:?}");
         }
+    }
+
+    #[test]
+    fn sorting_by_aux_orders_by_that_slot_and_follows_a_change() {
+        // children of C: big(1), mid(4), small(6)
+        let mut tree = sample();
+        for (id, v) in [(1, 3), (4, 1), (6, 2)] {
+            tree.set_aux(NodeId(id), [v, 0, 0]);
+        }
+        let mut m = RowModel::new(&tree);
+        m.expand(&tree, NodeId(0));
+        m.set_sort(&tree, SortKey::Aux(0), true);
+        assert_eq!(ids(&m), vec![0, 1, 6, 4]);
+        m.refresh(&mut tree, 0);
+        tree.set_aux(NodeId(4), [9, 0, 0]);
+        m.refresh(&mut tree, 0);
+        assert_eq!(ids(&m), vec![0, 4, 1, 6]);
     }
 
     #[test]
