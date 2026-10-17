@@ -35,6 +35,9 @@ pub const FILTER_CLEAR_W: f32 = 24.0;
 pub const CANCEL_W: f32 = 32.0;
 pub const BASKET_W: f32 = 190.0;
 pub const METRIC_W: f32 = 72.0;
+/// The Processes view's "Files held" pane: a title line and this many file lines.
+pub const HELD_ROWS: usize = 6;
+pub const HELD_H: f32 = (HELD_ROWS as f32 + 1.0) * ROW_H;
 pub const INDENT: f32 = 20.0;
 /// Starting widths of the Size, % of parent, Items and Modified columns; Name takes the rest.
 pub const COL_W: [f32; 4] = [100.0, 130.0, 90.0, 96.0];
@@ -91,6 +94,8 @@ pub struct Layout {
     pub basket: bool,
     /// The metric button sits in the status bar, left of where Cancel shows (the Processes view).
     pub metric: bool,
+    /// The "Files held" pane sits under the rows (the Processes view).
+    pub held: bool,
     /// Widths of the Size, % of parent, Items and Modified columns.
     pub col_w: [f32; 4],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
@@ -103,7 +108,7 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false, basket: false, metric: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
+        Self { w, h, banner: false, cancel: false, basket: false, metric: false, held: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
     /// Sets the width of column `c` (1..=4), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
@@ -162,6 +167,15 @@ impl Layout {
     pub fn metric_button(&self) -> Rect {
         let c = self.cancel_button();
         Rect { x: (c.x - 4.0 - METRIC_W).max(0.0), w: METRIC_W, ..c }
+    }
+
+    pub fn with_held(&self, held: bool) -> Self {
+        Self { held, ..self.clone() }
+    }
+
+    /// The "Files held" pane, across the tree's width above the status bar.
+    pub fn held_pane(&self) -> Rect {
+        Rect { x: 0.0, y: (self.h - STATUS_H - HELD_H).max(0.0), w: self.tree_w(), h: HELD_H }
     }
 
     pub fn with_metric(&self, metric: bool) -> Self {
@@ -253,7 +267,8 @@ impl Layout {
     /// Row area, excluding the header and scrollbar.
     pub fn rows_area(&self) -> Rect {
         let y = self.top() + HEADER_H;
-        Rect { x: 0.0, y, w: (self.tree_w() - SCROLLBAR_W).max(0.0), h: (self.h - y - STATUS_H).max(0.0) }
+        let pane = if self.held { HELD_H } else { 0.0 };
+        Rect { x: 0.0, y, w: (self.tree_w() - SCROLLBAR_W).max(0.0), h: (self.h - y - STATUS_H - pane).max(0.0) }
     }
 
     pub fn scrollbar(&self) -> Rect {
@@ -402,6 +417,16 @@ mod tests {
         assert_eq!((b.y, b.h), (l.map_button().y, l.map_button().h), "in the status bar's first row");
         assert_ne!(l.hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton, "not shown by default");
         assert_eq!(l.with_metric(true).hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton);
+    }
+
+    #[test]
+    fn the_held_pane_takes_height_from_the_rows_only_when_shown() {
+        let l = Layout::new(900.0, 600.0);
+        let h = l.with_held(true);
+        assert_eq!(l.rows_area().h - h.rows_area().h, HELD_H);
+        let (rows, pane) = (h.rows_area(), h.held_pane());
+        assert_eq!(rows.y + rows.h, pane.y, "the pane starts where the rows end");
+        assert_eq!(pane.y + pane.h + STATUS_H, 600.0, "and ends at the status bar");
     }
 
     #[test]

@@ -185,6 +185,8 @@ pub struct Scene<'a> {
     pub kind: crate::app::ViewKind,
     /// What a Processes view's first number column and map hold.
     pub metric: plumb_core::procs::Metric,
+    /// The "Files held" pane's title and file lines, when it is shown.
+    pub held: Option<(&'a str, &'a [String])>,
     /// `None` while no tree exists; `message` is shown instead.
     pub view: Option<View<'a>>,
     /// Shown in the empty row area (idle, failed, cancelled).
@@ -522,6 +524,16 @@ impl Pen<'_> {
             None => {
                 let a = l.rows_area();
                 self.text(s.message, Rect { x: a.x + 16.0, y: a.y + 16.0, w: a.w - 32.0, h: ROW_H }, t.dim, false);
+            }
+        }
+        if let (true, Some((head, lines))) = (l.held, s.held) {
+            let pane = l.held_pane();
+            self.fill(pane, t.panel);
+            self.fill(Rect { h: 1.0, ..pane }, t.select);
+            let line = |i: usize| Rect { x: pane.x + 8.0, y: pane.y + i as f32 * ROW_H, w: (pane.w - 16.0).max(0.0), h: ROW_H };
+            self.text(head, line(0), t.fg, false);
+            for (i, f) in lines.iter().enumerate() {
+                self.text(&self.fit_middle(f, line(i + 1).w), line(i + 1), t.dim, false);
             }
         }
         self.map(s);

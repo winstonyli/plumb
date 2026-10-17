@@ -154,7 +154,7 @@ The first Processes render was one grey block: every node was DIR-flagged, so ev
 - [ ] **Step 2:** run → FAIL. **Step 3: Implement** `RmStartSession` (key buffer `[u16; CCH_RM_SESSION_KEY + 1]`), `RmRegisterResources(session, Some(&[path]), None, None)`, `RmGetList` with the usual two-call size dance (`ERROR_MORE_DATA` → allocate `needed` entries, retry up to 3 times because the list can grow between calls), map `RM_PROCESS_INFO.Process.dwProcessId` and `strAppName`, `RmEndSession` in a drop guard. **Step 4:** `cargo test --release --workspace`; `plumb.exe --selftest-delete`. Commit.
 - [ ] **Step 5:** Context item "Who is using this" (tree row and map tile menus, disk views only): runs `holders` on a worker and shows a TaskDialog list (`PID  name`), or "Nothing is using it." Test: headless `app` test that the item is offered for a file in a disk view and absent in Processes. Commit.
 
-### Task 9: Files a process holds (only if Task 1's gate passed)
+### Task 9: Files a process holds (done; ruling: the list shows the first six files and "and N more" instead of scrolling; `held_poll` runs from WM_PAINT so the timer follows every selection change)
 
 **Files:** Modify `crates/plumb/src/app.rs` (selected process → pane state), `crates/plumb/src/layout.rs` (a bottom pane below the rows in Processes, hidden otherwise), `crates/plumb/src/draw.rs`, `crates/plumb/src/window.rs` (worker call and message `WM_HANDLES`).
 

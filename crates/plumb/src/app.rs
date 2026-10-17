@@ -11,6 +11,7 @@ use crate::state::{MapState, Sort, State};
 use plumb_core::basket::{self, Basket};
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::procs::Metric;
+use plumb_scan::handles::{HandleError, HandleList};
 use plumb_core::treemap::{self, Class, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
 use std::collections::{HashMap, HashSet};
@@ -85,6 +86,25 @@ pub fn metric_label(m: Metric) -> &'static str {
         Metric::Cpu => "CPU",
         Metric::Io => "I/O",
     }
+}
+
+/// Where the "Files held" list for the selected process stands.
+#[derive(Default)]
+enum HeldState {
+    #[default]
+    Idle,
+    /// Selected; waiting for the selection to settle before asking.
+    Waiting,
+    Loading,
+    Ready(Result<HandleList, HandleError>),
+}
+
+#[derive(Default)]
+struct Held {
+    pid: Option<u32>,
+    /// Bumped whenever the process of interest changes, so a late answer for another one is recognised.
+    epoch: u64,
+    state: HeldState,
 }
 
 /// What the Processes view knows about a process besides what its tree holds.
@@ -346,6 +366,8 @@ pub struct App {
     proc_info: HashMap<u32, ProcInfo>,
     /// What the Processes view's map and Memory column weigh by.
     pub proc_metric: Metric,
+    /// The files the selected process holds (see `held_sync`).
+    held: Held,
     /// Bumped when the marks change or the shown drive's basket is swapped.
     basket_rev: u64,
     basket_view: BasketView,
@@ -370,7 +392,7 @@ impl App {
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
-            basket: Basket::default(), proc_info: HashMap::new(), proc_metric: Metric::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
+            basket: Basket::default(), proc_info: HashMap::new(), proc_metric: Metric::default(), held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -429,6 +451,7 @@ impl App {
         swap(&mut self.basket, &mut p.basket);
         swap(&mut self.proc_info, &mut p.proc_info);
         swap(&mut self.proc_metric, &mut p.proc_metric);
+        self.held = Held::default(); // asked for again once this view's selection is looked at
         self.basket_rev += 1;
         self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable());
         self.set_scroll(self.scroll);
@@ -696,6 +719,58 @@ impl App {
         Some((tree.path(id), fmt::display_path(&tree.path(id)), self.mark_state(id), file))
     }
 
+    /// Notes which process is selected, for the "Files held" pane. True when it changed to one that should be
+    /// asked about once the selection settles (the window starts its timer).
+    pub fn held_sync(&mut self) -> bool {
+        let want = (self.kind() == ViewKind::Processes)
+            .then(|| {
+                let (tree, id) = (self.tree.as_ref()?, self.model.as_ref()?.selected()?);
+                tree.aux.get(id.idx()).map(|a| a[2] as u32).filter(|&p| p != 0)
+            })
+            .flatten();
+        if want == self.held.pid {
+            return false;
+        }
+        self.held = Held { pid: want, epoch: self.held.epoch + 1, state: if want.is_some() { HeldState::Waiting } else { HeldState::Idle } };
+        want.is_some()
+    }
+
+    /// The settle timer fired: the (generation, pid) to look up, once, if the selection is still waiting.
+    pub fn held_request(&mut self) -> Option<(u64, u32)> {
+        let pid = self.held.pid.filter(|_| matches!(self.held.state, HeldState::Waiting))?;
+        self.held.state = HeldState::Loading;
+        Some((self.held.epoch, pid))
+    }
+
+    /// The lookup finished; an answer for a process no longer selected is dropped.
+    pub fn held_done(&mut self, epoch: u64, result: Result<HandleList, HandleError>) {
+        if epoch == self.held.epoch && matches!(self.held.state, HeldState::Loading) {
+            self.held.state = HeldState::Ready(result);
+        }
+    }
+
+    /// The pane's title line and file lines (the first `HELD_ROWS`, then a count of the rest).
+    fn held_text(&self) -> Option<(String, Vec<String>)> {
+        let pid = self.held.pid?;
+        let name = self.tree.as_ref().zip(self.model.as_ref().and_then(|m| m.selected())).map_or_else(String::new, |(t, id)| t.name_string(id).to_string());
+        let head = |what: String| format!("Files held by {name} (PID {pid}): {what}");
+        Some(match &self.held.state {
+            HeldState::Idle | HeldState::Waiting | HeldState::Loading => (head("reading\u{2026}".into()), Vec::new()),
+            HeldState::Ready(Err(HandleError::Denied)) => (head("run as administrator to see the files of this process".into()), Vec::new()),
+            HeldState::Ready(Err(HandleError::Query(_))) => (head("the system handle list could not be read".into()), Vec::new()),
+            HeldState::Ready(Ok(list)) => {
+                let n = list.files.len();
+                let skipped = if list.skipped > 0 { format!(", {} not readable", list.skipped) } else { String::new() };
+                let mut lines: Vec<String> = list.files.iter().take(crate::layout::HELD_ROWS).cloned().collect();
+                if n > crate::layout::HELD_ROWS {
+                    lines.pop();
+                    lines.push(format!("and {} more", n - crate::layout::HELD_ROWS + 1));
+                }
+                (head(format!("{n} file{}{skipped}", if n == 1 { "" } else { "s" })), lines)
+            }
+        })
+    }
+
     pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
         self.tip_target(x, y).map(|t| t.1)
     }
@@ -719,6 +794,7 @@ impl App {
         self.layout.cancel = self.cancelable();
         self.layout.basket = self.basket_active();
         self.layout.metric = self.kind() == ViewKind::Processes;
+        self.layout.held = self.kind() == ViewKind::Processes;
         if matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
             self.notice.clear();
             self.notice_detail.clear();
@@ -1260,6 +1336,7 @@ impl App {
     pub fn with_scene<R>(&self, dark: bool, f: impl FnOnce(&Scene) -> R) -> R {
         let chips = self.chips();
         let (message, status, banner) = (self.message(), self.state_line(), self.banner());
+        let held = self.held_text();
         let selection = self.selection(true).unwrap_or_default();
         let basket_label = self.basket_label();
         let running = matches!(self.scan, Scan::Running { .. });
@@ -1270,8 +1347,9 @@ impl App {
         };
         let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
         f(&Scene {
-            layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes),
+            layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes).with_held(self.kind() == ViewKind::Processes),
             metric: self.proc_metric,
+            held: held.as_ref().map(|(h, l)| (h.as_str(), l.as_slice())),
             theme: Theme::new(dark),
             chips: &chips,
             active_chip: self.active,
@@ -1369,6 +1447,50 @@ mod tests {
         }
         assert!(a.menu_target(file).unwrap().3, "a file");
         assert!(!a.menu_target(dir).unwrap().3, "a folder has no holders to ask about");
+    }
+
+    #[test]
+    fn selecting_a_process_requests_its_files_once_it_settles() {
+        let (mut a, id) = process_app();
+        a.model.as_mut().unwrap().select(id);
+        assert!(a.held_sync(), "the selection is a process");
+        assert!(!a.held_sync(), "the same selection again changes nothing");
+        assert_eq!(a.held_request().map(|r| r.1), Some(77));
+        assert_eq!(a.held_request(), None, "asked once");
+        assert!(a.held_text().unwrap().0.contains("ping.exe (PID 77)"), "{:?}", a.held_text());
+    }
+
+    #[test]
+    fn a_stale_result_for_a_previous_selection_is_ignored() {
+        let (mut a, id) = process_app();
+        a.model.as_mut().unwrap().select(id);
+        a.held_sync();
+        let (old, _) = a.held_request().unwrap();
+        let root = a.model.as_ref().unwrap().rows()[0].id;
+        a.model.as_mut().unwrap().select(root); // the root: pid 0, no pane
+        assert!(!a.held_sync());
+        assert!(a.held_text().is_none());
+        a.held_done(old, Ok(HandleList { files: vec!["C:/x".into()], skipped: 0 }));
+        assert!(a.held_text().is_none(), "the answer for the old selection is dropped");
+    }
+
+    #[test]
+    fn the_pane_reports_files_denied_and_overflow() {
+        let (mut a, id) = process_app();
+        a.model.as_mut().unwrap().select(id);
+        a.held_sync();
+        let (g, _) = a.held_request().unwrap();
+        a.held_done(g, Err(HandleError::Denied));
+        assert!(a.held_text().unwrap().0.contains("run as administrator"));
+        let (mut a, id) = process_app();
+        a.model.as_mut().unwrap().select(id);
+        a.held_sync();
+        let (g, _) = a.held_request().unwrap();
+        let files: Vec<String> = (0..9).map(|i| format!("C:/f{i}")).collect();
+        a.held_done(g, Ok(HandleList { files, skipped: 2 }));
+        let (head, lines) = a.held_text().unwrap();
+        assert!(head.ends_with("9 files, 2 not readable"), "{head}");
+        assert_eq!((lines.len(), lines.last().unwrap().as_str()), (crate::layout::HELD_ROWS, "and 4 more"));
     }
 
     #[test]

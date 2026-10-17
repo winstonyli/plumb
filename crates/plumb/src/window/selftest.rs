@@ -616,6 +616,17 @@ pub fn selftest_processes() -> Result<String> {
         with(|w| w.open(pi, String::new()));
         let before = with(|w| w.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
         wait("polling again", 10, &|w| w.procs_polling() && w.procs.as_ref().is_some_and(|p| p.updates() > before))?;
+        // The pane lists a file this process holds open once its row has rested selected.
+        let held = std::fs::File::open(dir.join("f.bin")).map_err(|e| fail(e.to_string()))?;
+        with(|w| {
+            let id = node(w, me).unwrap();
+            let (t, m) = (w.app.tree.as_ref().unwrap(), w.app.model.as_mut().unwrap());
+            m.reveal(t, id);
+            m.select(id);
+            w.held_poll();
+        });
+        wait("the files this process holds", 10, &|w| w.app.with_scene(false, |s| s.held.is_some_and(|(_, lines)| lines.iter().any(|l| l.ends_with("f.bin")))))?;
+        drop(held);
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
         let worst = with(|w| {
             let t = w.app.tree.as_ref().unwrap();
@@ -637,7 +648,7 @@ pub fn selftest_processes() -> Result<String> {
             }
             None => String::new(),
         };
-        Ok(format!("this process {} in memory, a child followed, polling stopped while away{idle}", fmt::size(ws)))
+        Ok(format!("this process {} in memory, a child followed, polling stopped while away, the Files held pane lists a file we hold{idle}", fmt::size(ws)))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);

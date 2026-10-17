@@ -80,12 +80,19 @@ const WM_DELETED: u32 = WM_APP + 4;
 const WM_PROCS: u32 = WM_APP + 5;
 /// `lparam`: a leaked `Box<(String, Vec<Holder>)>`, the programs holding that file.
 const WM_HOLDERS: u32 = WM_APP + 6;
+/// `lparam`: a leaked `Box<(u64, Result<HandleList, HandleError>)>`, the generation asked for and its answer.
+const WM_HELD: u32 = WM_APP + 7;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_PROGRESS: usize = 1;
 const TIMER_LIVE: usize = 2;
 const TIMER_FILTER: usize = 3;
 const FILTER_DEBOUNCE_MS: u32 = 100;
 const TIMER_PREVIEW: usize = 4;
+/// The selection must rest this long before the files its process holds are looked up.
+const TIMER_HELD: usize = 5;
+const HELD_SETTLE_MS: u32 = 300;
+/// How long one handle may take to name before it is skipped.
+const HELD_PER_HANDLE: Duration = Duration::from_millis(500);
 const PREVIEW_TICK_MS: u32 = 15;
 /// Messages the partial-tree queue holds: about 150 ms of an MFT scan.
 const PREVIEW_QUEUE: usize = 200_000;
@@ -898,6 +905,13 @@ impl Win {
         self.invalidate();
     }
 
+    /// The Processes view's "Files held" pane follows the selection: look it up once the selection has rested.
+    fn held_poll(&mut self) {
+        if self.app.held_sync() {
+            unsafe { SetTimer(Some(self.hwnd), TIMER_HELD, HELD_SETTLE_MS, None) };
+        }
+    }
+
     /// Whether the Processes view on screen is following the list.
     pub fn procs_polling(&self) -> bool {
         self.procs.as_ref().is_some_and(procs::ProcState::polling)
@@ -1561,7 +1575,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_NCHITTEST => hit_test(hwnd, lp),
         WM_PAINT => {
             let _ = unsafe { ValidateRect(Some(hwnd), None) };
-            with(|w| w.render());
+            with(|w| {
+                w.held_poll();
+                w.render();
+            });
             LRESULT(0)
         }
         // Black in the extended frame is what DWM turns into glass (the backdrop under the caption buttons).
@@ -1755,6 +1772,27 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             } else if let Some(input) = key_input(wp.0 as u16, ctrl, hwnd) {
                 send(hwnd, input);
             }
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_HELD => {
+            let _ = unsafe { KillTimer(Some(hwnd), TIMER_HELD) };
+            if let Some(Some((epoch, pid))) = with(|w| w.app.held_request()) {
+                let owner = hwnd.0 as isize;
+                std::thread::spawn(move || {
+                    let boxed = Box::into_raw(Box::new((epoch, plumb_scan::handles::open_files(pid, HELD_PER_HANDLE))));
+                    if unsafe { PostMessageW(Some(HWND(owner as *mut _)), WM_HELD, WPARAM(0), LPARAM(boxed as isize)) }.is_err() {
+                        drop(unsafe { Box::from_raw(boxed) });
+                    }
+                });
+            }
+            LRESULT(0)
+        }
+        WM_HELD => {
+            let (epoch, result) = *unsafe { Box::from_raw(lp.0 as *mut (u64, std::result::Result<plumb_scan::handles::HandleList, plumb_scan::handles::HandleError>)) };
+            with(|w| {
+                w.app.held_done(epoch, result);
+                w.invalidate();
+            });
             LRESULT(0)
         }
         WM_TIMER if wp.0 == TIMER_FILTER => {
