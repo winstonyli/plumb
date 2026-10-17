@@ -25,7 +25,7 @@ fn probe(root: String) -> Option<DriveInfo> {
     }
     let (mut free, mut total) = (0u64, 0u64);
     unsafe { GetDiskFreeSpaceExW(wide, Some(&mut free), Some(&mut total), None) }.ok()?;
-    (total > 0).then_some(DriveInfo { root, total, free })
+    (total > 0).then_some(DriveInfo { root, total, free, kind: crate::app::ViewKind::Disk })
 }
 
 /// One mount-point folder (with trailing backslash) for each volume that has no drive letter, sorted.

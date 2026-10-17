@@ -38,7 +38,7 @@ pub fn selftest() -> Result<String> {
     pump_until("the scan", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle | crate::app::Scan::Failed(_)))?;
     // A scan that finishes in a kept drive must leave the preview of the drive on screen alone.
     with(|w| {
-        w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0 });
+        w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0, kind: crate::app::ViewKind::Disk });
         let other = w.app.drives.len() - 1;
         let root = dir.to_string_lossy().into_owned();
         w.spawn_scan(0, root.clone(), false);
@@ -266,7 +266,7 @@ pub fn selftest_watch() -> Result<String> {
         // A second drive (made up; its root is another temp directory). Leaving the first keeps its
         // tree and watch: a change made while it is away shows when it comes back, with no rescan.
         let j = with(|w| {
-            w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0 });
+            w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0, kind: crate::app::ViewKind::Disk });
             w.app.drives.len() - 1
         })
         .ok_or_else(|| fail("no window".into()))?;

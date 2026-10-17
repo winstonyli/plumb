@@ -181,6 +181,8 @@ pub struct Scene<'a> {
     pub hot: Option<Rect>,
     /// Header column the rows are sorted by, and whether descending.
     pub sort: (usize, bool),
+    /// Which kind of view the rows belong to: the header titles and the last two columns follow it.
+    pub kind: crate::app::ViewKind,
     /// `None` while no tree exists; `message` is shown instead.
     pub view: Option<View<'a>>,
     /// Shown in the empty row area (idle, failed, cancelled).
@@ -500,11 +502,11 @@ impl Pen<'_> {
         let h = l.header();
         self.fill(h, t.panel);
         let partial = s.view.as_ref().is_some_and(|v| v.partial);
-        for (c, name) in ["Name", "Size", "% of parent", "Items", "Modified"].iter().enumerate() {
+        for (c, name) in s.kind.titles().iter().enumerate() {
             let (x, w) = l.column(c);
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
             // During a scan the sums are what has been found so far: "at least", said once here.
-            let atleast = if partial && (c == 1 || c == 3) { "\u{2265} " } else { "" };
+            let atleast = if partial && (c == 1 || (c == 3 && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
             let (label, color) = (format!("{atleast}{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
             self.text(&label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4));
             if c > 0 {
@@ -813,7 +815,7 @@ impl Pen<'_> {
             let ax = nx + 8.0 + indent;
             let open = dir && v.model.is_expanded(id);
             let iy = r.y + (r.h - 16.0) / 2.0;
-            self.icon(ax, iy, &name, dir, open, t);
+            self.icon(ax, iy, &name, dir && s.kind == crate::app::ViewKind::Disk, open, t);
             if dir && v.tree.has_children(id) {
                 self.chevron(ax + 8.0, iy + 9.0, open);
             }
@@ -842,11 +844,12 @@ impl Pen<'_> {
                 }
             }
             self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
+            let (third, fourth) = s.kind.last_two(v.tree, id);
             let (ix, iw) = l.column(3);
-            self.text(&fmt::count(v.tree.subtree_files[id] as u64), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
-            if let Some(day) = v.tree.mtime[id] {
+            self.text(&third, Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
+            if let Some(text) = fourth {
                 let (mx, mw) = l.column(4);
-                self.text(&fmt::date(day.get()), Rect { x: mx, y: r.y, w: mw - 8.0, h: r.h }, side, true);
+                self.text(&text, Rect { x: mx, y: r.y, w: mw - 8.0, h: r.h }, side, true);
             }
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {

@@ -16,12 +16,52 @@ use std::collections::{HashMap, HashSet};
 
 pub use filter::FilterJob;
 
+/// What a chip opens. The row table is the same for every kind (Name plus four columns); the kind supplies the
+/// titles, what each column sorts by, and the text of the last two.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ViewKind {
+    /// A drive or mount point: the file tree.
+    #[default]
+    Disk,
+    /// The running processes: a tree by parent, sized by memory.
+    Processes,
+}
+
+impl ViewKind {
+    pub fn titles(self) -> [&'static str; 5] {
+        match self {
+            ViewKind::Disk => ["Name", "Size", "% of parent", "Items", "Modified"],
+            ViewKind::Processes => ["Name", "Memory", "% of parent", "CPU", "I/O"],
+        }
+    }
+
+    /// The sort each header column stands for; "% of parent" orders by size.
+    pub fn sort_key(self, col: usize) -> SortKey {
+        match self {
+            ViewKind::Disk => [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified][col],
+            ViewKind::Processes => [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Aux(0), SortKey::Aux(1)][col],
+        }
+    }
+
+    /// The text of the last two columns for `id`; the second is `None` when the node has nothing to show there.
+    pub fn last_two(self, tree: &Tree, id: NodeId) -> (String, Option<String>) {
+        match self {
+            ViewKind::Disk => (fmt::count(tree.subtree_files[id] as u64), tree.mtime[id].map(|d| fmt::date(d.get()))),
+            ViewKind::Processes => {
+                let [cpu, io, _] = tree.aux.get(id.idx()).copied().unwrap_or_default();
+                (format!("{:.1}%", cpu as f64 / 10.0), Some(format!("{}/s", fmt::size(io))))
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DriveInfo {
     /// Where the volume is mounted: a drive root like `C:\`, or a folder like `D:\Mounts\Data\`.
     pub root: String,
     pub total: u64,
     pub free: u64,
+    pub kind: ViewKind,
 }
 
 impl DriveInfo {
@@ -124,11 +164,6 @@ fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
 fn today() -> u32 {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     plumb_core::age::day_from_unix(secs)
-}
-
-/// The sort each header column stands for; "% of parent" orders by size.
-fn sort_key(col: usize) -> SortKey {
-    [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified][col]
 }
 
 /// What the app holds for one drive, kept while another drive is on screen. The filter box text
@@ -276,6 +311,11 @@ impl App {
     }
 
     /// The header column the rows are sorted by, and whether descending.
+    /// The kind of the view on screen (a drive when none is).
+    pub fn kind(&self) -> ViewKind {
+        self.active.and_then(|i| self.drives.get(i)).map_or(ViewKind::Disk, |d| d.kind)
+    }
+
     pub fn sort(&self) -> (usize, bool) {
         self.sort
     }
@@ -364,7 +404,7 @@ impl App {
         self.filter_reset();
         self.map_reset();
         let mut model = RowModel::new(&tree);
-        model.set_sort(&tree, sort_key(self.sort.0), self.sort.1);
+        model.set_sort(&tree, self.kind().sort_key(self.sort.0), self.sort.1);
         if let Some(r) = model.rows().first().map(|r| r.id) {
             model.expand(&tree, r);
             model.select(r);
@@ -386,10 +426,11 @@ impl App {
         self.map_reset();
         self.scroll = 0;
         self.model = None;
+        let key = self.kind().sort_key(self.sort.0);
         let Some(tree) = &mut self.tree else { return };
         tree.take_touched(); // the model is built from the tree as it is now
         let mut model = RowModel::new(tree);
-        model.set_sort(tree, sort_key(self.sort.0), self.sort.1);
+        model.set_sort(tree, key, self.sort.1);
         if let Some(r) = model.rows().first().map(|r| r.id) {
             model.expand(tree, r);
             model.select(r);
@@ -410,7 +451,7 @@ impl App {
         };
         self.map_reset();
         let Some(snap) = kept else { return self.finish_scan(tree, summary) };
-        let (model, scroll) = snap.apply(&tree, sort_key(self.sort.0), self.sort.1, self.layout.rows_visible());
+        let (model, scroll) = snap.apply(&tree, self.kind().sort_key(self.sort.0), self.sort.1, self.layout.rows_visible());
         self.tree = Some(tree);
         self.model = Some(model);
         self.scroll = scroll;
@@ -943,8 +984,9 @@ impl App {
             Hit::Header(c) => {
                 let desc = if self.sort.0 == c { !self.sort.1 } else { c != 0 };
                 self.sort = (c, desc);
+                let kind = self.kind();
                 if let (Some(t), Some(m)) = (&self.tree, &mut self.model) {
-                    m.set_sort(t, sort_key(c), desc);
+                    m.set_sort(t, kind.sort_key(c), desc);
                     self.scroll = 0;
                 }
             }
@@ -1094,6 +1136,7 @@ impl App {
             chips: &chips,
             active_chip: self.active,
             sort: self.sort,
+            kind: self.kind(),
             admin: self.can_elevate.then(|| self.layout.admin_button()),
             hot: self.hot,
             view,
@@ -1113,13 +1156,39 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_disk_view_keeps_its_titles_sorts_and_last_two_columns() {
+        assert_eq!(ViewKind::Disk.titles(), ["Name", "Size", "% of parent", "Items", "Modified"]);
+        let keys: Vec<_> = (0..5).map(|c| ViewKind::Disk.sort_key(c)).collect();
+        assert_eq!(keys, [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified]);
+        let mut b = plumb_core::TreeBuilder::new();
+        let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
+        let f = b.push_str(r, "f", 5, plumb_core::NodeFlags::empty());
+        b.set_mtime(f, std::num::NonZeroU32::new(154_000));
+        let t = b.finish().unwrap();
+        assert_eq!(ViewKind::Disk.last_two(&t, f), (fmt::count(1), Some(fmt::date(154_000))));
+        assert_eq!(ViewKind::Disk.last_two(&t, r), (fmt::count(1), None), "no date, no fourth cell");
+    }
+
+    #[test]
+    fn a_process_view_sorts_cpu_and_io_by_aux_and_shows_them_as_rates() {
+        assert_eq!(ViewKind::Processes.titles()[3..], ["CPU", "I/O"]);
+        assert_eq!((ViewKind::Processes.sort_key(3), ViewKind::Processes.sort_key(4)), (SortKey::Aux(0), SortKey::Aux(1)));
+        let mut b = plumb_core::TreeBuilder::new();
+        let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
+        let mut t = b.finish().unwrap();
+        assert_eq!(ViewKind::Processes.last_two(&t, r), ("0.0%".into(), Some(format!("{}/s", fmt::size(0)))), "no aux yet");
+        t.set_aux(r, [255, 2048, 99]);
+        assert_eq!(ViewKind::Processes.last_two(&t, r), ("25.5%".into(), Some(format!("{}/s", fmt::size(2048)))));
+    }
     use crate::layout::{CHIP_GAP, CHIP_W, HEADER_H, PICKER_H, ROW_H};
     use plumb_core::synth::kary_builder;
 
     fn app() -> App {
         let drives = vec![
-            DriveInfo { root: "C:\\".into(), total: 1000, free: 250 },
-            DriveInfo { root: "D:\\".into(), total: 1000, free: 900 },
+            DriveInfo { root: "C:\\".into(), total: 1000, free: 250, kind: ViewKind::Disk },
+            DriveInfo { root: "D:\\".into(), total: 1000, free: 900, kind: ViewKind::Disk },
         ];
         App::new(Layout::new(800.0, 600.0), drives, "test".into())
     }
@@ -1145,7 +1214,7 @@ mod tests {
 
     #[test]
     fn a_mount_point_is_titled_by_its_path_and_chipped_by_its_name() {
-        let drive = |root: &str| DriveInfo { root: root.into(), total: 1, free: 1 };
+        let drive = |root: &str| DriveInfo { root: root.into(), total: 1, free: 1, kind: ViewKind::Disk };
         let (c, m) = (drive("C:\\"), drive("D:\\Mounts\\Data\\"));
         assert_eq!((c.title(), c.chip_name()), ("C:", "C:"));
         assert_eq!((m.title(), m.chip_name()), ("D:\\Mounts\\Data", "Data"));
