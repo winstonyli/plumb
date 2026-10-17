@@ -87,3 +87,5 @@ Round 1 (against the code): found that the map and sort read `Tree` vectors dire
 - "Who is using this": holders ride on `trash::Outcome.held_by` (looked up on the delete worker); the menu item answers by `WM_HOLDERS`.
 - Files held: `App::held_sync` / `held_request` / `held_done` with an epoch; the window arms a 300 ms timer from `WM_PAINT`. The list shows six files and "and N more" (no scrolling). It is fetched once per selection and does not refresh while the same process stays selected.
 - Parked: pausing or slowing the poll while minimized; a parent process's own memory is not drawn in the map; the tooltip's start time uses the UTC day; scrolling and refreshing the Files held list.
+
+Parked items from this spec now live in `PARKED.md` (repo root); that file is the one list.
