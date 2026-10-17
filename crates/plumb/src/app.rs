@@ -330,6 +330,8 @@ pub struct App {
     pub summary: String,
     /// Show the "Run as administrator" button (the process is not elevated).
     pub can_elevate: bool,
+    /// The system's accent colour (`0xRRGGBB`), set by the window; `None` keeps plumb's blue.
+    pub accent: Option<u32>,
     pub adapter: String,
     pub live: LiveStatus,
     /// A background rescan is running while the old tree stays on screen.
@@ -389,7 +391,7 @@ impl App {
         let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
             layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
-            can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
+            can_elevate: false, accent: None, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
             basket: Basket::default(), proc_info: HashMap::new(), proc_metric: Metric::default(), held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
@@ -1350,7 +1352,7 @@ impl App {
             layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes).with_held(self.kind() == ViewKind::Processes),
             metric: self.proc_metric,
             held: held.as_ref().map(|(h, l)| (h.as_str(), l.as_slice())),
-            theme: Theme::new(dark),
+            theme: Theme::with_accent(dark, self.accent),
             chips: &chips,
             active_chip: self.active,
             sort: self.sort,

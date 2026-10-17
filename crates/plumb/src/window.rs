@@ -330,6 +330,18 @@ fn with<R>(f: impl FnOnce(&mut Win) -> R) -> Option<R> {
     STATE.with(|s| s.try_borrow_mut().ok().and_then(|mut s| s.as_mut().map(f)))
 }
 
+/// The accent colour the user chose in Windows settings, as `0xRRGGBB`.
+fn system_accent() -> Option<u32> {
+    let mut v = 0u32;
+    let mut n = 4u32;
+    unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, w!("Software\\Microsoft\\Windows\\DWM"), w!("AccentColor"), RRF_RT_REG_DWORD, None, Some(&mut v as *mut u32 as *mut _), Some(&mut n))
+    }
+    .is_ok()
+    // The value is 0xAABBGGRR.
+    .then_some((v & 0xff) << 16 | (v >> 8 & 0xff) << 8 | (v >> 16 & 0xff))
+}
+
 fn dark_mode() -> bool {
     let mut v = 1u32;
     let mut n = 4u32;
@@ -419,6 +431,7 @@ impl Win {
         app.can_elevate = !plumb_scan::volume::is_elevated();
         app.fit_chips(&|s| painter.text_width(&gfx, s));
         let dark = dark_mode();
+        app.accent = system_accent();
         let (filter_tx, filter_rx) = channel();
         let win = Self {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, progress: Arc::default(), rx: None,
@@ -1878,11 +1891,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             });
             LRESULT(0)
         }
-        WM_SETTINGCHANGE => {
+        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
             with(|w| {
-                let dark = dark_mode();
-                if dark != w.dark {
+                let (dark, accent) = (dark_mode(), system_accent());
+                if dark != w.dark || accent != w.app.accent {
                     w.dark = dark;
+                    w.app.accent = accent;
                     w.apply_title_theme();
                     w.invalidate();
                 }

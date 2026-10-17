@@ -97,13 +97,56 @@ pub struct Theme {
     pub class: [D2D1_COLOR_F; Class::COUNT],
 }
 
+/// Contrast ratio of two colours (WCAG): 1 for the same colour, 21 for black on white.
+fn contrast(a: D2D1_COLOR_F, b: D2D1_COLOR_F) -> f32 {
+    let lum = |c: D2D1_COLOR_F| {
+        let lin = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    };
+    let (x, y) = (lum(a) + 0.05, lum(b) + 0.05);
+    x.max(y) / x.min(y)
+}
+
+/// The colour of a field `accented` derives from the accent.
+const DERIVED: D2D1_COLOR_F = D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
+
 impl Theme {
     pub fn new(dark: bool) -> Self {
+        Self::with_accent(dark, None)
+    }
+
+    /// The palette with the system's accent colour (`0xRRGGBB`) in place of plumb's own blue, if there is one.
+    pub fn with_accent(dark: bool, accent: Option<u32>) -> Self {
+        Self::base(dark).accented(accent.map(rgb).unwrap_or(if dark { rgb(0x4c9aff) } else { rgb(0x0b63ce) }))
+    }
+
+    /// Everything that follows the accent: the accent itself (nudged toward the text colour until it reads as text
+    /// on a control's surface), the on-state tint, the share bar and, in light, the selection and hover tints.
+    fn accented(self, accent: D2D1_COLOR_F) -> Self {
+        let mut a = accent;
+        for _ in 0..24 {
+            if contrast(a, self.raised) >= 4.5 {
+                break;
+            }
+            a = mix(a, self.fg, 0.08);
+        }
+        let dark = self.dark;
+        Self {
+            accent: a,
+            accent_soft: mix(self.raised, a, if dark { 0.22 } else { 0.14 }),
+            bar: mix(self.bg, a, if dark { 0.5 } else { 0.3 }),
+            select: if dark { self.select } else { mix(self.bg, a, 0.146) },
+            hover: if dark { self.hover } else { mix(self.bg, a, 0.07) },
+            ..self
+        }
+    }
+
+    fn base(dark: bool) -> Self {
         if dark {
             Self {
                 dark: true,
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), raised: rgb(0x333336), border: rgb(0x454548), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
-                accent: rgb(0x4c9aff), accent_soft: mix(rgb(0x333336), rgb(0x4c9aff), 0.22), danger: rgb(0xd14040), bar: rgb(0x3b5f8f), bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
+                accent: DERIVED, accent_soft: DERIVED, danger: rgb(0xd14040), bar: DERIVED, bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
                 hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
                 class: [0xd0605e, 0xd98c3f, 0x4fae72, 0xaa8138, 0x5a8fd6, 0x8f6fd0, 0x3fb0b0, 0xb06fa8, 0x7f9fb0, 0xa5b84a, 0x9a8c78].map(|h| soften(rgb(h), TILE_SOFTEN)),
             }
@@ -111,8 +154,8 @@ impl Theme {
             Self {
                 dark: false,
                 bg: rgb(0xffffff), panel: rgb(0xf0f0f0), raised: rgb(0xf7f7f7), border: rgb(0xd0d0d0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
-                accent: rgb(0x0b63ce), accent_soft: mix(rgb(0xf7f7f7), rgb(0x0b63ce), 0.14), danger: rgb(0xd14040), bar: rgb(0xb5d1f5), bound: rgb(0xf0b860), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
-                hover: rgb(0xedf3fc), folder: rgb(0xd09a2a),
+                accent: DERIVED, accent_soft: DERIVED, danger: rgb(0xd14040), bar: DERIVED, bound: rgb(0xf0b860), select: DERIVED, error: rgb(0xfbd5d8),
+                hover: DERIVED, folder: rgb(0xd09a2a),
                 class: [0xc4423f, 0xcf7a22, 0x2f9a58, 0xbaad25, 0x2f6fc0, 0x7650c0, 0x1f9696, 0x9a4f92, 0x5f8296, 0x7f9a22, 0xb0a28c].map(|h| soften(rgb(h), TILE_SOFTEN)),
             }
         }
@@ -924,5 +967,27 @@ impl Pen<'_> {
             self.fill(l.scrollbar(), t.panel);
             self.fill(Rect { x: th.x + 2.0, w: th.w - 4.0, ..th }, t.dim);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn any_system_accent_reads_as_text_on_a_control_in_both_themes() {
+        for dark in [false, true] {
+            for hex in [0x000000, 0xffffff, 0xffb900, 0x0063b1, 0x7a7574, 0x4c9aff] {
+                let t = Theme::with_accent(dark, Some(hex));
+                assert!(contrast(t.accent, t.raised) >= 4.5, "{dark} {hex:06x} is {}", contrast(t.accent, t.raised));
+            }
+        }
+    }
+
+    #[test]
+    fn without_a_system_accent_plumbs_own_blue_stays() {
+        let t = Theme::new(false);
+        assert!((t.accent.b - rgb(0x0b63ce).b).abs() < 0.02 && t.accent.r < 0.1);
+        assert!(Theme::new(true).dark);
     }
 }
