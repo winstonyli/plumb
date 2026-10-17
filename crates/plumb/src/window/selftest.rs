@@ -36,29 +36,29 @@ pub fn selftest() -> Result<String> {
     STATE.with(|s| *s.borrow_mut() = Some(win));
     with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned(), false));
     pump_until("the scan", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle | crate::app::Scan::Failed(_)))?;
-    // A scan that finishes in a kept drive must leave the preview of the drive on screen alone.
+    // A scan that finishes in a kept view must leave the preview of the view on screen alone.
     with(|w| {
-        w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0, kind: crate::app::ViewKind::Disk });
-        let other = w.app.drives.len() - 1;
+        w.app.views.push(ViewInfo { root: "Z:\\".into(), total: 0, free: 0, kind: crate::app::ViewKind::Disk });
+        let other = w.app.views.len() - 1;
         let root = dir.to_string_lossy().into_owned();
         w.spawn_scan(0, root.clone(), false);
-        w.open(other, root); // keeps drive 0's scan going and scans `other`
+        w.open(other, root); // keeps view 0's scan going and scans `other`
         w.progress.cancel();
-        w.rx = None; // so `other` never finishes by itself: only drive 0 does
+        w.rx = None; // so `other` never finishes by itself: only view 0 does
         w.preview = Some(Preview::new(preview_channel(4).1));
     });
-    pump_until("the kept drive's scan", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.app.has_tree()))?;
+    pump_until("the kept view's scan", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.app.has_tree()))?;
     if with(|w| w.preview.take().is_some()) != Some(true) {
-        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a kept drive's scan ending dropped the preview of the drive on screen"));
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a kept view's scan ending dropped the preview of the view on screen"));
     }
-    with(|w| w.open(0, dir.to_string_lossy().into_owned())); // back to drive 0 and its finished tree
-    // A scan keeps building its tree while another drive is shown, and the drive comes back with it.
+    with(|w| w.open(0, dir.to_string_lossy().into_owned())); // back to view 0 and its finished tree
+    // A scan keeps building its tree while another view is shown, and the view comes back with it.
     let big = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
     with(|w| w.spawn_scan(0, big.clone(), false));
     let started = |w: &mut Win| matches!(w.app.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200) && w.app.tree.is_some();
     pump_until("the big scan to get going", 60, &started)?;
     let other = with(|w| {
-        w.open(w.app.drives.len() - 1, dir.to_string_lossy().into_owned());
+        w.open(w.app.views.len() - 1, dir.to_string_lossy().into_owned());
         w.parked.first().and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).map_or(0, |t| t.len())
     })
     .unwrap_or(0);
@@ -67,15 +67,15 @@ pub fn selftest() -> Result<String> {
     with(|w| w.open(0, big.clone()));
     let back = with(|w| w.app.tree.is_some() && w.app.model.is_some() && (w.preview.is_some() || matches!(w.app.scan, crate::app::Scan::Idle)));
     if back != Some(true) {
-        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "coming back to a drive that is still scanning showed no tree"));
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "coming back to a view that is still scanning showed no tree"));
     }
     with(|w| w.cancel_scan());
     with(|w| w.open(0, dir.to_string_lossy().into_owned()));
     pump_until("the small scan again", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle) && w.app.tree.is_some())?;
-    // A scan that finishes while another drive is shown comes back finished: a tree, rows, no scan.
+    // A scan that finishes while another view is shown comes back finished: a tree, rows, no scan.
     with(|w| {
         w.spawn_scan(0, dir.to_string_lossy().into_owned(), false);
-        w.open(w.app.drives.len() - 1, dir.to_string_lossy().into_owned());
+        w.open(w.app.views.len() - 1, dir.to_string_lossy().into_owned());
     });
     pump_until("the parked scan to finish", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.rx.is_none() && d.app.has_tree()))?;
     with(|w| w.open(0, dir.to_string_lossy().into_owned()));
@@ -112,7 +112,7 @@ pub fn selftest() -> Result<String> {
     out.expect("state present")
 }
 
-/// Elevated only. Scans the temp directory's drive in a hidden window, then creates, grows,
+/// Elevated only. Scans the temp directory's view in a hidden window, then creates, grows,
 /// renames and deletes a file there and checks the tree follows each change within 20 s.
 /// Returns a one-line summary. Run it from an administrator prompt: `plumb --selftest-live`.
 pub fn selftest_live() -> Result<String> {
@@ -154,8 +154,8 @@ pub fn selftest_live() -> Result<String> {
     };
     let dir_gone = |w: &mut Win| w.app.tree.as_ref().is_some_and(|t| t.find(&shown).is_none());
     let run = || -> Result<String> {
-        let i = with(|w| w.app.drives.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
-        let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;
+        let i = with(|w| w.app.views.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
+        let i = i.ok_or_else(|| fail(format!("view {letter}: is not in the view list")))?;
         with(|w| w.spawn_scan(i, format!("{letter}:\\"), false));
         wait("the scan and the journal reader", 180, &|w| w.watch.is_some())?;
         std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
@@ -229,8 +229,8 @@ pub fn selftest_watch() -> Result<String> {
     let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
     let run = || -> Result<String> {
         let io = |e: std::io::Error| fail(e.to_string());
-        let i = with(|w| w.app.drives.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
-        let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;
+        let i = with(|w| w.app.views.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
+        let i = i.ok_or_else(|| fail(format!("view {letter}: is not in the view list")))?;
         with(|w| w.spawn_scan(i, dir.to_string_lossy().into_owned(), false));
         wait("the scan and the directory watch", 60, &|w| w.watch.is_some())?;
         std::fs::write(dir.join("f.bin"), vec![1u8; 1 << 20]).map_err(io)?;
@@ -253,42 +253,42 @@ pub fn selftest_watch() -> Result<String> {
         let big2 = big.clone();
         let running = |w: &mut Win| matches!(w.app.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200);
         with(|w| w.spawn_scan(i, big.clone(), false));
-        wait("the drive scan to get going", 60, &running)?;
+        wait("the view scan to get going", 60, &running)?;
         with(|w| w.cancel_scan());
         let cancelled = with(|w| matches!(w.app.scan, crate::app::Scan::Cancelled) && w.app.tree.is_none() && w.rx.is_none());
         if cancelled != Some(true) {
             return Err(fail("cancelling did not leave a cancelled, empty state".into()));
         }
         with(|w| w.spawn_scan(i, big, false));
-        wait("the drive scan to get going again", 60, &running)?;
+        wait("the view scan to get going again", 60, &running)?;
         with(|w| w.spawn_scan(i, dir.to_string_lossy().into_owned(), false));
         wait("the replacement scan", 60, &|w| w.watch.is_some() && size_at(w, "g.bin") == Some(3 << 20))?;
-        // A second drive (made up; its root is another temp directory). Leaving the first keeps its
+        // A second view (made up; its root is another temp directory). Leaving the first keeps its
         // tree and watch: a change made while it is away shows when it comes back, with no rescan.
         let j = with(|w| {
-            w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0, kind: crate::app::ViewKind::Disk });
-            w.app.drives.len() - 1
+            w.app.views.push(ViewInfo { root: "Z:\\".into(), total: 0, free: 0, kind: crate::app::ViewKind::Disk });
+            w.app.views.len() - 1
         })
         .ok_or_else(|| fail("no window".into()))?;
         std::fs::create_dir_all(&dir2).map_err(io)?;
         std::fs::write(dir2.join("x.bin"), vec![1u8; 8192]).map_err(io)?;
         let root2 = || dir2.to_string_lossy().into_owned();
         with(|w| w.open(j, root2()));
-        wait("the second drive's scan", 60, &|w| w.watch.is_some() && size_at(w, "x.bin") == Some(8192))?;
+        wait("the second view's scan", 60, &|w| w.watch.is_some() && size_at(w, "x.bin") == Some(8192))?;
         if with(|w| w.app.marks.get(i) == Some(&Mark::Kept)) != Some(true) {
-            return Err(fail("the drive that is away is not marked as kept".into()));
+            return Err(fail("the view that is away is not marked as kept".into()));
         }
         std::fs::write(dir.join("h.bin"), vec![1u8; 2 << 20]).map_err(io)?;
         let away = |w: &mut Win, rel: &str| w.parked.get(i).and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).and_then(|t| size_in(t, rel));
-        wait("the change to reach the drive that is away", 20, &|w| away(w, "h.bin") == Some(2 << 20))?;
+        wait("the change to reach the view that is away", 20, &|w| away(w, "h.bin") == Some(2 << 20))?;
         with(|w| w.open(i, dir.to_string_lossy().into_owned()));
         let back = with(|w| w.rx.is_none() && w.watch.is_some() && size_at(w, "h.bin") == Some(2 << 20));
         if back != Some(true) {
-            return Err(fail("coming back to a drive did not show its kept, current tree".into()));
+            return Err(fail("coming back to a view did not show its kept, current tree".into()));
         }
-        // A scan in flight keeps going while another drive is shown, and is still running on return.
+        // A scan in flight keeps going while another view is shown, and is still running on return.
         with(|w| w.spawn_scan(i, big2.clone(), false));
-        wait("the drive scan to get going once more", 60, &running)?;
+        wait("the view scan to get going once more", 60, &running)?;
         with(|w| w.open(j, root2()));
         let kept = with(|w| {
             w.watch.is_some()
@@ -297,7 +297,7 @@ pub fn selftest_watch() -> Result<String> {
                 && w.app.marks.get(i) == Some(&Mark::Scanning)
         });
         if kept != Some(true) {
-            return Err(fail("the scan did not keep running while another drive was shown".into()));
+            return Err(fail("the scan did not keep running while another view was shown".into()));
         }
         with(|w| w.open(i, big2.clone()));
         let resumed = with(|w| w.rx.is_some() && matches!(w.app.scan, crate::app::Scan::Running { .. }));
@@ -305,7 +305,7 @@ pub fn selftest_watch() -> Result<String> {
             return Err(fail("the running scan was not on screen after switching back".into()));
         }
         with(|w| w.cancel_scan());
-        Ok("create, grow, rename, new folder and delete followed; cancel works; drives keep their trees, watches and scans when switched".to_string())
+        Ok("create, grow, rename, new folder and delete followed; cancel works; views keep their trees, watches and scans when switched".to_string())
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir2);
@@ -421,8 +421,8 @@ pub fn selftest_delete() -> Result<String> {
         });
     };
     let run = || -> Result<String> {
-        let i = with(|w| w.app.drives.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
-        let i = i.ok_or_else(|| fail(format!("drive {letter}: is not in the drive list")))?;
+        let i = with(|w| w.app.views.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
+        let i = i.ok_or_else(|| fail(format!("view {letter}: is not in the view list")))?;
         with(|w| w.spawn_scan(i, shown.clone(), false));
         pump_until("the scan and the directory watch", 60, &|w| w.watch.is_some())?;
         pump_until("the scanned tree to hold the files", 5, &|w| in_tree(w, REC))?;
@@ -587,7 +587,7 @@ pub fn selftest_processes() -> Result<String> {
     };
     let run = || -> Result<String> {
         let me = std::process::id();
-        let pi = with(|w| w.app.drives.iter().position(|d| d.kind == ViewKind::Processes)).flatten().ok_or_else(|| fail("no Processes view in the list".into()))?;
+        let pi = with(|w| w.app.views.iter().position(|d| d.kind == ViewKind::Processes)).flatten().ok_or_else(|| fail("no Processes view in the list".into()))?;
         with(|w| w.start_scan(pi));
         wait("this process in the list", 20, &|w| node(w, me).is_some_and(|n| w.app.tree.as_ref().unwrap().size[n] > 0))?;
         let ws = with(|w| w.app.tree.as_ref().unwrap().size[node(w, me).unwrap()]).unwrap_or(0);
@@ -602,8 +602,8 @@ pub fn selftest_processes() -> Result<String> {
         wait("the child gone", 10, &|w| node(w, cpid).is_none())?;
         // Another view on screen: the list is not followed, and comes back whole.
         let z = with(|w| {
-            w.app.drives.push(DriveInfo { root: "Z:\\".into(), total: 0, free: 0, kind: ViewKind::Disk });
-            let z = w.app.drives.len() - 1;
+            w.app.views.push(ViewInfo { root: "Z:\\".into(), total: 0, free: 0, kind: ViewKind::Disk });
+            let z = w.app.views.len() - 1;
             w.open(z, dir.to_string_lossy().into_owned());
             z
         })

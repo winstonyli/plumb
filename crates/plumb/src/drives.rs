@@ -1,5 +1,5 @@
 //! Drive enumeration for the picker.
-use crate::app::DriveInfo;
+use crate::app::ViewInfo;
 use windows::Win32::Storage::FileSystem::{
     FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives,
     GetVolumePathNamesForVolumeNameW,
@@ -9,16 +9,16 @@ use windows::core::PCWSTR;
 
 /// Fixed, removable and network drives that report a size, in letter order, then volumes that are
 /// only mounted on a folder (no drive letter), by path; then the Processes view, whose "size" is the machine's memory.
-pub fn list() -> Vec<DriveInfo> {
+pub fn list() -> Vec<ViewInfo> {
     let mask = unsafe { GetLogicalDrives() };
     let letters = (0..26u32).filter(|i| mask >> i & 1 == 1).filter_map(|i| probe(format!("{}:\\", (b'A' + i as u8) as char)));
     let (total, free) = plumb_scan::procs::physical_memory();
-    let processes = DriveInfo { root: "Processes".into(), total, free, kind: crate::app::ViewKind::Processes };
+    let processes = ViewInfo { root: "Processes".into(), total, free, kind: crate::app::ViewKind::Processes };
     letters.chain(folder_mounts().into_iter().filter_map(probe)).chain([processes]).collect()
 }
 
 /// The drive at `root` if it is a kind the picker offers and reports a size.
-fn probe(root: String) -> Option<DriveInfo> {
+fn probe(root: String) -> Option<ViewInfo> {
     let wide: Vec<u16> = root.encode_utf16().chain([0]).collect();
     let wide = PCWSTR(wide.as_ptr());
     let kind = unsafe { GetDriveTypeW(wide) };
@@ -27,7 +27,7 @@ fn probe(root: String) -> Option<DriveInfo> {
     }
     let (mut free, mut total) = (0u64, 0u64);
     unsafe { GetDiskFreeSpaceExW(wide, Some(&mut free), Some(&mut total), None) }.ok()?;
-    (total > 0).then_some(DriveInfo { root, total, free, kind: crate::app::ViewKind::Disk })
+    (total > 0).then_some(ViewInfo { root, total, free, kind: crate::app::ViewKind::Disk })
 }
 
 /// One mount-point folder (with trailing backslash) for each volume that has no drive letter, sorted.

@@ -30,7 +30,7 @@ pub enum ViewKind {
 }
 
 impl ViewKind {
-    /// `metric` is what the Processes view's first number column holds; a drive ignores it.
+    /// `metric` is what the Processes view's first number column holds; a disk ignores it.
     pub fn titles(self, metric: Metric) -> [&'static str; 5] {
         match self {
             ViewKind::Disk => ["Name", "Size", "% of parent", "Items", "Modified"],
@@ -38,7 +38,7 @@ impl ViewKind {
         }
     }
 
-    /// The text of a size-column value: bytes for a drive; a process's memory, CPU share or I/O rate by `metric`.
+    /// The text of a size-column value: bytes for a disk; a process's memory, CPU share or I/O rate by `metric`.
     pub fn size_text(self, metric: Metric, v: u64) -> String {
         match (self, metric) {
             (ViewKind::Processes, Metric::Cpu) => format!("{:.1}%", v as f64 / 10.0),
@@ -138,7 +138,7 @@ pub fn process_summary(count: usize, used: u64, total: u64) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct DriveInfo {
+pub struct ViewInfo {
     /// Where the volume is mounted: a drive root like `C:\`, or a folder like `D:\Mounts\Data\`.
     pub root: String,
     pub total: u64,
@@ -146,7 +146,7 @@ pub struct DriveInfo {
     pub kind: ViewKind,
 }
 
-impl DriveInfo {
+impl ViewInfo {
     /// The root as shown and typed (`--scan`): `C:` or `D:\Mounts\Data`, no trailing backslash.
     pub fn title(&self) -> &str {
         self.root.trim_end_matches('\\')
@@ -163,7 +163,7 @@ impl DriveInfo {
 pub enum Scan {
     #[default]
     Idle,
-    Running { drive: usize, dirs: u64, files: u64, bytes: u64 },
+    Running { view: usize, dirs: u64, files: u64, bytes: u64 },
     /// The user stopped the scan; there is no tree.
     Cancelled,
     Failed(String),
@@ -207,13 +207,13 @@ pub enum Input {
 #[derive(Debug, PartialEq)]
 pub enum Effect {
     None,
-    /// Start scanning the drive at this index.
+    /// Start scanning the view at this index.
     Scan(usize),
     /// Show the context menu for this node.
     Menu(NodeId),
     /// Relaunch elevated.
     Elevate,
-    /// Rescan the drive at this index in the background, keeping the old tree on screen.
+    /// Rescan the view at this index in the background, keeping the old tree on screen.
     Rescan(usize),
     /// Start the debounce timer for a filter run.
     Filter,
@@ -250,8 +250,8 @@ fn today() -> u32 {
     plumb_core::age::day_from_unix(secs)
 }
 
-/// What the app holds for one drive, kept while another drive is on screen. The filter box text
-/// and the sort stay with the app; everything derived from this drive's tree travels with it.
+/// What the app holds for one view, kept while another view is on screen. The filter box text
+/// and the sort stay with the app; everything derived from this view's tree travels with it.
 #[derive(Default)]
 pub struct Parked {
     tree: Option<Tree>,
@@ -276,9 +276,9 @@ pub enum MarkState {
     Refused(&'static str),
 }
 
-/// What a commit would delete: the topmost marked paths of one drive and what they hold.
+/// What a commit would delete: the topmost marked paths of one view and what they hold.
 pub struct CommitRequest {
-    pub drive: usize,
+    pub view: usize,
     pub paths: Vec<String>,
     pub bytes: u64,
 }
@@ -302,7 +302,7 @@ impl Parked {
         self.tree.as_ref()
     }
 
-    /// The tree a kept drive's running scan builds (its rows are made when the drive comes back).
+    /// The tree a kept view's running scan builds (its rows are made when the view comes back).
     pub fn tree_mut(&mut self) -> &mut Option<Tree> {
         &mut self.tree
     }
@@ -314,9 +314,9 @@ impl Parked {
 
 pub struct App {
     pub layout: Layout,
-    pub drives: Vec<DriveInfo>,
+    pub views: Vec<ViewInfo>,
     pub active: Option<usize>,
-    /// What each drive off screen holds, shown on its chip; set by the window.
+    /// What each view off screen holds, shown on its chip; set by the window.
     pub marks: Vec<Mark>,
     /// The visible row under the mouse.
     pub hover: Option<usize>,
@@ -368,7 +368,7 @@ pub struct App {
     pub proc_metric: Metric,
     /// The files the selected process holds (see `held_sync`).
     held: Held,
-    /// Bumped when the marks change or the shown drive's basket is swapped.
+    /// Bumped when the marks change or the shown view's basket is swapped.
     basket_rev: u64,
     basket_view: BasketView,
     /// A delete is running on the worker thread.
@@ -378,17 +378,17 @@ pub struct App {
     /// Every failure of the last delete, one a line: part of the full status line (the hover text).
     notice_detail: Vec<String>,
     system_root: String,
-    /// Marks of drives whose kept state was let go (see `Win::evict`): a later scan of that drive takes them back.
+    /// Marks of views whose kept state was let go (see `Win::evict`): a later scan of that view takes them back.
     stash: HashMap<usize, Basket>,
     /// Marks the last commit left out because they can no longer be deleted (path, why): reported with its result.
     skipped: Vec<(String, &'static str)>,
 }
 
 impl App {
-    pub fn new(layout: Layout, drives: Vec<DriveInfo>, adapter: String) -> Self {
-        let layout = Layout { chips: vec![CHIP_W; drives.len()], ..layout };
+    pub fn new(layout: Layout, views: Vec<ViewInfo>, adapter: String) -> Self {
+        let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
-            layout, drives, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
+            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
             can_elevate: false, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
@@ -403,9 +403,9 @@ impl App {
     }
 
     /// The header column the rows are sorted by, and whether descending.
-    /// The kind of the view on screen (a drive when none is).
+    /// The kind of the view on screen (a disk when none is).
     pub fn kind(&self) -> ViewKind {
-        self.active.and_then(|i| self.drives.get(i)).map_or(ViewKind::Disk, |d| d.kind)
+        self.active.and_then(|i| self.views.get(i)).map_or(ViewKind::Disk, |d| d.kind)
     }
 
     pub fn sort(&self) -> (usize, bool) {
@@ -434,7 +434,7 @@ impl App {
         State { window: None, columns: Some(self.layout.col_w.to_vec()), sort: Some(Sort { column, descending }), map: MapState { visible: self.layout.map_on, width: self.layout.map_w } }
     }
 
-    /// Exchanges the per-drive state with `p`. The result is consistent on its own (banner and
+    /// Exchanges the per-view state with `p`. The result is consistent on its own (banner and
     /// Cancel button follow the new state) but leaves the filter alone: see `switch_slot`.
     pub fn swap_slot(&mut self, p: &mut Parked) {
         use std::mem::swap;
@@ -458,7 +458,7 @@ impl App {
         self.map_reset();
     }
 
-    /// Puts another drive on screen: the outgoing rows lose the filter so they come back whole, and
+    /// Puts another view on screen: the outgoing rows lose the filter so they come back whole, and
     /// the incoming ones are filtered afresh.
     pub fn switch_slot(&mut self, p: &mut Parked) {
         if self.filter.installed.is_some() {
@@ -469,15 +469,15 @@ impl App {
         self.filter_reset();
     }
 
-    pub fn begin_scan(&mut self, drive: usize) {
+    pub fn begin_scan(&mut self, view: usize) {
         self.filter_reset();
         self.map_reset();
-        if self.active != Some(drive) {
-            // A rescan of the drive on screen keeps its marks; another drive brings back the ones it was let go with.
-            self.basket = self.stash.remove(&drive).unwrap_or_default();
+        if self.active != Some(view) {
+            // A rescan of the view on screen keeps its marks; another view brings back the ones it was let go with.
+            self.basket = self.stash.remove(&view).unwrap_or_default();
             self.basket_rev += 1;
         }
-        self.active = Some(drive);
+        self.active = Some(view);
         self.tree = None;
         self.model = None;
         self.scroll = 0;
@@ -485,7 +485,7 @@ impl App {
         self.set_live(LiveStatus::Off);
         self.refreshing = false;
         self.preview_paused = false;
-        self.scan = Scan::Running { drive, dirs: 0, files: 0, bytes: 0 };
+        self.scan = Scan::Running { view, dirs: 0, files: 0, bytes: 0 };
     }
 
     pub fn progress(&mut self, d: u64, f: u64, b: u64) {
@@ -631,19 +631,19 @@ impl App {
     pub fn over_divider(&self, x: f32, y: f32) -> bool {
         self.col_drag.is_some()
             || self.map_drag.is_some()
-            || matches!(self.layout.hit(x, y, self.drives.len()), Hit::Divider(_) | Hit::MapDivider)
+            || matches!(self.layout.hit(x, y, self.views.len()), Hit::Divider(_) | Hit::MapDivider)
     }
 
     /// The button at (x, y), if there is one there, with its tooltip: an icon button carries no label, and a
-    /// drive chip's label shows only the free size, to fit. These are what light up under the pointer.
+    /// view chip's label shows only the free size, to fit. These are what light up under the pointer.
     fn button_at(&self, x: f32, y: f32) -> Option<(Rect, String)> {
         let l = &self.layout;
         if self.can_elevate && l.admin_button().contains(x, y) {
             return Some((l.admin_button(), "Run as administrator".into()));
         }
-        match l.hit(x, y, self.drives.len()) {
+        match l.hit(x, y, self.views.len()) {
             Hit::Chip(i) => {
-                let d = self.drives.get(i)?;
+                let d = self.views.get(i)?;
                 Some((l.chip(i), format!("{} {} free of {}", d.title(), fmt::size(d.free), fmt::size(d.total))))
             }
             Hit::Rescan => Some((l.rescan_button(), "Rescan".into())),
@@ -667,7 +667,7 @@ impl App {
             return Some((TipKey::Area(bar), format!("{}
 {}", self.status(), self.adapter)));
         }
-        let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map))?)?;
+        let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.views.len()), Hit::Map))?)?;
         let tree = self.tree.as_ref()?;
         let text = if self.kind() == ViewKind::Processes { self.process_tip(tree, t) } else { tile_tip(tree, t, self.map_now) };
         Some((TipKey::Tile(t.node, t.kind), text))
@@ -697,17 +697,17 @@ impl App {
     }
 
     /// The Processes view took a new snapshot: the facts about each process, the status line, and the chip's memory.
-    pub fn set_procs(&mut self, drive: usize, info: HashMap<u32, ProcInfo>, summary: String, ram: (u64, u64)) {
+    pub fn set_procs(&mut self, view: usize, info: HashMap<u32, ProcInfo>, summary: String, ram: (u64, u64)) {
         self.proc_info = info;
         self.summary = summary;
-        if let Some(d) = self.drives.get_mut(drive) {
+        if let Some(d) = self.views.get_mut(view) {
             (d.total, d.free) = ram;
         }
     }
 
     /// What the context menu of `id` acts on: the path in the tree's terms (to mark by) and as a file system path
     /// (to reveal and copy). A process offers its executable; none when that is unknown.
-    /// The last element is whether to offer "Who is using this": a file on a drive.
+    /// The last element is whether to offer "Who is using this": a file on a disk.
     pub fn menu_target(&self, id: NodeId) -> Option<(String, String, MarkState, bool)> {
         let tree = self.tree.as_ref()?;
         if self.kind() == ViewKind::Processes {
@@ -776,11 +776,11 @@ impl App {
     }
 
     /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
-    /// it: the picker bar, away from the drive chips and the administrator button.
+    /// it: the picker bar, away from the view chips and the administrator button.
     pub fn is_caption(&self, x: f32, y: f32) -> bool {
         y < PICKER_H
             && !matches!(
-                self.layout.hit(x, y, self.drives.len()),
+                self.layout.hit(x, y, self.views.len()),
                 Hit::Chip(_) | Hit::FilterBox | Hit::FilterRegex | Hit::FilterClear
             )
             && !(self.can_elevate && self.layout.admin_button().contains(x, y))
@@ -831,12 +831,12 @@ impl App {
             Input::Enter => self.filter_enter(),
             Input::Tab => self.filter.ui.focus = !self.filter.ui.focus,
             Input::Hover(x, y) => {
-                self.hover = match self.layout.hit(x, y, self.drives.len()) {
+                self.hover = match self.layout.hit(x, y, self.views.len()) {
                     Hit::Row(i) if self.row_at(i).is_some() => Some(i),
                     _ => None,
                 };
                 self.hot = self.button_at(x, y).map(|b| b.0);
-                self.map_hover = if matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map) { treemap::hit(&self.map_tiles, x, y) } else { None };
+                self.map_hover = if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map) { treemap::hit(&self.map_tiles, x, y) } else { None };
             }
             Input::ToggleMap => self.layout.map_on = !self.layout.map_on,
             Input::Click(x, y) => return self.click(x, y),
@@ -844,7 +844,7 @@ impl App {
             // anywhere but a row it must act as a click, or the second press of a header, button or
             // scrollbar would be lost.
             Input::DoubleClick(x, y) => {
-                if matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map) {
+                if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map) {
                     if let Some(id) = treemap::hit(&self.map_tiles, x, y).and_then(|i| self.select_from_map(i))
                         && self.tree.as_ref().is_some_and(|t| t.flags[id].contains(NodeFlags::DIR))
                     {
@@ -853,7 +853,7 @@ impl App {
                     }
                     return Effect::None;
                 }
-                let Hit::Row(i) = self.layout.hit(x, y, self.drives.len()) else {
+                let Hit::Row(i) = self.layout.hit(x, y, self.views.len()) else {
                     return self.click(x, y);
                 };
                 if self.icon_at(i, x).is_some() {
@@ -866,12 +866,12 @@ impl App {
                 }
             }
             Input::RightClick(x, y) => {
-                if let Hit::Row(i) = self.layout.hit(x, y, self.drives.len())
+                if let Hit::Row(i) = self.layout.hit(x, y, self.views.len())
                     && let (Some(id), Some(m)) = (self.row_at(i), &mut self.model)
                 {
                     m.select(id);
                     return Effect::Menu(id);
-                } else if matches!(self.layout.hit(x, y, self.drives.len()), Hit::Map)
+                } else if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map)
                     && let Some(id) = treemap::hit(&self.map_tiles, x, y).and_then(|i| self.select_from_map(i))
                 {
                     return Effect::Menu(id);
@@ -992,10 +992,10 @@ impl App {
         self.basket_active().then(|| format!("{} marked, up to {}", self.basket_view.items, fmt::size(self.basket_view.bytes)))
     }
 
-    /// Keeps the marks of `drive`, whose state is being let go, for its next scan.
-    pub fn stash_basket(&mut self, drive: usize, from: &mut Parked) {
+    /// Keeps the marks of `view`, whose state is being let go, for its next scan.
+    pub fn stash_basket(&mut self, view: usize, from: &mut Parked) {
         if !from.basket.is_empty() {
-            self.stash.insert(drive, std::mem::take(&mut from.basket));
+            self.stash.insert(view, std::mem::take(&mut from.basket));
         }
     }
 
@@ -1107,7 +1107,7 @@ impl App {
             self.notice = "cannot delete while the drive is being scanned".into();
             return None;
         }
-        let (drive, tree) = (self.active?, self.tree.as_ref()?);
+        let (view, tree) = (self.active?, self.tree.as_ref()?);
         self.basket.prune(tree);
         self.basket_rev += 1;
         // A mark that cannot be deleted now (a rename gave it an unsafe name) is dropped and reported with the result.
@@ -1127,7 +1127,7 @@ impl App {
         }
         let paths = ids.iter().map(|&i| tree.path(i)).collect();
         let bytes = ids.iter().map(|&i| tree.subtree_size[i]).sum();
-        Some(CommitRequest { drive, paths, bytes })
+        Some(CommitRequest { view, paths, bytes })
     }
 
     /// A delete ended: `gone` (deleted, `missing` of them already absent) leave the basket, `failed` (path, reason) stay.
@@ -1163,7 +1163,7 @@ impl App {
         if self.can_elevate && self.layout.admin_button().contains(x, y) {
             return Effect::Elevate;
         }
-        let hit = self.layout.hit(x, y, self.drives.len());
+        let hit = self.layout.hit(x, y, self.views.len());
         match hit {
             Hit::FilterBox => {
                 self.filter.ui.focus = true;
@@ -1183,7 +1183,7 @@ impl App {
         match hit {
             Hit::Cancel => return Effect::Cancel,
             Hit::Basket => return Effect::Commit,
-            // Picking another drive mid-scan cancels the scan in flight; the same drive does nothing.
+            // Picking another view mid-scan cancels the scan in flight; the same view does nothing.
             Hit::Chip(i) if !(matches!(self.scan, Scan::Running { .. }) && self.active == Some(i)) => return Effect::Scan(i),
             Hit::Rescan => {
                 if let Some(i) = self.active.filter(|_| !self.refreshing && !matches!(self.scan, Scan::Running { .. })) {
@@ -1235,7 +1235,7 @@ impl App {
     }
 
     pub fn chips(&self) -> Vec<Chip> {
-        self.drives
+        self.views
             .iter()
             .enumerate()
             .map(|(i, d)| Chip {
@@ -1249,10 +1249,10 @@ impl App {
     fn message(&self) -> String {
         match &self.scan {
             Scan::Idle => "Select a drive above to scan it.".into(),
-            Scan::Running { drive, .. } if self.drives[*drive].kind == ViewKind::Processes => "Reading processes\u{2026}".into(),
-            Scan::Running { drive, dirs, files, bytes } => format!(
+            Scan::Running { view, .. } if self.views[*view].kind == ViewKind::Processes => "Reading processes\u{2026}".into(),
+            Scan::Running { view, dirs, files, bytes } => format!(
                 "Scanning {}  {} folders, {} files, {}",
-                self.drives[*drive].title(), fmt::count(*dirs), fmt::count(*files), fmt::size(*bytes)
+                self.views[*view].title(), fmt::count(*dirs), fmt::count(*files), fmt::size(*bytes)
             ),
             Scan::Failed(m) => format!("Scan failed: {m}"),
             Scan::Cancelled => "Scan cancelled. Select a drive above to scan it again.".into(),
@@ -1327,8 +1327,8 @@ impl App {
     /// has already counted more than the drive reports used (hard links, placeholders and compressed
     /// files can make it, and then the used space says nothing about what is left).
     pub fn unscanned(&self) -> Option<u64> {
-        let Scan::Running { drive, bytes, .. } = self.scan else { return None };
-        let d = self.drives.get(drive)?;
+        let Scan::Running { view, bytes, .. } = self.scan else { return None };
+        let d = self.views.get(view)?;
         d.total.saturating_sub(d.free).checked_sub(bytes)
     }
 
@@ -1389,11 +1389,11 @@ mod tests {
         assert_eq!(ViewKind::Disk.last_two(&t, r), (fmt::count(1), None), "no date, no fourth cell");
     }
 
-    /// An app with a Processes view as its third drive, showing one process `ping.exe` (pid 77) under the root.
+    /// An app with a Processes view as its third view, showing one process `ping.exe` (pid 77) under the root.
     fn process_app() -> (App, NodeId) {
         use plumb_core::procs::{Metric, Procs, Sample};
         let mut a = app();
-        a.drives.push(DriveInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
+        a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
         a.begin_scan(2);
         let (mut procs, mut tree) = Procs::new(Metric::Memory);
         procs.apply(&mut tree, &[Sample { pid: 77, parent: 1, created: 5, name: "ping.exe".into(), memory: 4096, cpu_100ns: 0, io_bytes: 0 }], 0);
@@ -1433,7 +1433,7 @@ mod tests {
         assert_eq!(ViewKind::Processes.titles(Metric::Io)[1], "I/O");
         assert_eq!(ViewKind::Processes.size_text(Metric::Cpu, 123), "12.3%");
         assert_eq!(ViewKind::Processes.size_text(Metric::Io, 2048), format!("{}/s", fmt::size(2048)));
-        assert_eq!(ViewKind::Disk.size_text(Metric::Cpu, 2048), fmt::size(2048), "a drive ignores the metric");
+        assert_eq!(ViewKind::Disk.size_text(Metric::Cpu, 2048), fmt::size(2048), "a disk ignores the metric");
     }
 
     #[test]
@@ -1467,7 +1467,7 @@ mod tests {
         a.held_sync();
         let (first, _) = a.held_request().unwrap();
         let mut other = Parked::default();
-        a.swap_slot(&mut other); // a parked drive's journal event swaps a slot in and out
+        a.swap_slot(&mut other); // a parked view's journal event swaps a slot in and out
         a.swap_slot(&mut other);
         a.held_done(first, Ok(HandleList { files: vec!["C:/x".into()], skipped: 0 }));
         assert!(a.held_text().unwrap().0.ends_with("1 file"), "{:?}", a.held_text());
@@ -1525,7 +1525,7 @@ mod tests {
         let (mut a, _) = process_app();
         a.set_procs(2, HashMap::new(), process_summary(1, 4096, 16 << 30), (16 << 30, 3 << 30));
         assert!(a.status().contains("1 processes, "), "{}", a.status());
-        assert_eq!(a.drives[2].free, 3 << 30, "the chip follows the machine's free memory");
+        assert_eq!(a.views[2].free, 3 << 30, "the chip follows the machine's free memory");
     }
 
     #[test]
@@ -1556,11 +1556,11 @@ mod tests {
     use plumb_core::synth::kary_builder;
 
     fn app() -> App {
-        let drives = vec![
-            DriveInfo { root: "C:\\".into(), total: 1000, free: 250, kind: ViewKind::Disk },
-            DriveInfo { root: "D:\\".into(), total: 1000, free: 900, kind: ViewKind::Disk },
+        let views = vec![
+            ViewInfo { root: "C:\\".into(), total: 1000, free: 250, kind: ViewKind::Disk },
+            ViewInfo { root: "D:\\".into(), total: 1000, free: 900, kind: ViewKind::Disk },
         ];
-        App::new(Layout::new(800.0, 600.0), drives, "test".into())
+        App::new(Layout::new(800.0, 600.0), views, "test".into())
     }
 
     fn scanned() -> App {
@@ -1573,7 +1573,7 @@ mod tests {
     #[test]
     fn chips_are_sized_to_their_labels() {
         let mut a = app();
-        a.drives[1].root = "D:\\Mounts\\A long mount name\\".into();
+        a.views[1].root = "D:\\Mounts\\A long mount name\\".into();
         a.fit_chips(&|s| s.chars().count() as f32 * 7.0);
         let w: Vec<f32> = (0..2).map(|i| a.layout.chip(i).w).collect();
         let labels: Vec<usize> = a.chips().iter().map(|c| c.label.chars().count()).collect();
@@ -1584,8 +1584,8 @@ mod tests {
 
     #[test]
     fn a_mount_point_is_titled_by_its_path_and_chipped_by_its_name() {
-        let drive = |root: &str| DriveInfo { root: root.into(), total: 1, free: 1, kind: ViewKind::Disk };
-        let (c, m) = (drive("C:\\"), drive("D:\\Mounts\\Data\\"));
+        let view = |root: &str| ViewInfo { root: root.into(), total: 1, free: 1, kind: ViewKind::Disk };
+        let (c, m) = (view("C:\\"), view("D:\\Mounts\\Data\\"));
         assert_eq!((c.title(), c.chip_name()), ("C:", "C:"));
         assert_eq!((m.title(), m.chip_name()), ("D:\\Mounts\\Data", "Data"));
     }
@@ -1608,8 +1608,8 @@ mod tests {
         let mut a = app();
         assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0)), Effect::Scan(1));
         a.begin_scan(1);
-        assert_eq!(a.handle(Input::Click(10.0, 10.0)), Effect::Scan(0), "another drive replaces the scan");
-        assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0)), Effect::None, "the same drive is left alone");
+        assert_eq!(a.handle(Input::Click(10.0, 10.0)), Effect::Scan(0), "another view replaces the scan");
+        assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0)), Effect::None, "the same view is left alone");
     }
 
     #[test]
@@ -1638,13 +1638,13 @@ mod tests {
         assert!(a.tree.is_none() && a.model.is_none() && !a.cancelable() && !a.refreshing);
         assert!(away.has_tree());
         a.begin_scan(1);
-        assert!(matches!(a.scan, Scan::Running { drive: 1, .. }) && a.cancelable());
+        assert!(matches!(a.scan, Scan::Running { view: 1, .. }) && a.cancelable());
         let mut other = Parked::default();
-        a.switch_slot(&mut other); // the running scan goes away, then the first drive comes back
+        a.switch_slot(&mut other); // the running scan goes away, then the first view comes back
         a.switch_slot(&mut away);
         assert!(a.tree.is_some() && a.refreshing && a.cancelable());
         assert_eq!(a.model.as_ref().and_then(|m| m.selected()), sel);
-        assert!(matches!(other.scan(), Scan::Running { drive: 1, .. }) && !other.has_tree());
+        assert!(matches!(other.scan(), Scan::Running { view: 1, .. }) && !other.has_tree());
     }
 
     #[test]
@@ -1806,7 +1806,7 @@ mod tests {
         a.progress(1, 1, 700);
         assert_eq!(a.unscanned(), Some(50));
         a.progress(1, 1, 751);
-        assert_eq!(a.unscanned(), None, "the scan counted more than the drive says is used");
+        assert_eq!(a.unscanned(), None, "the scan counted more than the view says is used");
     }
 
     #[test]
@@ -2283,7 +2283,7 @@ Test GPU", a.status())));
         a.toggle_mark(file);
         let mut other = Parked::default();
         a.swap_slot(&mut other);
-        assert!(a.basket().is_empty(), "the other drive has no marks");
+        assert!(a.basket().is_empty(), "the other view has no marks");
         a.swap_slot(&mut other);
         assert_eq!(a.basket().len(), 1, "coming back finds them");
         let t = plumb_core::synth::kary_builder(300, 3).finish().unwrap();
@@ -2292,9 +2292,9 @@ Test GPU", a.status())));
         assert_eq!(a.basket().len(), 1, "a background rescan leaves them");
         assert!(a.basket_label().is_some());
         a.begin_scan(0);
-        assert_eq!(a.basket().len(), 1, "rescanning the drive on screen keeps its marks");
+        assert_eq!(a.basket().len(), 1, "rescanning the view on screen keeps its marks");
         a.begin_scan(1);
-        assert!(a.basket().is_empty(), "a first scan of another drive starts clean");
+        assert!(a.basket().is_empty(), "a first scan of another view starts clean");
     }
 
     #[test]
@@ -2330,10 +2330,10 @@ Test GPU", a.status())));
         let (file, ..) = picks(&a);
         a.toggle_mark(file);
         let mut gone = Parked::default();
-        a.swap_slot(&mut gone); // the drive goes away with its mark
+        a.swap_slot(&mut gone); // the view goes away with its mark
         a.stash_basket(2, &mut gone); // and is let go
         a.begin_scan(3);
-        assert!(a.basket().is_empty(), "another drive does not get them");
+        assert!(a.basket().is_empty(), "another view does not get them");
         a.begin_scan(2);
         assert_eq!(a.basket().len(), 1, "its own scan does");
     }

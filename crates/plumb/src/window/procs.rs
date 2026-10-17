@@ -17,7 +17,7 @@ const MAX_DEAD: usize = 20_000;
 
 /// One snapshot, posted to the window as the `lparam` of `WM_PROCS` (a leaked `Box` if the window is gone).
 pub struct Snapshot {
-    pub drive: usize,
+    pub view: usize,
     pub entries: Vec<ProcEntry>,
     /// 100 ns since the previous snapshot of this poller; 0 for its first.
     pub elapsed: u64,
@@ -32,7 +32,7 @@ struct Poller {
 }
 
 impl Poller {
-    fn start(hwnd: HWND, drive: usize, msg: u32) -> Self {
+    fn start(hwnd: HWND, view: usize, msg: u32) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let hwnd = hwnd.0 as isize;
@@ -44,7 +44,7 @@ impl Poller {
                     let now = Instant::now();
                     let elapsed = last.map_or(0, |t| (now - t).as_nanos() as u64 / 100);
                     last = Some(now);
-                    let boxed = Box::into_raw(Box::new(Snapshot { drive, entries, elapsed, ram: physical_memory() }));
+                    let boxed = Box::into_raw(Box::new(Snapshot { view, entries, elapsed, ram: physical_memory() }));
                     if unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), msg, WPARAM(0), LPARAM(boxed as isize)) }.is_err() {
                         drop(unsafe { Box::from_raw(boxed) }); // the window is gone
                         return;
@@ -83,9 +83,9 @@ pub struct ProcState {
 
 impl ProcState {
     /// Starts polling (if not already), posting `msg` to `hwnd`. The first snapshot after a start has no rates.
-    pub fn start(&mut self, hwnd: HWND, drive: usize, msg: u32) {
+    pub fn start(&mut self, hwnd: HWND, view: usize, msg: u32) {
         if self.poller.is_none() {
-            self.poller = Some(Poller::start(hwnd, drive, msg));
+            self.poller = Some(Poller::start(hwnd, view, msg));
         }
     }
 
@@ -126,7 +126,7 @@ impl ProcState {
             return false;
         }
         self.updates += 1;
-        let Snapshot { drive, entries, elapsed, ram } = snap;
+        let Snapshot { view, entries, elapsed, ram } = snap;
         let samples: Vec<Sample> = entries
             .iter()
             .map(|e| Sample { pid: e.pid, parent: e.parent, created: e.created, name: e.name.clone(), memory: e.working_set, cpu_100ns: e.cpu_100ns, io_bytes: e.io_bytes })
@@ -134,9 +134,9 @@ impl ProcState {
         let used = entries.iter().filter(|e| e.pid != 0).map(|e| e.working_set).sum();
         let summary = process_summary(entries.len(), used, ram.0);
         let info = entries.into_iter().map(|e| (e.pid, ProcInfo { path: e.path, created: e.created })).collect();
-        let label = |app: &App| app.drives.get(drive).map(|d| crate::fmt::size(d.free));
+        let label = |app: &App| app.views.get(view).map(|d| crate::fmt::size(d.free));
         let before = label(app);
-        app.set_procs(drive, info, summary.clone(), ram);
+        app.set_procs(view, info, summary.clone(), ram);
         let rebuild = self.sync.is_none() || app.tree.as_ref().is_none_or(|t| t.dead() > MAX_DEAD);
         match (rebuild, self.sync.as_mut(), app.tree.as_mut()) {
             (false, Some(sync), Some(tree)) => {

@@ -1,6 +1,6 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
-use crate::app::{App, DriveInfo, Effect, Input, LiveStatus, MarkState, Parked, TipKey, ViewKind};
+use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, Parked, TipKey, ViewKind};
 use crate::{dialog, trash};
 use crate::draw::{Mark, Painter};
 use crate::filter_ui::{byte_at, push_utf16, Edit, Motion};
@@ -122,7 +122,7 @@ enum Source {
     Dir { watcher: Watcher, queue: VecDeque<Listing> },
 }
 
-/// Everything live updates need for the drive on screen.
+/// Everything live updates need for the view on screen.
 struct Watch {
     src: Source,
     pacer: Pacer,
@@ -218,14 +218,14 @@ fn local_time() -> String {
     format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
 }
 
-/// Everything the window keeps per drive besides what the app holds (`Parked`). The fields of the
-/// drive on screen live directly in `Win`; the others wait in `Win::parked` as one of these.
+/// Everything the window keeps per view besides what the app holds (`Parked`). The fields of the
+/// view on screen live directly in `Win`; the others wait in `Win::parked` as one of these.
 #[derive(Default)]
-struct Drive {
+struct View {
     app: Parked,
     progress: Arc<Progress>,
     rx: Option<Receiver<ScanResult>>,
-    /// What the scan has found so far; kept drives have none (a partial tree follows only the drive on screen).
+    /// What the scan has found so far; kept views have none (a partial tree follows only the view on screen).
     preview: Option<Preview>,
     background: bool,
     watch: Option<Watch>,
@@ -237,8 +237,8 @@ struct Drive {
     used: u64,
 }
 
-impl Drive {
-    /// Ends the drive's scan and watches. The watches may be mid-wait, so they stop off the UI thread.
+impl View {
+    /// Ends the view's scan and watches. The watches may be mid-wait, so they stop off the UI thread.
     fn discard(mut self) {
         if let Some(p) = &mut self.procs {
             p.stop();
@@ -259,7 +259,7 @@ impl Drive {
 }
 
 /// Drives whose trees are held at once, the one on screen included.
-const KEPT_DRIVES: usize = 3;
+const KEPT_VIEWS: usize = 3;
 
 struct Win {
     hwnd: HWND,
@@ -301,13 +301,13 @@ struct Win {
     preview_pacer: Pacer,
     /// The preview tree changed since the rows were last refreshed.
     preview_dirty: bool,
-    /// The drives not on screen that hold a tree or a scan, by drive index.
-    parked: Vec<Option<Drive>>,
-    /// Counts drive switches, to find the least recently used.
+    /// The views not on screen that hold a tree or a scan, by view index.
+    parked: Vec<Option<View>>,
+    /// Counts view switches, to find the least recently used.
     clock: u64,
     /// Which of the progress, preview and live timers are running.
     timers: [bool; 3],
-    /// A parked drive is swapped in for one operation (`in_slot`): timers and the filter stay as they are.
+    /// A parked view is swapped in for one operation (`in_slot`): timers and the filter stay as they are.
     borrowed: bool,
     /// The tooltip control, the icon button it last described, and the text it reads from (`tip_text`).
     tooltip: HWND,
@@ -405,14 +405,14 @@ fn make_swapchain(gfx: &Gfx, hwnd: HWND) -> Result<(IDXGISwapChain1, Comp)> {
 }
 
 impl Win {
-    fn new(hwnd: HWND, drives: Vec<DriveInfo>) -> Result<Self> {
+    fn new(hwnd: HWND, views: Vec<ViewInfo>) -> Result<Self> {
         let gfx = Gfx::hardware(adapter_for(hwnd).as_ref())?;
         let (swap, comp) = make_swapchain(&gfx, hwnd)?;
         let painter = Painter::new(&gfx)?;
         let dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
         let (pw, ph) = client_px(hwnd);
         let layout = Layout::new(pw as f32 * 96.0 / dpi, ph as f32 * 96.0 / dpi);
-        let mut app = App::new(layout, drives, gfx.adapter.clone());
+        let mut app = App::new(layout, views, gfx.adapter.clone());
         app.can_elevate = !plumb_scan::volume::is_elevated();
         app.fit_chips(&|s| painter.text_width(&gfx, s));
         let dark = dark_mode();
@@ -622,39 +622,39 @@ impl Win {
         let _ = unsafe { InvalidateRect(Some(self.hwnd), None, false) };
     }
 
-    fn start_scan(&mut self, drive: usize) {
-        let root = self.app.drives[drive].root.clone();
-        self.open(drive, root);
+    fn start_scan(&mut self, view: usize) {
+        let root = self.app.views[view].root.clone();
+        self.open(view, root);
     }
 
-    /// Puts `drive` on screen: the state kept for it if there is any (a finished tree, or a scan
-    /// that kept running), else a new scan of `root`. The drive on screen is kept, not cancelled.
-    /// Choosing the drive already on screen scans it afresh.
-    fn open(&mut self, drive: usize, root: String) {
-        if self.app.active == Some(drive) && self.procs.is_some() {
+    /// Puts `view` on screen: the state kept for it if there is any (a finished tree, or a scan
+    /// that kept running), else a new scan of `root`. The view on screen is kept, not cancelled.
+    /// Choosing the view already on screen scans it afresh.
+    fn open(&mut self, view: usize, root: String) {
+        if self.app.active == Some(view) && self.procs.is_some() {
             // The Processes view has nothing to rescan: look again now.
             if let Some(p) = &self.procs {
                 p.kick();
             }
             return;
         }
-        if self.app.active != Some(drive) {
+        if self.app.active != Some(view) {
             self.park_active();
-            if self.unpark(drive) {
+            if self.unpark(view) {
                 return;
             }
         }
-        self.spawn_scan(drive, root, false);
+        self.spawn_scan(view, root, false);
     }
 
-    /// Exchanges all per-drive state, the app's and the window's, with `d`.
-    fn swap_drive(&mut self, d: &mut Drive) {
+    /// Exchanges all per-view state, the app's and the window's, with `d`.
+    fn swap_view(&mut self, d: &mut View) {
         self.app.switch_slot(&mut d.app);
         self.swap_window_fields(d);
         self.sync_timers();
     }
 
-    fn swap_window_fields(&mut self, d: &mut Drive) {
+    fn swap_window_fields(&mut self, d: &mut View) {
         use std::mem::swap;
         swap(&mut self.progress, &mut d.progress);
         swap(&mut self.rx, &mut d.rx);
@@ -666,12 +666,12 @@ impl Win {
         swap(&mut self.procs, &mut d.procs);
     }
 
-    /// Takes the drive on screen away, keeping its tree, scan and watch unless there is nothing
+    /// Takes the view on screen away, keeping its tree, scan and watch unless there is nothing
     /// worth coming back to. A running scan keeps building its partial tree (`preview_tick`).
     fn park_active(&mut self) {
         let Some(old) = self.app.active.take() else { return };
-        let mut d = Drive::default();
-        self.swap_drive(&mut d);
+        let mut d = View::default();
+        self.swap_view(&mut d);
         if let Some(p) = &mut d.procs {
             p.stop(); // the list is not followed while away
         }
@@ -687,16 +687,16 @@ impl Win {
         self.sync_marks();
     }
 
-    /// Brings the state kept for `drive` on screen, if any. Call with nothing on screen.
-    fn unpark(&mut self, drive: usize) -> bool {
-        let Some(mut d) = self.parked.get_mut(drive).and_then(Option::take) else { return false };
-        self.swap_drive(&mut d);
-        self.app.active = Some(drive);
+    /// Brings the state kept for `view` on screen, if any. Call with nothing on screen.
+    fn unpark(&mut self, view: usize) -> bool {
+        let Some(mut d) = self.parked.get_mut(view).and_then(Option::take) else { return false };
+        self.swap_view(&mut d);
+        self.app.active = Some(view);
         if let Some(p) = &mut self.procs {
-            p.start(self.hwnd, drive, WM_PROCS);
+            p.start(self.hwnd, view, WM_PROCS);
         }
         if self.preview.is_some() {
-            // The scan kept building its tree while the drive was away: make the rows for it as it is now.
+            // The scan kept building its tree while the view was away: make the rows for it as it is now.
             self.app.preview_installed();
             self.preview_pacer = Pacer::new(Instant::now());
             self.preview_dirty = false;
@@ -710,10 +710,10 @@ impl Win {
         true
     }
 
-    /// Lets go of the least recently used kept drives that have no scan running, so at most
-    /// `KEPT_DRIVES` trees are held with the one on screen.
+    /// Lets go of the least recently used kept views that have no scan running, so at most
+    /// `KEPT_VIEWS` trees are held with the one on screen.
     fn evict(&mut self) {
-        while self.parked.iter().flatten().filter(|d| d.app.has_tree()).count() >= KEPT_DRIVES {
+        while self.parked.iter().flatten().filter(|d| d.app.has_tree()).count() >= KEPT_VIEWS {
             let lru = self.parked.iter().enumerate().filter_map(|(i, d)| d.as_ref().filter(|d| d.rx.is_none()).map(|d| (d.used, i))).min();
             let Some((_, i)) = lru else { return };
             if let Some(mut d) = self.parked[i].take() {
@@ -723,31 +723,31 @@ impl Win {
         }
     }
 
-    /// Runs `f` with the kept state of `drive` swapped in, then puts it back; `f` sees that drive as
+    /// Runs `f` with the kept state of `view` swapped in, then puts it back; `f` sees that view as
     /// the one on screen. `None` if nothing is kept for it. Timers and the filter are not touched.
-    fn in_slot<R>(&mut self, drive: usize, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
-        if self.app.active == Some(drive) {
+    fn in_slot<R>(&mut self, view: usize, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+        if self.app.active == Some(view) {
             return Some(f(self));
         }
-        let mut d = self.parked.get_mut(drive).and_then(Option::take)?;
+        let mut d = self.parked.get_mut(view).and_then(Option::take)?;
         let shown = self.app.active;
         self.borrowed = true;
         self.app.swap_slot(&mut d.app);
         self.swap_window_fields(&mut d);
-        self.app.active = Some(drive);
+        self.app.active = Some(view);
         let r = f(self);
         self.app.active = shown;
         self.app.swap_slot(&mut d.app);
         self.swap_window_fields(&mut d);
         self.borrowed = false;
-        self.parked[drive] = Some(d);
+        self.parked[view] = Some(d);
         self.sync_marks();
         Some(r)
     }
 
     /// A delete batch ended: unmark what went, keep what failed, say so on the status line. Returns the failures
-    /// (path, reason) and the batch size when the drive is on screen, for the failure dialog.
-    fn finish_delete(&mut self, drive: usize, out: Vec<trash::Outcome>) -> Option<(Vec<(String, String)>, usize)> {
+    /// (path, reason) and the batch size when the view is on screen, for the failure dialog.
+    fn finish_delete(&mut self, view: usize, out: Vec<trash::Outcome>) -> Option<(Vec<(String, String)>, usize)> {
         let gone: Vec<String> = out.iter().filter(|o| !matches!(o.verdict, trash::Verdict::Failed(_))).map(|o| o.path.clone()).collect();
         let missing = out.iter().filter(|o| o.verdict == trash::Verdict::Missing).count();
         let failed: Vec<(String, String)> = out
@@ -757,18 +757,18 @@ impl Win {
                 _ => None,
             })
             .collect();
-        let shown = self.app.active == Some(drive);
-        if self.in_slot(drive, |w| w.app.finish_delete(&gone, missing, &failed)).is_none() {
-            self.app.set_deleting(false); // the drive's slot was evicted meanwhile
+        let shown = self.app.active == Some(view);
+        if self.in_slot(view, |w| w.app.finish_delete(&gone, missing, &failed)).is_none() {
+            self.app.set_deleting(false); // the view's slot was evicted meanwhile
         }
         self.invalidate();
         let total = gone.len() + failed.len();
         (shown && !failed.is_empty()).then_some((failed, total))
     }
 
-    /// Updates the chip marks from what the other drives hold.
+    /// Updates the chip marks from what the other views hold.
     fn sync_marks(&mut self) {
-        let marks = (0..self.app.drives.len())
+        let marks = (0..self.app.views.len())
             .map(|i| match self.parked.get(i).and_then(Option::as_ref) {
                 Some(d) if d.rx.is_some() => Mark::Scanning,
                 Some(d) if d.app.has_tree() => Mark::Kept,
@@ -778,7 +778,7 @@ impl Win {
         self.app.marks = marks;
     }
 
-    /// Starts and stops the progress, preview and live timers to match the drive on screen.
+    /// Starts and stops the progress, preview and live timers to match the view on screen.
     fn sync_timers(&mut self) {
         if self.borrowed {
             return;
@@ -809,12 +809,12 @@ impl Win {
     }
 
     /// Rescans in the background, keeping the old tree on screen until the new one is ready.
-    fn start_rescan(&mut self, drive: usize) {
+    fn start_rescan(&mut self, view: usize) {
         if let Some(p) = &self.procs {
             p.kick();
         } else if self.rx.is_none() {
-            let root = self.app.drives[drive].root.clone();
-            self.spawn_scan(drive, root, true);
+            let root = self.app.views[view].root.clone();
+            self.spawn_scan(view, root, true);
         }
     }
 
@@ -833,12 +833,12 @@ impl Win {
         self.invalidate();
     }
 
-    fn spawn_scan(&mut self, drive: usize, root: String, background: bool) {
-        if self.app.drives[drive].kind == ViewKind::Processes {
-            return self.start_procs(drive);
+    fn spawn_scan(&mut self, view: usize, root: String, background: bool) {
+        if self.app.views[view].kind == ViewKind::Processes {
+            return self.start_procs(view);
         }
         if self.rx.is_some() {
-            // The drive on screen is scanned afresh mid-scan: the old scan is abandoned, not waited for.
+            // The view on screen is scanned afresh mid-scan: the old scan is abandoned, not waited for.
             self.progress.cancel();
         }
         self.background = background;
@@ -846,7 +846,7 @@ impl Win {
             self.app.refreshing = true;
         } else {
             self.drop_watch();
-            self.app.begin_scan(drive);
+            self.app.begin_scan(view);
         }
         self.progress = if background {
             self.preview = None;
@@ -880,17 +880,17 @@ impl Win {
             }));
             let msg = run.unwrap_or_else(|_| Err("the scanner panicked".to_string()));
             let _ = tx.send(msg);
-            let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_SCAN_DONE, WPARAM(drive), LPARAM(0)) };
+            let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_SCAN_DONE, WPARAM(view), LPARAM(0)) };
         });
         self.sync_timers();
         self.invalidate();
     }
 
     /// Puts the Processes view on screen: nothing to scan, the first snapshot builds the tree. Call with nothing on screen.
-    fn start_procs(&mut self, drive: usize) {
-        self.app.begin_scan(drive);
+    fn start_procs(&mut self, view: usize) {
+        self.app.begin_scan(view);
         let mut st = procs::ProcState::default();
-        st.start(self.hwnd, drive, WM_PROCS);
+        st.start(self.hwnd, view, WM_PROCS);
         self.procs = Some(st);
         self.sync_timers();
         self.invalidate();
@@ -955,7 +955,7 @@ impl Win {
     /// refreshes the rows.
     fn preview_tick(&mut self) {
         let deadline = Instant::now() + APPLY_BUDGET;
-        // Scans of kept drives build their trees too, so a drive comes back with what was found.
+        // Scans of kept views build their trees too, so a view comes back with what was found.
         for d in self.parked.iter_mut().flatten() {
             if let Some(p) = &mut d.preview {
                 p.apply(d.app.tree_mut(), deadline);
@@ -1097,7 +1097,7 @@ impl Win {
     fn journal_event(&mut self) {
         self.posted.store(false, Ordering::Release);
         for d in 0..self.parked.len().max(self.app.active.map_or(0, |a| a + 1)) {
-            // The watches of drives off screen keep their trees current too.
+            // The watches of views off screen keep their trees current too.
             self.in_slot(d, |w| {
                 let ended = w.watch.as_mut().and_then(Watch::drain);
                 w.apply_live();
@@ -1118,7 +1118,7 @@ impl Win {
         }
     }
 
-    /// `apply_queued`, and starts the live timer if there is work to refresh. A drive off screen
+    /// `apply_queued`, and starts the live timer if there is work to refresh. A view off screen
     /// keeps its changes marked until it is shown again.
     fn apply_live(&mut self) {
         self.apply_queued();
@@ -1180,7 +1180,7 @@ impl Win {
             return true;
         }
         let Some(i) = self.app.active else { return false };
-        if !self.policy.allow(&self.app.drives[i].root, Instant::now(), self.last_input) {
+        if !self.policy.allow(&self.app.views[i].root, Instant::now(), self.last_input) {
             return false;
         }
         self.start_rescan(i);
@@ -1250,22 +1250,22 @@ fn properties(path: &str) {
 }
 
 /// Arguments for the elevated copy: `--scan "C:"` restarts the scan the user was looking at. `title` is a
-/// `DriveInfo::title`, which has no trailing backslash to escape the closing quote.
+/// `ViewInfo::title`, which has no trailing backslash to escape the closing quote.
 pub fn relaunch_args(title: Option<&str>) -> String {
     title.map(|t| format!("--scan \"{t}\"")).unwrap_or_default()
 }
 
-/// The volume (a `DriveInfo::title`) after `--scan`, if any.
+/// The volume (a `ViewInfo::title`) after `--scan`, if any.
 pub fn parse_scan_arg(mut args: impl Iterator<Item = String>) -> Option<String> {
     args.find(|a| a == "--scan")?;
     args.next()
 }
 
 /// Starts this exe again with the `runas` verb. False if the user declined the UAC prompt.
-fn relaunch_elevated(drive: Option<&str>) -> bool {
+fn relaunch_elevated(view: Option<&str>) -> bool {
     let Ok(exe) = std::env::current_exe() else { return false };
     let file = wide(&exe.to_string_lossy());
-    let args = wide(&relaunch_args(drive));
+    let args = wide(&relaunch_args(view));
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         lpVerb: w!("runas"),
@@ -1356,7 +1356,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             });
         }
         Effect::Elevate => {
-            let title = with(|w| w.app.active.map(|i| w.app.drives[i].title().to_string())).flatten();
+            let title = with(|w| w.app.active.map(|i| w.app.views[i].title().to_string())).flatten();
             if relaunch_elevated(title.as_deref()) {
                 let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
             }
@@ -1386,14 +1386,14 @@ fn commit(hwnd: HWND) {
         }
         _ if permanent && !dialog::confirm_permanent(hwnd, req.paths.len(), req.bytes) => {}
         _ => {
-            start_delete(hwnd, req.drive, req.paths, permanent);
+            start_delete(hwnd, req.view, req.paths, permanent);
         }
     }
     with(|w| w.invalidate());
 }
 
 /// Runs the delete of `paths` on a worker thread; the result comes back as `WM_DELETED`.
-fn start_delete(hwnd: HWND, drive: usize, paths: Vec<String>, permanent: bool) {
+fn start_delete(hwnd: HWND, view: usize, paths: Vec<String>, permanent: bool) {
     if with(|w| w.app.begin_delete()) != Some(true) {
         with(|w| w.invalidate());
         return;
@@ -1401,7 +1401,7 @@ fn start_delete(hwnd: HWND, drive: usize, paths: Vec<String>, permanent: bool) {
     let owner = hwnd.0 as isize;
     std::thread::spawn(move || {
         let out = trash::delete(paths, permanent, owner);
-        let boxed = Box::into_raw(Box::new((drive, permanent, out)));
+        let boxed = Box::into_raw(Box::new((view, permanent, out)));
         // The window may be gone by now; then the box leaks, which is harmless at exit.
         let _ = unsafe { PostMessageW(Some(HWND(owner as *mut _)), WM_DELETED, WPARAM(0), LPARAM(boxed as isize)) };
     });
@@ -1822,8 +1822,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_DELETED => {
             let raw = lp.0 as *mut (usize, bool, Vec<trash::Outcome>);
             let done = with(|w| {
-                let (drive, permanent, out) = *unsafe { Box::from_raw(raw) };
-                w.finish_delete(drive, out).map(|f| (drive, permanent, f))
+                let (view, permanent, out) = *unsafe { Box::from_raw(raw) };
+                w.finish_delete(view, out).map(|f| (view, permanent, f))
             });
             match done {
                 // The state was borrowed (a nested message loop): try again rather than lose the result.
@@ -1831,9 +1831,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     let _ = unsafe { PostMessageW(Some(hwnd), WM_DELETED, WPARAM(0), lp) };
                 }
                 // With no borrow held (the dialog runs its own message loop): say what failed and why, retry only those.
-                Some(Some((drive, permanent, (failed, total)))) => {
+                Some(Some((view, permanent, (failed, total)))) => {
                     if dialog::failed(hwnd, &failed, total) {
-                        start_delete(hwnd, drive, failed.into_iter().map(|f| f.0).collect(), permanent);
+                        start_delete(hwnd, view, failed.into_iter().map(|f| f.0).collect(), permanent);
                     }
                 }
                 Some(None) => {}
@@ -1848,15 +1848,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_PROCS => {
             let snap = unsafe { Box::from_raw(lp.0 as *mut procs::Snapshot) };
             with(move |w| {
-                let drive = snap.drive;
-                w.in_slot(drive, |w| w.procs_update(*snap));
+                let view = snap.view;
+                w.in_slot(view, |w| w.procs_update(*snap));
             });
             LRESULT(0)
         }
         WM_SCAN_DONE => {
             with(|w| {
                 w.in_slot(wp.0, |w| w.scan_done());
-                w.sync_timers(); // a kept drive's preview may have ended
+                w.sync_timers(); // a kept view's preview may have ended
             });
             LRESULT(0)
         }
@@ -1965,7 +1965,7 @@ pub fn run() -> Result<()> {
     with(|w| w.app.restore(&saved));
     if let Some(title) = parse_scan_arg(std::env::args()) {
         with(|w| {
-            if let Some(i) = w.app.drives.iter().position(|d| d.title().eq_ignore_ascii_case(title.trim_end_matches('\\'))) {
+            if let Some(i) = w.app.views.iter().position(|d| d.title().eq_ignore_ascii_case(title.trim_end_matches('\\'))) {
                 w.start_scan(i);
             }
         });

@@ -55,7 +55,7 @@ impl Filter {
 
     /// The query or the tree changed: cancel the scan in flight and forget it.
     fn bump(&mut self) {
-        // Unique across drives: a result can only match the run that asked for it.
+        // Unique across views: a result can only match the run that asked for it.
         self.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
         self.cancel.store(self.generation, Ordering::Relaxed);
         self.running = None;
@@ -87,7 +87,7 @@ impl App {
 
     /// Whether (x, y) is in the filter box.
     pub fn over_filter_box(&self, x: f32, y: f32) -> bool {
-        matches!(self.layout.hit(x, y, self.drives.len()), Hit::FilterBox)
+        matches!(self.layout.hit(x, y, self.views.len()), Hit::FilterBox)
     }
 
     pub fn filter_box(&self) -> crate::layout::Rect {
@@ -294,7 +294,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{DriveInfo, Input};
+    use crate::app::{ViewInfo, Input};
     use crate::layout::{Layout, HEADER_H, PICKER_H, ROW_H};
     use plumb_core::{NodeFlags, Tree, TreeBuilder};
 
@@ -314,8 +314,8 @@ mod tests {
     }
 
     fn app() -> App {
-        let drives = vec![DriveInfo { root: "C:\\".into(), total: 1000, free: 500, kind: crate::app::ViewKind::Disk }];
-        let mut a = App::new(Layout::new(800.0, 600.0), drives, "test".into());
+        let views = vec![ViewInfo { root: "C:\\".into(), total: 1000, free: 500, kind: crate::app::ViewKind::Disk }];
+        let mut a = App::new(Layout::new(800.0, 600.0), views, "test".into());
         a.begin_scan(0);
         a.finish_scan(tree(), "done".into());
         a
