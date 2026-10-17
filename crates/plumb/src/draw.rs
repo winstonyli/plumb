@@ -33,8 +33,19 @@ const RESCAN_RESERVED: f32 = RESCAN_W + 24.0;
 fn mix(a: D2D1_COLOR_F, b: D2D1_COLOR_F, f: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r: a.r + (b.r - a.r) * f, g: a.g + (b.g - a.g) * f, b: a.b + (b.b - a.b) * f, a: a.a }
 }
+/// Corner radius of the map's file tiles.
+const TILE_RADIUS: f32 = 2.0;
 /// Corner radius of controls: chips, buttons, the filter box.
 const RADIUS: f32 = 4.0;
+
+/// `c` with a fraction of its colour taken out toward the grey of the same brightness.
+fn soften(c: D2D1_COLOR_F, f: f32) -> D2D1_COLOR_F {
+    let y = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    mix(c, D2D1_COLOR_F { r: y, g: y, b: y, a: c.a }, f)
+}
+
+/// How much colour the map's tile fills give up, so they sit calmly beside the interface.
+const TILE_SOFTEN: f32 = 0.18;
 
 fn rgb(hex: u32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -94,7 +105,7 @@ impl Theme {
                 bg: rgb(0x1e1e1e), panel: rgb(0x2b2b2b), raised: rgb(0x333336), border: rgb(0x454548), fg: rgb(0xeeeeee), dim: rgb(0x9a9a9a),
                 accent: rgb(0x4c9aff), accent_soft: mix(rgb(0x333336), rgb(0x4c9aff), 0.22), danger: rgb(0xd14040), bar: rgb(0x3b5f8f), bound: rgb(0xb07a2a), select: rgb(0x37373d), error: rgb(0x5c2b2e),
                 hover: rgb(0x2a2a2e), folder: rgb(0xe0b050),
-                class: [0xd0605e, 0xd98c3f, 0x4fae72, 0xb59a3c, 0x5a8fd6, 0x8f6fd0, 0x3fb0b0, 0xb06fa8, 0x7f9fb0, 0xa5b84a, 0x9a8c78].map(rgb),
+                class: [0xd0605e, 0xd98c3f, 0x4fae72, 0xaa8138, 0x5a8fd6, 0x8f6fd0, 0x3fb0b0, 0xb06fa8, 0x7f9fb0, 0xa5b84a, 0x9a8c78].map(|h| soften(rgb(h), TILE_SOFTEN)),
             }
         } else {
             Self {
@@ -102,7 +113,7 @@ impl Theme {
                 bg: rgb(0xffffff), panel: rgb(0xf0f0f0), raised: rgb(0xf7f7f7), border: rgb(0xd0d0d0), fg: rgb(0x1a1a1a), dim: rgb(0x6b6b6b),
                 accent: rgb(0x0b63ce), accent_soft: mix(rgb(0xf7f7f7), rgb(0x0b63ce), 0.14), danger: rgb(0xd14040), bar: rgb(0xb5d1f5), bound: rgb(0xf0b860), select: rgb(0xdbe8fb), error: rgb(0xfbd5d8),
                 hover: rgb(0xedf3fc), folder: rgb(0xd09a2a),
-                class: [0xc4423f, 0xcf7a22, 0x2f9a58, 0xa08420, 0x2f6fc0, 0x7650c0, 0x1f9696, 0x9a4f92, 0x5f8296, 0x7f9a22, 0xb0a28c].map(rgb),
+                class: [0xc4423f, 0xcf7a22, 0x2f9a58, 0xbaad25, 0x2f6fc0, 0x7650c0, 0x1f9696, 0x9a4f92, 0x5f8296, 0x7f9a22, 0xb0a28c].map(|h| soften(rgb(h), TILE_SOFTEN)),
             }
         }
     }
@@ -381,9 +392,14 @@ impl Pen<'_> {
 
     /// `r` filled with rounded corners.
     fn round(&self, r: Rect, c: D2D1_COLOR_F) {
+        self.round_by(r, RADIUS, c);
+    }
+
+    /// `r` filled with corners of the given radius.
+    fn round_by(&self, r: Rect, radius: f32, c: D2D1_COLOR_F) {
         unsafe {
             self.brush.SetColor(&c);
-            self.gfx.d2d.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rc(r), radiusX: RADIUS, radiusY: RADIUS }, &self.brush);
+            self.gfx.d2d.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rc(r), radiusX: radius, radiusY: radius }, &self.brush);
         }
     }
 
@@ -717,10 +733,10 @@ impl Pen<'_> {
         match tile.kind {
             Kind::File => {
                 let c = mix(t.class[tile.class.index()], t.bg, shade(now, tile.mtime) * FADE_MAX);
-                if r.w >= 3.0 && r.h >= 3.0 {
-                    // A darker edge: the dark fill, then the colour inside it (two draws, not five).
-                    self.fill(r, D2D1_COLOR_F { r: c.r * 0.6, g: c.g * 0.6, b: c.b * 0.6, a: c.a });
-                    self.fill(Rect { x: r.x + 1.0, y: r.y + 1.0, w: r.w - 2.0, h: r.h - 2.0 }, c);
+                if r.w >= 4.0 && r.h >= 4.0 {
+                    // The tile sits inside a one-pixel gap of the pane's background, its corners rounded once it is big enough.
+                    let inner = Rect { x: r.x + 1.0, y: r.y + 1.0, w: r.w - 2.0, h: r.h - 2.0 };
+                    if inner.w >= 8.0 && inner.h >= 8.0 { self.round_by(inner, TILE_RADIUS, c) } else { self.fill(inner, c) }
                 } else {
                     self.fill(r, c);
                 }
