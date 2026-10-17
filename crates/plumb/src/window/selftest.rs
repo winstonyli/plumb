@@ -616,6 +616,14 @@ pub fn selftest_processes() -> Result<String> {
         with(|w| w.open(pi, String::new()));
         let before = with(|w| w.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
         wait("polling again", 10, &|w| w.procs_polling() && w.procs.as_ref().is_some_and(|p| p.updates() > before))?;
+        // Minimised, the list is not followed; restored, it is again.
+        unsafe { SendMessageW(hwnd, WM_SIZE, Some(WPARAM(SIZE_MINIMIZED as usize)), Some(LPARAM(0))) };
+        if with(|w| w.procs_polling()) != Some(false) {
+            return Err(fail("still polling while minimised".into()));
+        }
+        unsafe { SendMessageW(hwnd, WM_SIZE, Some(WPARAM(SIZE_RESTORED as usize)), Some(LPARAM(0))) };
+        let before = with(|w| w.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
+        wait("polling after restore", 10, &|w| w.procs_polling() && w.procs.as_ref().is_some_and(|p| p.updates() > before))?;
         // The pane lists a file this process holds open once its row has rested selected.
         let held = std::fs::File::open(dir.join("f.bin")).map_err(|e| fail(e.to_string()))?;
         with(|w| {
@@ -648,7 +656,7 @@ pub fn selftest_processes() -> Result<String> {
             }
             None => String::new(),
         };
-        Ok(format!("this process {} in memory, a child followed, polling stopped while away, the Files held pane lists a file we hold{idle}", fmt::size(ws)))
+        Ok(format!("this process {} in memory, a child followed, polling stopped while away or minimised, the Files held pane lists a file we hold{idle}", fmt::size(ws)))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);

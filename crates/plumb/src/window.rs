@@ -905,6 +905,13 @@ impl Win {
         self.invalidate();
     }
 
+    /// The process list is followed only while the window can be seen: a minimised window stops the poller and
+    /// restoring it starts a new one (whose first snapshot has no rates).
+    fn follow_processes(&mut self, on: bool) {
+        let (Some(p), Some(view)) = (&mut self.procs, self.app.active) else { return };
+        if on { p.start(self.hwnd, view, WM_PROCS) } else { p.stop() }
+    }
+
     /// `WM_PROCS`: a snapshot of the processes.
     fn procs_update(&mut self, snap: procs::Snapshot) {
         let Some(st) = &mut self.procs else { return };
@@ -1601,12 +1608,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(1)
         }
         WM_SIZE => {
-            if wp.0 != SIZE_MINIMIZED as usize {
-                with(|w| {
+            let minimized = wp.0 == SIZE_MINIMIZED as usize;
+            with(|w| {
+                w.follow_processes(!minimized);
+                if !minimized {
                     w.resize();
                     w.invalidate();
-                });
-            }
+                }
+            });
             LRESULT(0)
         }
         WM_DPICHANGED => {
