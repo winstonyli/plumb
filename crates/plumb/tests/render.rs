@@ -520,3 +520,45 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
     let after_icon = 48.0;
     assert!(!differs(after_icon, mx - after_icon), "and nothing else changes");
 }
+
+#[test]
+fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
+    use plumb_core::procs::{Metric, Procs, Sample};
+    use plumb_core::treemap::layout as map_layout;
+    let gfx = Gfx::warp().expect("WARP device");
+    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, cpu_100ns: cpu, io_bytes: io };
+    let (mut procs, mut tree) = Procs::new(Metric::Memory);
+    let list = |cpu: u64, io: u64| {
+        vec![
+            sample(4, 0, "System", 200_000, 0, 0),
+            sample(800, 4, "services.exe", 9_000_000, 0, 0),
+            sample(1200, 800, "svchost.exe", 31_000_000, cpu, io),
+            sample(2000, 1, "explorer.exe", 180_000_000, cpu * 2, io * 4),
+            sample(2100, 2000, "chrome.exe", 620_000_000, cpu * 5, io * 9),
+            sample(2200, 2100, "chrome.exe", 240_000_000, cpu, io),
+        ]
+    };
+    procs.apply(&mut tree, &list(0, 0), 0);
+    procs.apply(&mut tree, &list(5_000_000, 3_000_000), 10_000_000);
+    let mut model = RowModel::new(&tree);
+    model.set_sort(&tree, plumb_core::rows::SortKey::Size, true);
+    let root = model.rows()[0].id;
+    model.expand(&tree, root);
+    model.select(model.rows()[1].id);
+    let mut layout = Layout::new(W as f32, H as f32);
+    layout.map_on = true;
+    let area = layout.map().expect("wide enough");
+    let tiles = map_layout(&tree, root, area, 1.0);
+    let classes = plumb_core::treemap::class_bytes(&tiles);
+    let chips = [Chip { label: "C:  123 GB".into(), used: 0.7, mark: Mark::None }, Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
+    let layout = Layout { chips: vec![CHIP_W; chips.len()], ..layout };
+    let scene = Scene {
+        layout, theme: Theme::new(false), chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot: None,
+        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+        message: "", loading: false, kind: plumb::app::ViewKind::Processes, status: "6 processes, 1.1 GB in use of 16 GB", selection: "", banner: None,
+        filter: FilterBar::default(), basket: None,
+        map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
+    };
+    let shot = render_scene(&gfx, &scene, "plumb-processes");
+    assert_eq!(shot.len(), (W * H * 4) as usize);
+}

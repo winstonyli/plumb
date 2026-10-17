@@ -625,11 +625,33 @@ pub fn selftest_processes() -> Result<String> {
         if worst > cores * 1500 {
             return Err(fail(format!("a burst of CPU after returning: {worst} tenths of a percent")));
         }
-        Ok(format!("this process {} in memory, a child followed, polling stopped while away", fmt::size(ws)))
+        // PLUMB_PROCS_SECS=<n>: then sit on the view for n seconds and report the CPU the polling cost (the window is
+        // hidden, so nothing is painted: this is the poll, the reconcile and the row refresh).
+        let idle = match std::env::var("PLUMB_PROCS_SECS").ok().and_then(|v| v.parse::<u64>().ok()) {
+            Some(n) => {
+                let (cpu0, t0) = (process_cpu(), Instant::now());
+                let until = t0 + Duration::from_secs(n);
+                wait("the idle period", n + 5, &|_| Instant::now() >= until)?;
+                let (cpu, wall) = (process_cpu() - cpu0, t0.elapsed());
+                format!("; idle on the view for {:.0} s: {:.1} ms CPU ({:.2} % of one core)", wall.as_secs_f64(), cpu.as_secs_f64() * 1e3, 100.0 * cpu.as_secs_f64() / wall.as_secs_f64())
+            }
+            None => String::new(),
+        };
+        Ok(format!("this process {} in memory, a child followed, polling stopped while away{idle}", fmt::size(ws)))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);
     unsafe { DestroyWindow(hwnd)? };
     STATE.with(|s| *s.borrow_mut() = None);
     out
+}
+
+/// Kernel plus user time of this process.
+fn process_cpu() -> Duration {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let (mut c, mut e, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+    let _ = unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) };
+    let t = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32 | u64::from(f.dwLowDateTime)) * 100;
+    Duration::from_nanos(t(k) + t(u))
 }

@@ -2,7 +2,7 @@
 //! folds each snapshot into the app's tree.
 use crate::app::{process_summary, App, ProcInfo};
 use plumb_core::procs::{Metric, Procs, Sample};
-use plumb_scan::procs::{physical_memory, snapshot, ProcEntry};
+use plumb_scan::procs::{physical_memory, ProcEntry, Snapshotter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::Thread;
@@ -38,8 +38,9 @@ impl Poller {
         let hwnd = hwnd.0 as isize;
         let handle = std::thread::spawn(move || {
             let mut last: Option<Instant> = None;
+            let mut shots = Snapshotter::default();
             while !flag.load(Ordering::Acquire) {
-                if let Ok(entries) = snapshot() {
+                if let Ok(entries) = shots.take() {
                     let now = Instant::now();
                     let elapsed = last.map_or(0, |t| (now - t).as_nanos() as u64 / 100);
                     last = Some(now);

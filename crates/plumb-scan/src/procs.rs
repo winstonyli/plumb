@@ -39,7 +39,35 @@ fn image_path(pid: u32) -> Option<String> {
     ok.then(|| String::from_utf16_lossy(&buf[..n as usize]))
 }
 
+/// Takes snapshots, remembering each process's path (and that it could not be had) so the lookup, which opens
+/// the process, is made once per process and not once per snapshot.
+#[derive(Default)]
+pub struct Snapshotter {
+    paths: std::collections::HashMap<(u32, u64), Option<String>>,
+}
+
+impl Snapshotter {
+    pub fn take(&mut self) -> Result<Vec<ProcEntry>, ProcError> {
+        let mut list = read()?;
+        let mut paths = std::collections::HashMap::with_capacity(list.len());
+        for e in &mut list {
+            let key = (e.pid, e.created);
+            let path = self.paths.remove(&key).unwrap_or_else(|| if e.pid == 0 { None } else { image_path(e.pid) });
+            e.path = path.clone();
+            paths.insert(key, path);
+        }
+        self.paths = paths; // what has exited is forgotten
+        Ok(list)
+    }
+}
+
+/// One snapshot, with every path looked up.
 pub fn snapshot() -> Result<Vec<ProcEntry>, ProcError> {
+    Snapshotter::default().take()
+}
+
+/// The processes without their paths.
+fn read() -> Result<Vec<ProcEntry>, ProcError> {
     let words = crate::nt::query(SYSTEM_PROCESS_INFORMATION, 1 << 20).map_err(ProcError)?;
     let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), words.len() * 8) };
     let mut out = Vec::new();
@@ -64,7 +92,7 @@ pub fn snapshot() -> Result<Vec<ProcEntry>, ProcError> {
             private_bytes: u64_at(e, 200),
             cpu_100ns: u64_at(e, 40) + u64_at(e, 48),
             io_bytes: u64_at(e, 232) + u64_at(e, 240) + u64_at(e, 248),
-            path: if pid == 0 { None } else { image_path(pid) },
+            path: None,
         });
         let next = u32::from_le_bytes(e[0..4].try_into().unwrap()) as usize;
         if next == 0 {
@@ -109,5 +137,44 @@ mod tests {
         assert!(physical_memory().0 > 1 << 30);
         let _ = child.kill();
         let _ = child.wait();
+    }
+}
+
+#[cfg(test)]
+mod cost {
+    use super::*;
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+
+    fn cpu() -> std::time::Duration {
+        let (mut c, mut e, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+        let _ = unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) };
+        let t = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32 | u64::from(f.dwLowDateTime)) * 100;
+        std::time::Duration::from_nanos(t(k) + t(u))
+    }
+
+    /// Prints what a snapshot costs in CPU: `cargo test -p plumb-scan procs::cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn what_a_snapshot_costs() {
+        let mut shots = Snapshotter::default();
+        let first = shots.take().unwrap();
+        let n = 100;
+        let c0 = cpu();
+        for _ in 0..n {
+            shots.take().unwrap();
+        }
+        let take = (cpu() - c0) / n;
+        let c0 = cpu();
+        for _ in 0..n {
+            crate::nt::query(SYSTEM_PROCESS_INFORMATION, 1 << 20).unwrap();
+        }
+        let raw = (cpu() - c0) / n;
+        let c0 = cpu();
+        for _ in 0..n {
+            read().unwrap();
+        }
+        let parse = (cpu() - c0) / n;
+        eprintln!("PROCS {} processes; CPU per snapshot: take {take:?}, read {parse:?}, raw query {raw:?}", first.len());
     }
 }
