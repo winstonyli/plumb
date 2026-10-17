@@ -467,16 +467,18 @@ pub fn selftest_delete() -> Result<String> {
             return Err(fail("the recycle removed the wrong things".into()));
         }
         pump_until("the tree to drop the recycled file", 15, &|w| !in_tree(w, REC) && in_tree(w, "keep.txt"))?;
-        // It must be in the Recycle Bin (not deleted for good); take it out again so the test leaves nothing behind.
+        // It must be in the Recycle Bin (not deleted for good) exactly once, and the shell's own undo for it (the bin's
+        // "Restore" verb, which is what Explorer's Undo runs) must put it back where it was.
         let script = format!(
-            "$s = New-Object -ComObject Shell.Application; $n = 0; foreach ($i in $s.Namespace(10).Items()) {{ if ($i.Name -like '{REC}') {{ \
-             $n++; $r = $i.Path; Remove-Item -LiteralPath $r -Force; \
-             $m = Join-Path (Split-Path $r) ((Split-Path $r -Leaf).Replace('$R', '$I')); Remove-Item -LiteralPath $m -Force -ErrorAction SilentlyContinue }} }}; $n"
+            "$s = New-Object -ComObject Shell.Application; $n = 0; foreach ($i in $s.Namespace(10).Items()) {{ if ($i.Name -like '{REC}') {{              $n++; $i.InvokeVerb('undelete') }} }}; $n"
         );
         let bin = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]).stdin(std::process::Stdio::null()).output().map_err(io)?;
         if String::from_utf8_lossy(&bin.stdout).trim() != "1" {
             return Err(fail(format!("the recycled file is not in the Recycle Bin exactly once: {:?} {}", String::from_utf8_lossy(&bin.stdout), String::from_utf8_lossy(&bin.stderr))));
         }
+        pump_until("the restored file to be back", 15, &|_| exists(REC))
+            .map_err(|_| fail("restoring the recycled file from the Recycle Bin did not put it back".into()))?;
+        pump_until("the tree to list the restored file", 15, &|w| in_tree(w, REC))?;
 
         // A file too big for the Recycle Bin (sparse, 200 GB logical, no disk used): the shell asks whether to delete it
         // for good (confirmations stay on for a recycle). Answering No must keep the file (our failure dialog then lists it, closed
@@ -538,7 +540,7 @@ pub fn selftest_delete() -> Result<String> {
         if exists(LOCKED) || with(|w| w.app.basket().len()) != Some(0) {
             return Err(fail("the released file was not deleted".into()));
         }
-        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items; a file too big for the Recycle Bin gets the shell's prompt and survives No; a held file (recycled) shows the failure dialog (Retry, Close) with its reason on the status line and stays marked; tree followed in {lag:.1?}"))
+        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items, and a recycled file restores from the bin; a file too big for the Recycle Bin gets the shell's prompt and survives No; a held file (recycled) shows the failure dialog (Retry, Close) with its reason on the status line and stays marked; tree followed in {lag:.1?}"))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);
