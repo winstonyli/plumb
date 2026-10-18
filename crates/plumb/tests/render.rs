@@ -620,7 +620,7 @@ fn the_processes_map_follows_the_metric_button() {
 
 /// The Processes scene (with the held pane, a filter and the metric button) drawn with `theme` at `scale`: a bitmap of
 /// `W x H` DIPs in physical pixels, through the real paint path. The frame goes to `PLUMB_SHOT_DIR` as `stem` for looking at.
-fn processes_shot(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, stem: &str) -> Vec<u8> {
+fn processes_shot(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, hot: &dyn Fn(&Layout) -> Rect, stem: &str) -> Vec<u8> {
     use plumb_core::procs::{Metric, Procs, Sample};
     let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, cpu_100ns: cpu, io_bytes: io };
     let (mut procs, mut tree) = Procs::new(Metric::Memory);
@@ -637,8 +637,9 @@ fn processes_shot(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, stem: 
     let layout = Layout { chips: chip_widths(gfx, &chips), map_on: true, ..Layout::new(W as f32, H as f32) }.with_metric(true).with_held(true);
     let tiles = plumb_core::treemap::layout(&tree, root, layout.map().unwrap(), 1.0);
     let classes = plumb_core::treemap::class_bytes(&tiles);
+    let hot = Some(hot(&layout));
     let scene = Scene {
-        layout, theme, chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot: None,
+        layout, theme, chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Metric::Memory, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB", selection: "", banner: None,
         filter: FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() }, basket: None,
@@ -660,7 +661,7 @@ fn the_processes_view_paints_at_every_scale() {
     let gfx = Gfx::warp().expect("WARP device");
     let painter = Painter::new(&gfx).unwrap();
     for (dark, scale) in [(false, 1.0f32), (false, 1.25), (true, 1.5), (false, 2.0)] {
-        processes_shot(&gfx, &painter, Theme::new(dark), scale, &format!("plumb-processes-{}pct", (scale * 100.0) as u32));
+        processes_shot(&gfx, &painter, Theme::new(dark), scale, &|_| Rect { x: -1.0, y: -1.0, w: 0.0, h: 0.0 }, &format!("plumb-processes-{}pct", (scale * 100.0) as u32));
     }
 }
 
@@ -674,7 +675,29 @@ fn the_processes_view_paints_with_extreme_accents() {
     for (name, accent) in [("yellow", 0xff00_e6ff_u32), ("white", 0xffff_ffff), ("black", 0xff00_0000), ("grey", 0xff80_8080), ("green", 0xff00_c000)] {
         for dark in [false, true] {
             let t = if dark { "dark" } else { "light" };
-            processes_shot(&gfx, &painter, Theme::with_accent(dark, Some(accent)), 1.0, &format!("plumb-accent-{name}-{t}"));
+            processes_shot(&gfx, &painter, Theme::with_accent(dark, Some(accent)), 1.0, &|_| Rect { x: -1.0, y: -1.0, w: 0.0, h: 0.0 }, &format!("plumb-accent-{name}-{t}"));
+        }
+    }
+}
+
+/// The pointer over each kind of control: frames for looking at (`PLUMB_SHOT_DIR`), one per control, in both themes.
+#[test]
+fn the_processes_view_paints_the_hover_state_of_each_control() {
+    let gfx = Gfx::warp().expect("WARP device");
+    let painter = Painter::new(&gfx).unwrap();
+    type Pick = fn(&Layout) -> Rect;
+    let picks: [(&str, Pick); 6] = [
+        ("chip", |l| l.chip(0)),
+        ("regex", |l| l.filter_regex()),
+        ("clear", |l| l.filter_clear()),
+        ("metric", |l| l.metric_button()),
+        ("map", |l| l.map_button()),
+        ("admin", |l| l.admin_button()),
+    ];
+    for dark in [false, true] {
+        for (name, pick) in picks {
+            let t = if dark { "dark" } else { "light" };
+            processes_shot(&gfx, &painter, Theme::new(dark), 1.0, &pick, &format!("plumb-hover-{name}-{t}"));
         }
     }
 }
