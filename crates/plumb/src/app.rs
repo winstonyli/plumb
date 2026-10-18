@@ -344,6 +344,8 @@ pub struct App {
     sort: (usize, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
     grab: Option<f32>,
+    /// The pointer is over the scrollbar thumb.
+    pub thumb_hover: bool,
     /// While dragging a column edge: the column, and the pointer x and column width at the start.
     col_drag: Option<(usize, f32, f32)>,
     /// The folder the map shows; follows the tree's selection (see `follow_selection`).
@@ -392,7 +394,7 @@ impl App {
     pub fn new(layout: Layout, views: Vec<ViewInfo>, adapter: String) -> Self {
         let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
-            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, tree: None, model: None, scroll: 0,
+            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, tree: None, model: None, scroll: 0,
             can_elevate: false, accent: None, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
@@ -613,6 +615,11 @@ impl App {
 
     fn total_rows(&self) -> usize {
         self.model.as_ref().map_or(0, |m| m.rows().len())
+    }
+
+    /// The scrollbar thumb, if the rows overflow.
+    fn thumb(&self) -> Option<Rect> {
+        self.layout.thumb(self.total_rows(), self.scroll)
     }
 
     fn max_scroll(&self) -> usize {
@@ -844,6 +851,7 @@ impl App {
                     Hit::Header(c) => Some(self.layout.header_cell(c)),
                     _ => None,
                 });
+                self.thumb_hover = self.thumb().is_some_and(|t| t.contains(x, y));
                 self.map_hover = if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map) { treemap::hit(&self.map_tiles, x, y) } else { None };
             }
             Input::ToggleMap => self.layout.map_on = !self.layout.map_on,
@@ -1367,8 +1375,9 @@ impl App {
             sort: self.sort,
             kind: self.kind(),
             admin: self.can_elevate.then(|| self.layout.admin_button()),
-            hot: self.hot,
-            pressed: self.pressed,
+            // The scrollbar thumb counts as a control under the pointer, and is pressed while it is dragged.
+            hot: self.hot.or(self.thumb().filter(|_| self.thumb_hover || self.grab.is_some())),
+            pressed: self.pressed || self.grab.is_some(),
             view,
             // The status bar already says what a running scan has found.
             message: if running { "" } else { &message },
@@ -1946,10 +1955,16 @@ mod tests {
         }
         let total = m.rows().len();
         let th = a.layout.thumb(total, 0).unwrap();
+        a.handle(Input::Hover(795.0, th.y + 2.0));
+        assert_eq!(a.with_scene(false, |s| (s.hot, s.pressed)), (Some(th), false), "the thumb lights up under the pointer");
         a.handle(Input::Click(795.0, th.y + 2.0));
+        assert!(a.with_scene(false, |s| s.pressed), "and is pressed while dragged");
         a.handle(Input::Drag(795.0, th.y + 2.0 + 100.0));
         assert!(a.scroll > 0);
         a.handle(Input::Release);
+        assert!(a.with_scene(false, |s| !s.pressed));
+        a.handle(Input::Hover(5.0, th.y));
+        assert_eq!(a.with_scene(false, |s| s.hot), None, "off the thumb it is not hot");
         let s = a.scroll;
         a.handle(Input::Drag(795.0, th.y + 300.0));
         assert_eq!(a.scroll, s);

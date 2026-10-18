@@ -1037,7 +1037,9 @@ impl Pen<'_> {
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {
             self.fill(l.scrollbar(), t.panel);
-            self.fill(Rect { x: th.x + 2.0, w: th.w - 4.0, ..th }, t.dim);
+            // The thumb lights up like any control: brighter under the pointer, brighter still while dragged.
+            let grip = if s.hot != Some(th) { 0.0 } else if s.pressed { 0.7 } else { 0.35 };
+            self.fill(Rect { x: th.x + 2.0, w: th.w - 4.0, ..th }, mix(t.dim, t.fg, grip));
         }
     }
 }

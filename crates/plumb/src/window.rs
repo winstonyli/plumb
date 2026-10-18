@@ -1680,9 +1680,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let _ = unsafe { TrackMouseEvent(&mut t) }; // asks for WM_MOUSELEAVE
                 with(|w| {
                     let (x, y) = w.dip(lp);
-                    let before = (w.app.hover, w.app.hot, w.app.map_hover);
+                    let before = (w.app.hover, w.app.hot, w.app.map_hover, w.app.thumb_hover);
                     w.app.handle(Input::Hover(x, y));
-                    if (w.app.hover, w.app.hot, w.app.map_hover) != before {
+                    if (w.app.hover, w.app.hot, w.app.map_hover, w.app.thumb_hover) != before {
                         w.invalidate();
                     }
                     // Moving onto another target (or off one) hides the old tip so the next rest asks again; the same
@@ -1741,7 +1741,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_MOUSELEAVE => {
             with(|w| {
-                if w.app.hover.take().is_some() | w.app.hot.take().is_some() | w.app.map_hover.take().is_some() {
+                if w.app.hover.take().is_some() | w.app.hot.take().is_some() | w.app.map_hover.take().is_some() | std::mem::take(&mut w.app.thumb_hover) {
                     w.invalidate();
                 }
             });
