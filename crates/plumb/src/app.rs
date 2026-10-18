@@ -106,6 +106,8 @@ struct Held {
     /// Bumped whenever the process of interest changes, so a late answer for another one is recognised.
     epoch: u64,
     state: HeldState,
+    /// The first file line shown.
+    scroll: usize,
 }
 
 /// What the Processes view knows about a process besides what its tree holds.
@@ -185,8 +187,8 @@ pub enum Input {
     Click(f32, f32),
     DoubleClick(f32, f32),
     RightClick(f32, f32),
-    /// Rows to scroll; positive is down.
-    Wheel(i32),
+    /// Rows to scroll (positive is down) with the pointer at this x and y: over the Files held pane it scrolls that.
+    Wheel(i32, f32, f32),
     Key(Key),
     /// Mouse moved with the left button held, at this x and y.
     Drag(f32, f32),
@@ -752,7 +754,7 @@ impl App {
         if want == self.held.pid {
             return false;
         }
-        self.held = Held { pid: want, epoch: self.held.epoch + 1, state: if want.is_some() { HeldState::Waiting } else { HeldState::Idle } };
+        self.held = Held { pid: want, epoch: self.held.epoch + 1, state: if want.is_some() { HeldState::Waiting } else { HeldState::Idle }, scroll: 0 };
         want.is_some()
     }
 
@@ -770,7 +772,16 @@ impl App {
         }
     }
 
-    /// The pane's title line and file lines (the first `HELD_ROWS`, then a count of the rest).
+    /// Scrolls the file lines by `rows`, within the list.
+    fn held_scroll(&mut self, rows: i32) {
+        let n = match &self.held.state {
+            HeldState::Ready(Ok(list)) => list.files.len(),
+            _ => 0,
+        };
+        self.held.scroll = (self.held.scroll as i64 + rows as i64).clamp(0, n.saturating_sub(crate::layout::HELD_ROWS) as i64) as usize;
+    }
+
+    /// The pane's title line and the file lines in view (`HELD_ROWS` from the scroll offset; the title gives the range).
     fn held_text(&self) -> Option<(String, Vec<String>)> {
         let pid = self.held.pid?;
         let name = self.tree.as_ref().zip(self.model.as_ref().and_then(|m| m.selected())).map_or_else(String::new, |(t, id)| t.name_string(id).to_string());
@@ -782,12 +793,10 @@ impl App {
             HeldState::Ready(Ok(list)) => {
                 let n = list.files.len();
                 let skipped = if list.skipped > 0 { format!(", {} not readable", list.skipped) } else { String::new() };
-                let mut lines: Vec<String> = list.files.iter().take(crate::layout::HELD_ROWS).cloned().collect();
-                if n > crate::layout::HELD_ROWS {
-                    lines.pop();
-                    lines.push(format!("and {} more", n - crate::layout::HELD_ROWS + 1));
-                }
-                (head(format!("{n} file{}{skipped}", if n == 1 { "" } else { "s" })), lines)
+                let first = self.held.scroll.min(n.saturating_sub(crate::layout::HELD_ROWS));
+                let lines: Vec<String> = list.files.iter().skip(first).take(crate::layout::HELD_ROWS).cloned().collect();
+                let range = if n > crate::layout::HELD_ROWS { format!(" ({}\u{2013}{})", first + 1, first + lines.len()) } else { String::new() };
+                (head(format!("{n} file{}{range}{skipped}", if n == 1 { "" } else { "s" })), lines)
             }
         })
     }
@@ -929,7 +938,8 @@ impl App {
                 (self.layout.w, self.layout.h) = (w, h);
                 self.set_scroll(self.scroll);
             }
-            Input::Wheel(rows) => self.set_scroll((self.scroll as i64 + rows as i64).max(0) as usize),
+            Input::Wheel(rows, x, y) if self.layout.held && self.layout.held_pane().contains(x, y) => self.held_scroll(rows),
+            Input::Wheel(rows, ..) => self.set_scroll((self.scroll as i64 + rows as i64).max(0) as usize),
             Input::Key(k) => {
                 if self.filter.ui.focus
                     && let Some(e) = filter::edit_for_key(k)
@@ -1648,8 +1658,24 @@ mod tests {
         let files: Vec<String> = (0..9).map(|i| format!("C:/f{i}")).collect();
         a.held_done(g, Ok(HandleList { files, skipped: 2 }));
         let (head, lines) = a.held_text().unwrap();
-        assert!(head.ends_with("9 files, 2 not readable"), "{head}");
-        assert_eq!((lines.len(), lines.last().unwrap().as_str()), (crate::layout::HELD_ROWS, "and 4 more"));
+        assert!(head.ends_with("9 files (1\u{2013}6), 2 not readable"), "{head}");
+        assert_eq!((lines.len(), lines.last().unwrap().as_str()), (crate::layout::HELD_ROWS, "C:/f5"));
+        // The wheel over the pane scrolls it, clamped to the list; elsewhere it scrolls the rows; a new selection starts over.
+        let pane = a.layout.held_pane();
+        let (px, py) = (pane.x + 10.0, pane.y + 10.0);
+        a.handle(Input::Wheel(2, px, py));
+        let (head, lines) = a.held_text().unwrap();
+        assert_eq!((head.contains("(3\u{2013}8)"), lines[0].as_str(), a.scroll), (true, "C:/f2", 0), "{head}");
+        a.handle(Input::Wheel(100, px, py));
+        assert_eq!(a.held_text().unwrap().1[0], "C:/f3", "clamped so the last line is the last file");
+        a.handle(Input::Wheel(-100, px, py));
+        assert_eq!(a.held_text().unwrap().1[0], "C:/f0");
+        a.handle(Input::Wheel(1, px, 5.0));
+        assert_eq!(a.held_text().unwrap().1[0], "C:/f0", "over the rows it does not scroll the pane");
+        a.handle(Input::Wheel(2, px, py));
+        a.held.pid = None;
+        a.held_sync();
+        assert_eq!(a.held.scroll, 0, "a new selection starts at the top");
         // A process with nothing open says so in its title and has no lines.
         let (mut a, id) = process_app();
         a.model.as_mut().unwrap().select(id);
@@ -2046,9 +2072,9 @@ mod tests {
         let n = a.model.as_ref().unwrap().rows().len();
         let vis = a.layout.rows_visible();
         assert!(n > vis, "need more rows than fit: {n} vs {vis}");
-        a.handle(Input::Wheel(10_000));
+        a.handle(Input::Wheel(10_000, 5.0, 100.0));
         assert_eq!(a.scroll, n - vis);
-        a.handle(Input::Wheel(-10_000));
+        a.handle(Input::Wheel(-10_000, 5.0, 100.0));
         assert_eq!(a.scroll, 0);
         a.handle(Input::Key(Key::End));
         assert_eq!(a.scroll, n - vis);
@@ -2586,7 +2612,7 @@ Test GPU", a.status())));
         let (mut a, centre) = asking();
         let (scroll, marks) = (a.scroll, a.basket.len());
         // Everything but its own buttons is swallowed, including the keys that would unmark or scroll the list.
-        for i in [Input::Wheel(3), Input::Edit(Edit::Delete), Input::Key(Key::Down), Input::Find] {
+        for i in [Input::Wheel(3, 5.0, 100.0), Input::Edit(Edit::Delete), Input::Key(Key::Down), Input::Find] {
             assert_eq!(a.handle(i), Effect::None);
         }
         assert!(a.modal().is_some() && a.scroll == scroll && a.basket.len() == marks);

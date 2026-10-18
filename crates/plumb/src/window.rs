@@ -1735,7 +1735,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             let delta = (wp.0 >> 16) as i16 as i32;
             with(|w| {
                 w.last_input = Instant::now();
-                w.app.handle(Input::Wheel(-delta / 120 * 3));
+                // The wheel message carries screen coordinates.
+                let mut p = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
+                let _ = unsafe { ScreenToClient(w.hwnd, &mut p) };
+                let k = 96.0 / w.dpi;
+                w.app.handle(Input::Wheel(-delta / 120 * 3, p.x as f32 * k, p.y as f32 * k - w.inset));
                 w.invalidate();
             });
             LRESULT(0)
