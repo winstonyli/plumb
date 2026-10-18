@@ -389,6 +389,8 @@ pub struct App {
     notice: String,
     /// Every failure of the last delete, one a line: part of the full status line (the hover text).
     notice_detail: Vec<String>,
+    /// The notice reports success (nothing to alarm about); any other notice is drawn as a problem.
+    notice_ok: bool,
     system_root: String,
     /// Marks of views whose kept state was let go (see `Win::evict`): a later scan of that view takes them back.
     stash: HashMap<usize, Basket>,
@@ -404,7 +406,7 @@ impl App {
             can_elevate: false, accent: None, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
-            basket: Basket::default(), proc_info: HashMap::new(), proc_metric: Metric::default(), held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), stash: HashMap::new(), skipped: Vec::new(),
+            basket: Basket::default(), proc_info: HashMap::new(), proc_metric: Metric::default(), held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), notice_ok: false, stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -917,6 +919,7 @@ impl App {
         if self.modal().is_none() && matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
             self.notice.clear();
             self.notice_detail.clear();
+            self.notice_ok = false;
         }
         if self.modal().is_some() && !matches!(input, Input::Resize(..) | Input::Release) {
             return self.modal_input(input);
@@ -1264,6 +1267,7 @@ impl App {
         self.basket_rev += 1;
         let deleted = gone.len() - missing.min(gone.len());
         let plural = |n: usize| if n == 1 { "" } else { "s" };
+        self.notice_ok = failed.is_empty() && self.skipped.is_empty();
         self.notice = match failed.first() {
             None if missing == 0 => format!("deleted {deleted} item{}", plural(deleted)),
             None => format!("deleted {deleted} item{}, {missing} already gone", plural(deleted)),
@@ -1407,15 +1411,16 @@ impl App {
     }
 
     fn status_line(&self, full: bool) -> String {
-        self.status_parts(full, true)
+        self.status_parts(full, true, true)
     }
 
-    /// The status line without the selection: the status bar's second row, the selection having a row of its own.
+    /// The status line without the selection and the notice: the status bar's second row, the selection having a row of its
+    /// own and the notice being drawn first, in its own colour.
     fn state_line(&self) -> String {
-        self.status_parts(false, false)
+        self.status_parts(false, false, false)
     }
 
-    fn status_parts(&self, full: bool, with_selection: bool) -> String {
+    fn status_parts(&self, full: bool, with_selection: bool, with_notice: bool) -> String {
         let head = match &self.scan {
             Scan::Running { .. } => {
                 let paused = if self.preview_paused { "   (preview paused)" } else { "" };
@@ -1426,7 +1431,7 @@ impl App {
             _ => self.summary.clone(),
         };
         let mut parts: Vec<String> = self.selection(full).filter(|_| with_selection).into_iter().chain([head]).collect();
-        if !self.notice.is_empty() {
+        if with_notice && !self.notice.is_empty() {
             parts.insert(0, self.notice.clone());
             if full && !self.notice_detail.is_empty() {
                 parts.insert(1, self.notice_detail.join("; "));
@@ -1494,6 +1499,8 @@ impl App {
             message: if running { "" } else { &message },
             loading: running && self.tree.is_none(),
             status: &status,
+            notice: &self.notice,
+            notice_ok: self.notice_ok,
             selection: &selection,
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),

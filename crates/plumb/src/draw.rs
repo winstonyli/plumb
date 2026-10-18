@@ -265,6 +265,9 @@ pub struct Scene<'a> {
     pub loading: bool,
     /// The status bar's second row: notice, scan summary, live state.
     pub status: &'a str,
+    /// The notice leading that row (a delete's outcome, a refused action), and whether it is good news: a problem is drawn in the danger colour.
+    pub notice: &'a str,
+    pub notice_ok: bool,
     /// The status bar's first row, left: the selected row's full path and size (empty when none).
     pub selection: &'a str,
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
@@ -689,7 +692,19 @@ impl Pen<'_> {
         let sel = self.fit_middle(s.selection, text_w.max(0.0));
         self.text(&sel, Rect { w: text_w.max(0.0), ..right }, t.dim, false);
         let row2 = Rect { y: st.y + row1.h, h: st.h - row1.h, ..st };
-        self.text_as(Role::Caption, s.status, Rect { x: row2.x + 8.0, w: (row2.w - 16.0).max(0.0), ..row2 }, t.dim, false);
+        let mut at = Rect { x: row2.x + 8.0, w: (row2.w - 16.0).max(0.0), ..row2 };
+        if !s.notice.is_empty() {
+            let note = self.fit_middle(s.notice, at.w * 0.7);
+            let used = self.painter.text_width(self.gfx, Role::Caption, &note);
+            self.text_as(Role::Caption, &note, at, if s.notice_ok { t.fg } else { t.danger }, false);
+            at = Rect { x: at.x + used, w: (at.w - used).max(0.0), ..at };
+            if !s.status.is_empty() {
+                self.text_as(Role::Caption, "   |   ", at, t.dim, false);
+                let gap = self.painter.text_width(self.gfx, Role::Caption, "   |   ");
+                at = Rect { x: at.x + gap, w: (at.w - gap).max(0.0), ..at };
+            }
+        }
+        self.text_as(Role::Caption, s.status, at, t.dim, false);
         if l.cancel {
             let r = l.cancel_button();
             self.button(r, "\u{E711}", s); // cancel
