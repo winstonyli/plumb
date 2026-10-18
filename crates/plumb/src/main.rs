@@ -11,6 +11,8 @@ fn main() {
             plumb::window::selftest_delete().map(|a| println!("selftest-delete ok: {a}"))
         } else if std::env::args().any(|a| a == "--selftest-processes") {
             plumb::window::selftest_processes().map(|a| println!("selftest-processes ok: {a}"))
+        } else if std::env::args().any(|a| a == "--selftest-tooltip") {
+            plumb::window::selftest_tooltip().map(|a| println!("selftest-tooltip ok: {a}"))
         } else if std::env::args().any(|a| a == "--selftest-live") {
             plumb::window::selftest_live().map(|a| println!("selftest-live ok: {a}"))
         } else {

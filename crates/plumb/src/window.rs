@@ -2014,7 +2014,7 @@ pub fn run() -> Result<()> {
 
 mod procs;
 mod selftest;
-pub use selftest::{selftest, selftest_delete, selftest_live, selftest_processes, selftest_watch};
+pub use selftest::{selftest, selftest_delete, selftest_live, selftest_processes, selftest_tooltip, selftest_watch};
 
 #[cfg(test)]
 mod tests {

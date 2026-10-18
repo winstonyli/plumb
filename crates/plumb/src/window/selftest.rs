@@ -549,6 +549,75 @@ pub fn selftest_delete() -> Result<String> {
     out
 }
 
+/// The tooltip's colours in both themes: the control reports the theme's panel and text colours, and paints its
+/// background with the panel colour (printed offscreen, never shown). Run it with `plumb --selftest-tooltip`.
+pub fn selftest_tooltip() -> Result<String> {
+    use windows::Win32::Foundation::E_FAIL;
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetDC, GetPixel, ReleaseDC, SelectObject,
+    };    use windows::Win32::UI::Controls::{
+        TTF_ABSOLUTE, TTF_TRACK, TTM_DELTOOLW, TTM_GETTIPBKCOLOR, TTM_GETTIPTEXTCOLOR, TTM_TRACKACTIVATE, TTM_TRACKPOSITION,
+    };
+    let fail = |m: String| windows::core::Error::new(E_FAIL, m);
+    let hwnd = create_window()?;
+    let win = Win::new(hwnd, crate::drives::list())?;
+    STATE.with(|s| *s.borrow_mut() = Some(win));
+    let mut seen = Vec::new();
+    for dark in [false, true] {
+        let theme = crate::draw::Theme::new(dark);
+        let (panel, fg) = (crate::draw::colorref(theme.panel), crate::draw::colorref(theme.fg));
+        let (bk, text, pixel) = with(|w| unsafe {
+            w.dark = dark;
+            w.apply_title_theme();
+            // A literal text for the tool, a size, and the control's client area printed into a bitmap.
+            let msg: Vec<u16> = "Clear the filter".encode_utf16().chain([0]).collect();
+            // A tracked tool shows the tip where we say, far off every monitor, so it paints but is never seen.
+            let tool = TTTOOLINFOW {
+                cbSize: std::mem::offset_of!(TTTOOLINFOW, lParam) as u32,
+                uFlags: TTF_TRACK | TTF_ABSOLUTE,
+                hwnd: w.hwnd,
+                uId: 7,
+                lpszText: PWSTR(msg.as_ptr() as *mut u16),
+                ..Default::default()
+            };
+            let at = LPARAM(&tool as *const _ as isize);
+            SendMessageW(w.tooltip, TTM_ADDTOOLW, None, Some(at));
+            SendMessageW(w.tooltip, TTM_TRACKPOSITION, None, Some(LPARAM((-4000i32 as u16 as isize) | ((-4000i32 as u16 as isize) << 16))));
+            SendMessageW(w.tooltip, TTM_TRACKACTIVATE, Some(WPARAM(1)), Some(at));
+            let screen = GetDC(None);
+            let dc = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, 240, 40);
+            let old = SelectObject(dc, bmp.into());
+            let sentinel = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00FF00FF));
+            FillRect(dc, &windows::Win32::Foundation::RECT { left: 0, top: 0, right: 240, bottom: 40 }, sentinel);
+            SendMessageW(w.tooltip, WM_PRINT, Some(WPARAM(dc.0 as usize)), Some(LPARAM((PRF_CLIENT | PRF_ERASEBKGND) as isize)));
+            SendMessageW(w.tooltip, TTM_TRACKACTIVATE, Some(WPARAM(0)), Some(at));
+            SendMessageW(w.tooltip, TTM_DELTOOLW, None, Some(at));
+            let pixel = GetPixel(dc, 2, 2).0; // inside the frame, above the text
+            SelectObject(dc, old);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteObject(sentinel.into());
+            let _ = DeleteDC(dc);
+            ReleaseDC(None, screen);
+            let bk = SendMessageW(w.tooltip, TTM_GETTIPBKCOLOR, None, None).0 as u32;
+            let text = SendMessageW(w.tooltip, TTM_GETTIPTEXTCOLOR, None, None).0 as u32;
+            (bk, text, pixel)
+        })
+        .ok_or_else(|| fail("no window state".into()))?;
+        let name = if dark { "dark" } else { "light" };
+        if bk != panel || text != fg {
+            return Err(fail(format!("{name}: tooltip reports background {bk:06x} / text {text:06x}, want {panel:06x} / {fg:06x}")));
+        }
+        if pixel != panel {
+            return Err(fail(format!("{name}: tooltip paints {pixel:06x} inside its frame, want {panel:06x}")));
+        }
+        seen.push(format!("{name} {panel:06x}/{fg:06x}"));
+    }
+    unsafe { DestroyWindow(hwnd)? };
+    STATE.with(|s| *s.borrow_mut() = None);
+    Ok(seen.join(", "))
+}
+
 /// The Processes view in a hidden window: it lists this process with a plausible size, follows a child that starts
 /// and exits, stops polling while another view is on screen, and comes back without a burst of CPU.
 /// Run it with `plumb --selftest-processes`.
