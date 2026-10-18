@@ -634,6 +634,11 @@ fn processes_shot(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, hot: &
 
 #[allow(clippy::too_many_arguments)]
 fn processes_shot_with(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, hot: &dyn Fn(&Layout) -> Rect, pressed: bool, modal: Option<&plumb::modal::Modal>, notice: (&str, bool), stem: &str) -> Vec<u8> {
+    processes_shot_sized(gfx, painter, (W, H), theme, scale, hot, pressed, modal, notice, stem)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme: Theme, scale: f32, hot: &dyn Fn(&Layout) -> Rect, pressed: bool, modal: Option<&plumb::modal::Modal>, notice: (&str, bool), stem: &str) -> Vec<u8> {
     use plumb_core::procs::{Metric, Procs, Sample};
     let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, cpu_100ns: cpu, io_bytes: io };
     let (mut procs, mut tree) = Procs::new(Metric::Memory);
@@ -647,8 +652,10 @@ fn processes_shot_with(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, h
     model.select(model.rows()[1].id);
     let chips = [Chip { label: "C:  123 GB".into(), used: 0.7, mark: Mark::None }, Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
     let held_lines = vec!["C:/Users/me/notes.txt".to_string(), "C:/Windows/Temp/x.log".to_string()];
-    let layout = Layout { chips: chip_widths(gfx, &chips), map_on: true, ..Layout::new(W as f32, H as f32) }.with_metric(true).with_held(true);
-    let tiles = plumb_core::treemap::layout(&tree, root, layout.map().unwrap(), 1.0);
+    let layout = Layout { chips: chip_widths(gfx, &chips), map_on: true, ..Layout::new(w as f32, h as f32) }.with_metric(true).with_held(true);
+    // A narrow window has no map pane at all.
+    let has_map = layout.map().is_some();
+    let tiles = layout.map().map(|m| plumb_core::treemap::layout(&tree, root, m, 1.0)).unwrap_or_default();
     let classes = plumb_core::treemap::class_bytes(&tiles);
     let hot = Some(hot(&layout));
     let scene = Scene {
@@ -656,10 +663,10 @@ fn processes_shot_with(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, h
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Metric::Memory, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB", selection: "", banner: None,
         filter: FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() }, basket: None,
-        map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
+        map: has_map.then_some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
         modal, notice: notice.0, notice_ok: notice.1,
     };
-    let (pw, ph) = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
+    let (pw, ph) = ((w as f32 * scale) as u32, (h as f32 * scale) as u32);
     let target = bitmap_sized(gfx, D2D1_BITMAP_OPTIONS_TARGET, pw, ph, 96.0 * scale);
     painter.paint(gfx, &target, 96.0 * scale, 0.0, &scene).expect("EndDraw");
     let out = read_back_sized(gfx, &target, pw, ph);
@@ -749,6 +756,24 @@ fn each_modal_paints_over_a_dimmed_view_in_both_themes_and_scales() {
                 let at = |b: &[u8]| rgb_at(b, 4, (H as f32 * scale) as u32 - 4).iter().sum::<i32>();
                 let _ = w;
                 assert!(at(&shot) < at(&plain), "{name} {t} {scale}x: the scrim did not darken the view behind");
+            }
+        }
+    }
+}
+
+/// The status row at the narrowest sizes: a long failure notice must not push the state text or the buttons out of the
+/// window, and nothing may panic. Frames for looking at (`PLUMB_SHOT_DIR`).
+#[test]
+fn the_status_row_survives_narrow_windows_with_a_long_notice() {
+    let gfx = Gfx::warp().expect("WARP device");
+    let painter = Painter::new(&gfx).unwrap();
+    let none = |_: &Layout| Rect { x: -1.0, y: -1.0, w: 0.0, h: 0.0 };
+    let long = "3 of 12 not deleted: in use by a-very-long-program-name.exe (4242), another-program.exe (77)";
+    for dark in [false, true] {
+        for w in [320u32, 480, 640] {
+            for scale in [1.0f32, 2.0] {
+                let t = if dark { "dark" } else { "light" };
+                processes_shot_sized(&gfx, &painter, (w, 400), Theme::new(dark), scale, &none, false, None, (long, false), &format!("plumb-narrow-{w}-{t}-{}x", scale as u32));
             }
         }
     }
