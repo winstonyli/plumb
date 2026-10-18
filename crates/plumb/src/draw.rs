@@ -605,7 +605,7 @@ impl Pen<'_> {
         let r = l.filter_regex();
         let c = self.control(r, s, f.regex, true);
         self.symbol(".*", &self.painter.center, r, c);
-        self.text_as(Role::Caption, f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, true);
+        self.text_as(Role::Caption, f.count, l.filter_count(), if f.error { t.fg } else { t.dim }, false);
     }
 
     fn draw(&self, s: &Scene) {
