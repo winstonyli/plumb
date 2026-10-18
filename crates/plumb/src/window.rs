@@ -45,7 +45,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, ScreenToClient, InvalidateRect, MonitorFromWindow, ValidateRect, MONITOR_DEFAULTTONEAREST,
+    ClientToScreen, CreateSolidBrush, DeleteObject, FrameRect, ScreenToClient, InvalidateRect, MonitorFromWindow, ValidateRect, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
@@ -68,11 +68,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, SetWindowTheme, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, MARGINS, NMHDR, NMTTDISPINFOW, TOOLTIPS_CLASSW, TTF_IDISHWND,
+    CDDS_POSTPAINT, CDDS_PREPAINT, CDRF_DODEFAULT, CDRF_NOTIFYPOSTPAINT, NMCUSTOMDRAW, NM_CUSTOMDRAW, InitCommonControlsEx, SetWindowTheme, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, MARGINS, NMHDR, NMTTDISPINFOW, TOOLTIPS_CLASSW, TTF_IDISHWND,
     TTM_ADDTOOLW, TTM_POP, TTM_RELAYEVENT, TTM_SETMAXTIPWIDTH, TTM_SETTIPBKCOLOR, TTM_SETTIPTEXTCOLOR, TTM_UPDATETIPTEXTW, TTN_GETDISPINFOW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
 };
 use windows::core::{w, Interface, Result, BOOL, PCWSTR, PWSTR};
 
+/// The tooltip's frame colour (a `COLORREF`), the theme's border; read while the tooltip paints.
+static TIP_FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 const WM_SCAN_DONE: u32 = WM_APP + 1;
 const WM_JOURNAL: u32 = WM_APP + 2;
 const WM_FILTER: u32 = WM_APP + 3;
@@ -512,6 +514,7 @@ impl Win {
             let _ = SetWindowTheme(self.tooltip, w!(""), w!(""));
             SendMessageW(self.tooltip, TTM_SETTIPBKCOLOR, Some(WPARAM(crate::draw::colorref(theme.panel) as usize)), None);
             SendMessageW(self.tooltip, TTM_SETTIPTEXTCOLOR, Some(WPARAM(crate::draw::colorref(theme.fg) as usize)), None);
+            TIP_FRAME.store(crate::draw::colorref(theme.border), std::sync::atomic::Ordering::Relaxed);
         }
         let bar = ((PICKER_H + self.inset) * self.dpi / 96.0).ceil() as i32;
         let margins = MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: bar, cyBottomHeight: 0 };
@@ -1711,6 +1714,23 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(1)
             } else {
                 unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+            }
+        }
+        // The tooltip is the only control that reports custom draw here. It frames itself in the system's frame colour;
+        // paint the theme's border over that 1 px frame once the control is done (no `with`: a selftest prints it from inside one).
+        WM_NOTIFY if unsafe { (*(lp.0 as *const NMHDR)).code } == NM_CUSTOMDRAW => {
+            let nm = unsafe { &*(lp.0 as *const NMCUSTOMDRAW) };
+            match nm.dwDrawStage {
+                CDDS_PREPAINT => LRESULT(CDRF_NOTIFYPOSTPAINT as isize),
+                CDDS_POSTPAINT => unsafe {
+                    let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(TIP_FRAME.load(std::sync::atomic::Ordering::Relaxed)));
+                    let mut rc = windows::Win32::Foundation::RECT::default();
+                    let _ = GetClientRect(nm.hdr.hwndFrom, &mut rc);
+                    FrameRect(nm.hdc, &rc, brush);
+                    let _ = DeleteObject(brush.into());
+                    LRESULT(CDRF_DODEFAULT as isize)
+                },
+                _ => LRESULT(CDRF_DODEFAULT as isize),
             }
         }
         WM_NOTIFY if unsafe { (*(lp.0 as *const NMHDR)).code } == TTN_GETDISPINFOW => {

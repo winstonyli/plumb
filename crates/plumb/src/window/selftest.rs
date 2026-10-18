@@ -566,7 +566,7 @@ pub fn selftest_tooltip() -> Result<String> {
     for dark in [false, true] {
         let theme = crate::draw::Theme::new(dark);
         let (panel, fg) = (crate::draw::colorref(theme.panel), crate::draw::colorref(theme.fg));
-        let (bk, text, pixel) = with(|w| unsafe {
+        let (bk, text, pixel, frame) = with(|w| unsafe {
             w.dark = dark;
             w.apply_title_theme();
             // A literal text for the tool, a size, and the control's client area printed into a bitmap.
@@ -594,14 +594,14 @@ pub fn selftest_tooltip() -> Result<String> {
             SendMessageW(w.tooltip, TTM_TRACKACTIVATE, Some(WPARAM(0)), Some(at));
             SendMessageW(w.tooltip, TTM_DELTOOLW, None, Some(at));
             let pixel = GetPixel(dc, 2, 2).0; // inside the frame, above the text
-            SelectObject(dc, old);
+            let frame = GetPixel(dc, 0, 0).0;            SelectObject(dc, old);
             let _ = DeleteObject(bmp.into());
             let _ = DeleteObject(sentinel.into());
             let _ = DeleteDC(dc);
             ReleaseDC(None, screen);
             let bk = SendMessageW(w.tooltip, TTM_GETTIPBKCOLOR, None, None).0 as u32;
             let text = SendMessageW(w.tooltip, TTM_GETTIPTEXTCOLOR, None, None).0 as u32;
-            (bk, text, pixel)
+            (bk, text, pixel, frame)
         })
         .ok_or_else(|| fail("no window state".into()))?;
         let name = if dark { "dark" } else { "light" };
@@ -611,7 +611,11 @@ pub fn selftest_tooltip() -> Result<String> {
         if pixel != panel {
             return Err(fail(format!("{name}: tooltip paints {pixel:06x} inside its frame, want {panel:06x}")));
         }
-        seen.push(format!("{name} {panel:06x}/{fg:06x}"));
+        let border = crate::draw::colorref(theme.border);
+        if frame != border {
+            return Err(fail(format!("{name}: tooltip frames itself {frame:06x}, want the theme's border {border:06x}")));
+        }
+        seen.push(format!("{name} {panel:06x}/{fg:06x} frame {border:06x}"));
     }
     unsafe { DestroyWindow(hwnd)? };
     STATE.with(|s| *s.borrow_mut() = None);
