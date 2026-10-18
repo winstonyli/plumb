@@ -2,18 +2,43 @@
 
 All notable changes to plumb. Format follows [Keep a Changelog](https://keepachangelog.com/); all crates share one version and are bumped together at each tag.
 
-## [Unreleased]
-
-### Added
-- `plumb`: a **Processes** view, after the drives in the picker bar. It lists the running processes as a tree by parent (a snapshot every second while it is on screen; a parked view stops polling), with Memory, % of parent, CPU and I/O columns, sortable, and the same map pane: tile area is the process's memory (or CPU or I/O: a button left of the Cancel slot cycles the metric, and the first column follows it), tile colour is where the executable lives (Windows, Program Files, user profile, elsewhere). The tooltip gives name, PID, numbers, path and start time. Read-only: processes cannot be marked or ended. Idle cost is about 1.1-1.2% of one core on the reference machine, mostly the kernel call (see the views spec); a minimised window stops polling.
-- `plumb`: a **Files held** pane under the Processes table lists the files the selected process has open (handles duplicated into plumb and named on a worker with a per-handle timeout), once the selection has rested 300 ms. Another user's or protected processes say to run as administrator.
-- `plumb`: the delete questions (Recycle or delete permanently, the second "are you sure", the failure list with Retry, who-is-using, and "Close anyway?" while a delete runs) are one **in-app modal** drawn in the theme, with keyboard (Enter, Esc, Tab, arrows), a click outside the panel cancels and hover states, in place of the system dialogs. The shell's own "too big for the Recycle Bin" prompt stays native. A failure or refusal notice leads the status row in the danger colour; a successful delete in the text colour.
-- `plumb`: **who is using this**. A failed delete now names the program that holds the file ("in use by chrome.exe (1234)", via the Restart Manager), and a file's context menu gains "Who is using this".
-- `plumb-core`: `procs` (the process list reconciled in place from snapshots), `Tree::aux` and `SortKey::Aux`, `Tree::set_dir`, `treemap::layout_by`. `plumb-scan`: `procs`, `handles`, `holders`, a shared `NtQuerySystemInformation` helper. `plumb --selftest-processes` checks the live list, a spawned child, parking, and the Files held pane; `--selftest-delete` now asserts the holder is named. `--selftest-tooltip` checks the tooltip's colours and frame in both themes, including the pixels it paints. The tooltip's frame is the theme's border, not the system's. The scrollbar thumb brightens under the pointer and while dragged.
+## 0.9.0 - 2026-10-18
 
 ### Changed
-- `plumb`: theming. Chips, buttons, toggles and the filter box share one look (raised surface, border, accent-tinted when on, rounded corners) built from new `Theme` tokens (`raised`, `border`, `accent_soft`, `danger`). The accent follows the Windows accent colour (nudged until it reads as text; selection, hover and share-bar tints derive from it). Map tiles are softer, with a gap and rounded corners instead of a dark edge. The Files held title is a band. The window frame, caption and tooltip colours come from the same tokens. A marked row is a light red tint with normal text, and an empty or failed list shows a heading over its reason. Controls show hover and pressed states (a lit toggle brightens under the pointer, the clear button and header cells light up), and the tooltip takes the theme colours in light as well as dark. Text has three roles: semibold titles (column headers, the Files held title), body, and 12px captions (status line, match count, legend).
-- `plumb`: the row table's titles, sort keys and last two columns follow the kind of view (`ViewKind`); drive views are unchanged.
+
+- Draw chips, buttons, toggles and the filter box as one themed control (raised surface, border, accent tint, rounded corners) built from new `Theme` tokens ([eebe770](https://github.com/winstonyli/plumb/commit/eebe770))
+- Follow the Windows accent colour, nudged until it reads as text, for selection, hover and share-bar tints ([b9191d5](https://github.com/winstonyli/plumb/commit/b9191d5))
+- Soften the map palette: tiles get a gap and rounded corners instead of a dark edge ([fbf0a87](https://github.com/winstonyli/plumb/commit/fbf0a87))
+- Colour the window frame, caption and tooltip from the theme, in light as well as dark, with the tooltip frame in the theme's border colour ([76bef26](https://github.com/winstonyli/plumb/commit/76bef26), [a536e55](https://github.com/winstonyli/plumb/commit/a536e55))
+- Set text in three roles: semibold titles, body and 12px captions ([1fb4e9c](https://github.com/winstonyli/plumb/commit/1fb4e9c))
+- Tint a marked row light red with normal text, and show a heading over its reason for an empty or failed list ([5bff5d8](https://github.com/winstonyli/plumb/commit/5bff5d8))
+- Show hover and pressed states on controls, header cells and the scrollbar thumb ([1a4f033](https://github.com/winstonyli/plumb/commit/1a4f033), [cfe03e7](https://github.com/winstonyli/plumb/commit/cfe03e7))
+- Lead the status row with a delete's outcome, in the danger colour for a failure ([cd2f075](https://github.com/winstonyli/plumb/commit/cd2f075))
+- Hide a tooltip after 6 s of stillness ([2b1eafb](https://github.com/winstonyli/plumb/commit/2b1eafb))
+- Make the row table's titles, sort keys and last two columns follow the kind of view; drive views are unchanged ([ba2707b](https://github.com/winstonyli/plumb/commit/ba2707b))
+
+### Added
+
+- Add a Processes view after the drives: the running processes as a tree by parent, with sortable Memory, % of parent, CPU and I/O columns, a snapshot every second while it is on screen, the same map pane, and a tooltip with name, PID, numbers, path and start time ([b11d21a](https://github.com/winstonyli/plumb/commit/b11d21a))
+- Add a metric button that cycles the Processes map and first column between memory, CPU and I/O ([a6daeb7](https://github.com/winstonyli/plumb/commit/a6daeb7))
+- Add a Files held pane under the Processes table listing the files the selected process has open, once the selection has rested 300 ms ([2e94973](https://github.com/winstonyli/plumb/commit/2e94973))
+- Name the program that holds a file in a failed delete's reason and add "Who is using this" to a file's context menu ([dd1d13b](https://github.com/winstonyli/plumb/commit/dd1d13b))
+- Ask every delete question (Recycle or delete permanently, the second confirmation, the failure list with Retry, who is using it, "Close anyway?") in one in-app modal with keyboard and hover support; a click outside the panel cancels ([b8978ab](https://github.com/winstonyli/plumb/commit/b8978ab), [046467e](https://github.com/winstonyli/plumb/commit/046467e))
+
+### Removed
+
+- Remove the system task dialogs and message box from deleting; the shell's own "too big for the Recycle Bin" prompt stays native ([b8978ab](https://github.com/winstonyli/plumb/commit/b8978ab))
+
+### Fixed
+
+- Stop the Processes poller while the window is minimised ([bbcf47c](https://github.com/winstonyli/plumb/commit/bbcf47c))
+
+### Internal
+
+- Add `plumb-core` `procs`, `Tree::aux`, `SortKey::Aux`, `Tree::set_dir` and `treemap::layout_by`, and `plumb-scan` `procs`, `handles`, `holders` and a shared `NtQuerySystemInformation` helper ([04d1312](https://github.com/winstonyli/plumb/commit/04d1312), [5cd8919](https://github.com/winstonyli/plumb/commit/5cd8919))
+- Add `--selftest-processes` and `--selftest-tooltip`; make `--selftest-delete` answer the modal, assert the holder is named and restore the recycled file from the bin ([b11d21a](https://github.com/winstonyli/plumb/commit/b11d21a), [2916456](https://github.com/winstonyli/plumb/commit/2916456))
+- Rename Drive to View across the app ([1fd3314](https://github.com/winstonyli/plumb/commit/1fd3314))
+- Make the working-set test a plausibility bound instead of a 20% match around a moving reading ([b88d24b](https://github.com/winstonyli/plumb/commit/b88d24b))
 
 ## [0.8.0] - 2026-10-16
 

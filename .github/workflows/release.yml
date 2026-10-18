@@ -50,12 +50,14 @@ jobs:
           # The CHANGELOG section for the tag's version (v0.7.0-rc1 reads 0.7.0), else [Unreleased].
           $version = ("${{ github.ref_name }}" -replace '^v', '') -replace '-.*$', ''
           $lines = Get-Content CHANGELOG.md
-          $start = ($lines | Select-String -SimpleMatch "## [$version]" | Select-Object -First 1).LineNumber
+          # Headings are "## 0.9.0 - date" (Common Changelog) or the older "## [0.8.0] - date".
+          $head = $lines | Where-Object { $_.StartsWith("## $version ") -or $_.StartsWith("## [$version]") } | Select-Object -First 1
+          $start = if ($head) { [array]::IndexOf($lines, $head) + 1 } else { 0 }
           if (-not $start) { $start = ($lines | Select-String -SimpleMatch "## [Unreleased]" | Select-Object -First 1).LineNumber }
           if (-not $start) { throw "no CHANGELOG section for $version" }
           $body = @()
           foreach ($l in $lines[$start..($lines.Count - 1)]) {
-            if ($l.StartsWith("## [")) { break }
+            if ($l.StartsWith("## ")) { break }
             $body += $l
           }
           $body += ""
