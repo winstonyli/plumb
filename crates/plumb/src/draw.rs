@@ -734,7 +734,8 @@ impl Pen<'_> {
             self.centered(b.label, *r, c);
             if i == m.focus {
                 // The key that presses it, shown: a ring just outside the button.
-                self.outline(Rect { x: r.x - 3.0, y: r.y - 3.0, w: r.w + 6.0, h: r.h + 6.0 }, t.accent);
+                // In the text colour: the primary button is already accent-filled, so an accent ring would not stand out from it.
+                self.outline(Rect { x: r.x - 3.0, y: r.y - 3.0, w: r.w + 6.0, h: r.h + 6.0 }, t.fg);
             }
         }
     }

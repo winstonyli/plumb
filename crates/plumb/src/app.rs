@@ -863,6 +863,11 @@ impl App {
             }
             Input::Click(x, y) | Input::DoubleClick(x, y) => match pick_at(m, x, y) {
                 Some(p) => self.answer(p),
+                // The scrim cancels, except while a delete runs: a stray click must not decide to close the window.
+                None if !g.panel.contains(x, y) && m.ask != Ask::Close => {
+                    let p = m.cancel;
+                    self.answer(p)
+                }
                 None => Effect::None,
             },
             Input::Enter => {
@@ -2566,10 +2571,24 @@ Test GPU", a.status())));
         let (mut a, centre) = asking();
         let (scroll, marks) = (a.scroll, a.basket.len());
         // Everything but its own buttons is swallowed, including the keys that would unmark or scroll the list.
-        for i in [Input::Wheel(3), Input::Edit(Edit::Delete), Input::Key(Key::Down), Input::Click(5.0, 5.0), Input::Find] {
+        for i in [Input::Wheel(3), Input::Edit(Edit::Delete), Input::Key(Key::Down), Input::Find] {
             assert_eq!(a.handle(i), Effect::None);
         }
         assert!(a.modal().is_some() && a.scroll == scroll && a.basket.len() == marks);
+        // A click on the scrim cancels (the marks stay); one inside the panel, off its buttons, does nothing.
+        let p = a.modal().map(|m| m.geometry(a.layout.w, a.layout.h).panel).unwrap();
+        a.handle(Input::Click(p.x + 2.0, p.y + 2.0));
+        assert!(a.modal().is_some());
+        assert_eq!(a.handle(Input::Click(5.0, 5.0)), Effect::None);
+        assert!(a.modal().is_none() && a.basket.len() == marks);
+        a.ask_delete();
+        // ... but not the "Close anyway?" question.
+        a.handle(Input::Escape);
+        a.ask_close();
+        a.handle(Input::Click(5.0, 5.0));
+        assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Close)));
+        a.handle(Input::Escape);
+        a.ask_delete();
         // Escape cancels; the marks stay.
         assert_eq!(a.handle(Input::Escape), Effect::None);
         assert!(a.modal().is_none() && a.basket.len() == marks);
