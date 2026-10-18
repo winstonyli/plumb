@@ -661,6 +661,13 @@ pub fn selftest_processes() -> Result<String> {
         wait("polling after restore", 10, &|w| w.procs_polling() && w.procs.as_ref().is_some_and(|p| p.updates() > before))?;
         // The pane lists a file this process holds open once its row has rested selected.
         let held = std::fs::File::open(dir.join("f.bin")).map_err(|e| fail(e.to_string()))?;
+        // Enough more than the pane has lines for the wheel test below.
+        let extra: Vec<std::fs::File> = (0..10)
+            .map(|i| {
+                let p = dir.join(format!("g{i}.bin"));
+                std::fs::write(&p, [1u8]).and_then(|()| std::fs::File::open(&p)).map_err(|e| fail(e.to_string()))
+            })
+            .collect::<Result<_>>()?;
         with(|w| {
             let id = node(w, me).unwrap();
             let (t, m) = (w.app.tree.as_ref().unwrap(), w.app.model.as_mut().unwrap());
@@ -669,6 +676,27 @@ pub fn selftest_processes() -> Result<String> {
             w.held_poll();
         });
         wait("the files this process holds", 10, &|w| w.app.with_scene(false, |s| s.held.is_some_and(|(_, lines)| lines.iter().any(|l| l.ends_with("f.bin")))))?;
+        // A real WM_MOUSEWHEEL (screen coordinates) over the pane scrolls the list, and the title gives the range.
+        let view = |w: &mut Win| w.app.with_scene(false, |s| s.held.map(|(h, l)| (h.to_string(), l.first().cloned())));
+        let top = with(view).flatten();
+        if top.as_ref().is_none_or(|(h, _)| !h.contains("(1\u{2013}")) {
+            return Err(fail(format!("the pane did not start at the top of a long list: {top:?}")));
+        }
+        let mut at = with(|w| {
+            let r = w.app.layout.held_pane();
+            POINT { x: ((r.x + r.w / 2.0) * w.dpi / 96.0) as i32, y: ((r.y + 10.0 + w.inset) * w.dpi / 96.0) as i32 }
+        })
+        .unwrap_or_default();
+        unsafe {
+            let _ = ClientToScreen(hwnd, &mut at);
+            let (delta, pos) = ((-120i16 * 2) as u16 as usize, ((at.y as i16 as u16 as isize) << 16) | (at.x as i16 as u16 as isize));
+            SendMessageW(hwnd, WM_MOUSEWHEEL, Some(WPARAM(delta << 16)), Some(LPARAM(pos)));
+        }
+        let scrolled = with(view).flatten();
+        if scrolled.as_ref().is_none_or(|(h, l)| h.contains("(1\u{2013}") || Some(l) == top.as_ref().map(|t| &t.1)) {
+            return Err(fail(format!("the wheel over the pane did not scroll it: {top:?} then {scrolled:?}")));
+        }
+        drop(extra);
         drop(held);
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
         let worst = with(|w| {
@@ -691,7 +719,7 @@ pub fn selftest_processes() -> Result<String> {
             }
             None => String::new(),
         };
-        Ok(format!("this process {} in memory, a child followed, polling stopped while away or minimised, the Files held pane lists a file we hold{idle}", fmt::size(ws)))
+        Ok(format!("this process {} in memory, a child followed, polling stopped while away or minimised, the Files held pane lists a file we hold and the wheel scrolls it{idle}", fmt::size(ws)))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);
