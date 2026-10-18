@@ -322,6 +322,8 @@ pub struct App {
     pub hover: Option<usize>,
     /// The icon button under the mouse.
     pub hot: Option<Rect>,
+    /// The left button went down on `hot` and is still down.
+    pub pressed: bool,
     pub tree: Option<Tree>,
     pub model: Option<RowModel>,
     pub scroll: usize,
@@ -390,7 +392,7 @@ impl App {
     pub fn new(layout: Layout, views: Vec<ViewInfo>, adapter: String) -> Self {
         let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
-            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, tree: None, model: None, scroll: 0,
+            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, tree: None, model: None, scroll: 0,
             can_elevate: false, accent: None, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
@@ -652,6 +654,7 @@ impl App {
             Hit::Cancel => Some((l.cancel_button(), "Cancel scan".into())),
             Hit::Basket => Some((l.basket_chip(), "Review and delete the marked items".into())),
             Hit::FilterRegex => Some((l.filter_regex(), "Regular expression".into())),
+            Hit::FilterClear => Some((l.filter_clear(), "Clear the filter".into())),
             Hit::MapButton => Some((l.map_button(), "Show or hide the map  (Ctrl+M)".into())),
             Hit::MetricButton => Some((l.metric_button(), format!("The map and the first column weigh processes by {}; click for the next", metric_label(self.proc_metric)))),
             _ => None,
@@ -837,7 +840,10 @@ impl App {
                     Hit::Row(i) if self.row_at(i).is_some() => Some(i),
                     _ => None,
                 };
-                self.hot = self.button_at(x, y).map(|b| b.0);
+                self.hot = self.button_at(x, y).map(|b| b.0).or(match self.layout.hit(x, y, self.views.len()) {
+                    Hit::Header(c) => Some(self.layout.header_cell(c)),
+                    _ => None,
+                });
                 self.map_hover = if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map) { treemap::hit(&self.map_tiles, x, y) } else { None };
             }
             Input::ToggleMap => self.layout.map_on = !self.layout.map_on,
@@ -891,6 +897,7 @@ impl App {
                 }
             }
             Input::Release => {
+                self.pressed = false;
                 self.grab = None;
                 self.col_drag = None;
                 self.map_drag = None;
@@ -1162,6 +1169,7 @@ impl App {
     }
 
     fn click(&mut self, x: f32, y: f32) -> Effect {
+        self.pressed = self.hot.is_some_and(|r| r.contains(x, y));
         if self.can_elevate && self.layout.admin_button().contains(x, y) {
             return Effect::Elevate;
         }
@@ -1360,6 +1368,7 @@ impl App {
             kind: self.kind(),
             admin: self.can_elevate.then(|| self.layout.admin_button()),
             hot: self.hot,
+            pressed: self.pressed,
             view,
             // The status bar already says what a running scan has found.
             message: if running { "" } else { &message },
@@ -1835,7 +1844,24 @@ mod tests {
         a.handle(Input::Hover(a.layout.chip(0).x + 5.0, 10.0));
         assert_eq!(a.hot, Some(a.layout.chip(0)), "a drive chip lights up too");
         a.handle(Input::Hover(5.0, a.layout.header().y + 5.0));
+        assert_eq!(a.hot, Some(a.layout.header_cell(0)), "a header cell lights up: it sorts");
+        a.handle(Input::Hover(5.0, a.layout.rows_area().y + 5.0));
         assert_eq!(a.hot, None);
+    }
+
+    #[test]
+    fn a_press_on_the_hot_control_is_pressed_until_the_button_is_released() {
+        let mut a = app();
+        let chip = a.layout.chip(0);
+        let (x, y) = (chip.x + 5.0, chip.y + 5.0);
+        a.handle(Input::Hover(x, y));
+        a.handle(Input::Click(x, y));
+        assert!(a.pressed);
+        a.handle(Input::Release);
+        assert!(!a.pressed);
+        a.handle(Input::Hover(5.0, a.layout.rows_area().y + 5.0));
+        a.handle(Input::Click(5.0, a.layout.rows_area().y + 5.0));
+        assert!(!a.pressed, "nothing under the pointer to press");
     }
 
     #[test]

@@ -245,8 +245,10 @@ pub struct Scene<'a> {
     pub active_chip: Option<usize>,
     /// Where to draw the "Run as administrator" button, if shown.
     pub admin: Option<Rect>,
-    /// The icon button under the pointer, if any.
+    /// The control (or header cell) under the pointer, if any.
     pub hot: Option<Rect>,
+    /// The button is down on `hot`.
+    pub pressed: bool,
     /// Header column the rows are sorted by, and whether descending.
     pub sort: (usize, bool),
     /// Which kind of view the rows belong to: the header titles and the last two columns follow it.
@@ -636,6 +638,9 @@ impl Pen<'_> {
         let partial = s.view.as_ref().is_some_and(|v| v.partial);
         for (c, name) in s.kind.titles(s.metric).iter().enumerate() {
             let (x, w) = l.column(c);
+            if s.hot == Some(l.header_cell(c)) {
+                self.fill(l.header_cell(c), mix(t.panel, t.fg, 0.07)); // the cell is clickable: it sorts
+            }
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
             // During a scan the sums are what has been found so far: "at least", said once here.
             let atleast = if partial && (c == 1 || (c == 3 && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
@@ -701,14 +706,16 @@ impl Pen<'_> {
     }
 
     /// A control's surface, the one look chips, buttons and toggles share: raised and framed at rest, lifted with
-    /// a brighter frame under the pointer, accent-tinted while on. A `ghost` control (one inside another surface)
+    /// a brighter frame under the pointer and pressed in further while the button is down, accent-tinted while on. A `ghost` control (one inside another surface)
     /// shows nothing at rest. Returns the text colour.
     fn control(&self, r: Rect, s: &Scene, active: bool, ghost: bool) -> D2D1_COLOR_F {
         let (t, hot) = (&s.theme, s.hot == Some(r));
+        let down = hot && s.pressed;
         let (fill, line, text) = if active {
-            (t.accent_soft, t.accent, t.accent)
+            // Lit stays lit under the pointer, a little stronger.
+            (mix(t.accent_soft, t.accent, if down { 0.35 } else if hot { 0.18 } else { 0.0 }), t.accent, t.accent)
         } else if hot {
-            (mix(t.raised, t.fg, 0.10), t.dim, t.fg)
+            (mix(t.raised, t.fg, if down { 0.20 } else { 0.10 }), t.dim, t.fg)
         } else {
             (t.raised, t.border, t.dim)
         };

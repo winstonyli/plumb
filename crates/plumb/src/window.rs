@@ -506,15 +506,12 @@ impl Win {
         let (bg, edge) = (crate::draw::colorref(theme.bg), crate::draw::colorref(theme.border));
         let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_CAPTION_COLOR, &bg as *const _ as *const _, 4) };
         let _ = unsafe { DwmSetWindowAttribute(self.hwnd, DWMWA_BORDER_COLOR, &edge as *const _ as *const _, 4) };
-        // The tooltip control has no dark visual style: without one it takes the colours we set; in light it keeps the default.
+        // The tooltip takes the theme's colours in both themes: it has no dark visual style, and in light the system look
+        // would be the one surface that ignores the accent-tinted palette. Without a visual style it takes the colours we set.
         unsafe {
-            if self.dark {
-                let _ = SetWindowTheme(self.tooltip, w!(""), w!(""));
-                SendMessageW(self.tooltip, TTM_SETTIPBKCOLOR, Some(WPARAM(crate::draw::colorref(theme.panel) as usize)), None);
-                SendMessageW(self.tooltip, TTM_SETTIPTEXTCOLOR, Some(WPARAM(crate::draw::colorref(theme.fg) as usize)), None);
-            } else {
-                let _ = SetWindowTheme(self.tooltip, PCWSTR::null(), PCWSTR::null());
-            }
+            let _ = SetWindowTheme(self.tooltip, w!(""), w!(""));
+            SendMessageW(self.tooltip, TTM_SETTIPBKCOLOR, Some(WPARAM(crate::draw::colorref(theme.panel) as usize)), None);
+            SendMessageW(self.tooltip, TTM_SETTIPTEXTCOLOR, Some(WPARAM(crate::draw::colorref(theme.fg) as usize)), None);
         }
         let bar = ((PICKER_H + self.inset) * self.dpi / 96.0).ceil() as i32;
         let margins = MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: bar, cyBottomHeight: 0 };

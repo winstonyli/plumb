@@ -265,6 +265,12 @@ impl Layout {
         icon_button(self.w - CAPTION_RESERVE - 8.0, Rect { x: 0.0, y: 0.0, w: self.w, h: PICKER_H })
     }
 
+    /// Column `c`'s cell in the header.
+    pub fn header_cell(&self, c: usize) -> Rect {
+        let (x, w) = self.column(c);
+        Rect { x, w, ..self.header() }
+    }
+
     pub fn header(&self) -> Rect {
         Rect { x: 0.0, y: self.top(), w: self.tree_w(), h: HEADER_H }
     }
