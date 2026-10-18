@@ -686,7 +686,8 @@ impl Pen<'_> {
         // Row 1: the selection, the legend and the buttons; row 2: the scan and live state, the full width.
         let row1 = l.status_top();
         let reserved = ICON_BTN + 8.0 + if l.cancel || l.metric { ICON_BTN + 4.0 } else { 0.0 } + if l.metric { METRIC_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
-        let right = Rect { x: row1.x + 8.0, w: (row1.w - 16.0 - reserved).max(0.0), ..row1 };
+        // 8 DIPs of margin each side, and 8 more between the legend and the buttons so they do not read as one cluster.
+        let right = Rect { x: row1.x + 8.0, w: (row1.w - 24.0 - reserved).max(0.0), ..row1 };
         let legend_w = self.legend(s, right, right.w * 0.6);
         let text_w = if legend_w > 0.0 { right.w - legend_w - 24.0 } else { right.w };
         let sel = self.fit_middle(s.selection, text_w.max(0.0));

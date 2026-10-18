@@ -1650,6 +1650,14 @@ mod tests {
         let (head, lines) = a.held_text().unwrap();
         assert!(head.ends_with("9 files, 2 not readable"), "{head}");
         assert_eq!((lines.len(), lines.last().unwrap().as_str()), (crate::layout::HELD_ROWS, "and 4 more"));
+        // A process with nothing open says so in its title and has no lines.
+        let (mut a, id) = process_app();
+        a.model.as_mut().unwrap().select(id);
+        a.held_sync();
+        let (g, _) = a.held_request().unwrap();
+        a.held_done(g, Ok(HandleList { files: Vec::new(), skipped: 0 }));
+        let (head, lines) = a.held_text().unwrap();
+        assert!(head.ends_with("0 files") && lines.is_empty(), "{head}");
     }
 
     #[test]
