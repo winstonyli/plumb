@@ -6,6 +6,7 @@ use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
 use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
+use crate::modal::{Ask, Modal, Pick};
 use crate::restore::Snapshot;
 use crate::state::{MapState, Sort, State};
 use plumb_core::basket::{self, Basket};
@@ -14,7 +15,7 @@ use plumb_core::procs::Metric;
 use plumb_scan::handles::{HandleError, HandleList};
 use plumb_core::treemap::{self, Class, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub use filter::FilterJob;
 
@@ -219,8 +220,10 @@ pub enum Effect {
     Filter,
     /// Stop the scan in flight.
     Cancel,
-    /// Ask what to delete (the basket chip).
-    Commit,
+    /// Delete these paths of the view, on a worker thread (a modal was answered).
+    Delete { view: usize, paths: Vec<String>, permanent: bool },
+    /// Close the window (the modal asked about a running delete was answered Yes).
+    Quit,
     /// The Processes view's map now weighs by this (the tree's sizes must be rewritten).
     Metric(Metric),
 }
@@ -277,6 +280,7 @@ pub enum MarkState {
 }
 
 /// What a commit would delete: the topmost marked paths of one view and what they hold.
+#[derive(Clone, Debug, PartialEq)]
 pub struct CommitRequest {
     pub view: usize,
     pub paths: Vec<String>,
@@ -346,6 +350,8 @@ pub struct App {
     grab: Option<f32>,
     /// The pointer is over the scrollbar thumb.
     pub thumb_hover: bool,
+    /// The modals waiting to be answered, the first on screen; while any is up it takes all the input.
+    modals: VecDeque<Modal>,
     /// While dragging a column edge: the column, and the pointer x and column width at the start.
     col_drag: Option<(usize, f32, f32)>,
     /// The folder the map shows; follows the tree's selection (see `follow_selection`).
@@ -394,7 +400,7 @@ impl App {
     pub fn new(layout: Layout, views: Vec<ViewInfo>, adapter: String) -> Self {
         let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
-            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, tree: None, model: None, scroll: 0,
+            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), tree: None, model: None, scroll: 0,
             can_elevate: false, accent: None, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
             live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
@@ -640,9 +646,10 @@ impl App {
 
     /// Whether the pointer is on a column edge in the header (or one is being dragged), for the resize cursor.
     pub fn over_divider(&self, x: f32, y: f32) -> bool {
-        self.col_drag.is_some()
-            || self.map_drag.is_some()
-            || matches!(self.layout.hit(x, y, self.views.len()), Hit::Divider(_) | Hit::MapDivider)
+        self.modal().is_none()
+            && (self.col_drag.is_some()
+                || self.map_drag.is_some()
+                || matches!(self.layout.hit(x, y, self.views.len()), Hit::Divider(_) | Hit::MapDivider))
     }
 
     /// The button at (x, y), if there is one there, with its tooltip: an icon button carries no label, and a
@@ -784,7 +791,102 @@ impl App {
     }
 
     pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
+        if self.modal().is_some() {
+            return None;
+        }
         self.tip_target(x, y).map(|t| t.1)
+    }
+
+    /// The modal on screen, if any.
+    pub fn modal(&self) -> Option<&Modal> {
+        self.modals.front()
+    }
+
+    /// Where the on-screen modal's button with this meaning is, if it has one.
+    pub fn modal_button(&self, pick: Pick) -> Option<Rect> {
+        let m = self.modal()?;
+        m.geometry(self.layout.w, self.layout.h).buttons.get(m.index_of(pick)?).copied()
+    }
+
+    /// Puts a modal up (after those already waiting).
+    pub fn ask(&mut self, m: Modal) {
+        self.modals.push_back(m);
+        self.hot = None;
+        self.hover = None;
+        self.thumb_hover = false;
+    }
+
+    /// Asks how to delete the marked items (the basket chip), if there are any that can be.
+    pub fn ask_delete(&mut self) {
+        if let Some(req) = self.commit_request() {
+            self.ask(Modal::delete(req));
+        }
+    }
+
+    /// The window is closing while a delete runs; asked once.
+    pub fn ask_close(&mut self) {
+        if !self.modals.iter().any(|m| m.ask == Ask::Close) {
+            self.ask(Modal::closing());
+        }
+    }
+
+    /// The first modal was answered: what it was about and the answer decide what happens next.
+    fn answer(&mut self, pick: Pick) -> Effect {
+        let Some(m) = self.modals.pop_front() else { return Effect::None };
+        self.hot = None;
+        match (m.ask, pick) {
+            (Ask::Delete(r), Pick::Recycle) => Effect::Delete { view: r.view, paths: r.paths, permanent: false },
+            (Ask::Delete(r), Pick::Permanent) => {
+                self.modals.push_front(Modal::permanent(r));
+                Effect::None
+            }
+            (Ask::Delete(_), Pick::Unmark) => {
+                self.clear_basket();
+                Effect::None
+            }
+            (Ask::Permanent(r), Pick::Yes) => Effect::Delete { view: r.view, paths: r.paths, permanent: true },
+            (Ask::Failed { view, permanent, paths }, Pick::Retry) => Effect::Delete { view, paths, permanent },
+            (Ask::Close, Pick::Yes) => Effect::Quit,
+            _ => Effect::None,
+        }
+    }
+
+    /// Input while a modal is up: it alone hears the pointer and the keys.
+    fn modal_input(&mut self, input: Input) -> Effect {
+        let Some(m) = self.modals.front_mut() else { return Effect::None };
+        let g = m.geometry(self.layout.w, self.layout.h);
+        let pick_at = |m: &Modal, x, y| g.button_at(x, y).map(|i| m.buttons[i].pick);
+        match input {
+            Input::Hover(x, y) => {
+                self.hot = g.button_at(x, y).map(|i| g.buttons[i]);
+                Effect::None
+            }
+            Input::Click(x, y) | Input::DoubleClick(x, y) => match pick_at(m, x, y) {
+                Some(p) => self.answer(p),
+                None => Effect::None,
+            },
+            Input::Enter => {
+                let p = m.buttons[m.focus].pick;
+                self.answer(p)
+            }
+            Input::Escape => {
+                let p = m.cancel;
+                self.answer(p)
+            }
+            Input::Tab => {
+                m.step(true);
+                Effect::None
+            }
+            Input::Key(Key::Left | Key::Up) => {
+                m.step(false);
+                Effect::None
+            }
+            Input::Key(Key::Right | Key::Down) => {
+                m.step(true);
+                Effect::None
+            }
+            _ => Effect::None,
+        }
     }
 
     /// Whether (x, y) is empty title-bar space, where a drag moves the window and a double-click maximizes
@@ -807,9 +909,12 @@ impl App {
         self.layout.basket = self.basket_active();
         self.layout.metric = self.kind() == ViewKind::Processes;
         self.layout.held = self.kind() == ViewKind::Processes;
-        if matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
+        if self.modal().is_none() && matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
             self.notice.clear();
             self.notice_detail.clear();
+        }
+        if self.modal().is_some() && !matches!(input, Input::Resize(..) | Input::Release) {
+            return self.modal_input(input);
         }
         match input {
             Input::Resize(w, h) => {
@@ -1200,7 +1305,7 @@ impl App {
         }
         match hit {
             Hit::Cancel => return Effect::Cancel,
-            Hit::Basket => return Effect::Commit,
+            Hit::Basket => self.ask_delete(),
             // Picking another view mid-scan cancels the scan in flight; the same view does nothing.
             Hit::Chip(i) if !(matches!(self.scan, Scan::Running { .. }) && self.active == Some(i)) => return Effect::Scan(i),
             Hit::Rescan => {
@@ -1378,6 +1483,7 @@ impl App {
             // The scrollbar thumb counts as a control under the pointer, and is pressed while it is dragged.
             hot: self.hot.or(self.thumb().filter(|_| self.thumb_hover || self.grab.is_some())),
             pressed: self.pressed || self.grab.is_some(),
+            modal: self.modals.front(),
             view,
             // The status bar already says what a running scan has found.
             message: if running { "" } else { &message },
@@ -2429,7 +2535,90 @@ Test GPU", a.status())));
         assert!(matches!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0)), Effect::None), "nothing marked: no chip, no effect");
         a.toggle_mark(file);
         a.update_map(1.0);
-        assert!(matches!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0)), Effect::Commit));
+        assert_eq!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0)), Effect::None);
+        assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Delete(_))), "the chip asks how to delete");
+    }
+
+    /// A modal over a scanned app with one file marked, and the middle of one of its buttons.
+    fn asking() -> (App, impl Fn(&App, Pick) -> (f32, f32)) {
+        let mut a = scanned();
+        let (file, ..) = picks(&a);
+        a.toggle_mark(file);
+        a.ask_delete();
+        let centre = |a: &App, p| {
+            let r = a.modal_button(p).expect("the button is there");
+            (r.x + r.w / 2.0, r.y + r.h / 2.0)
+        };
+        (a, centre)
+    }
+
+    #[test]
+    fn answering_a_modal_keeps_the_status_notice() {
+        let (mut a, centre) = asking();
+        a.notice = "1 of 1 not deleted: in use; still marked".into();
+        let (x, y) = centre(&a, Pick::Cancel);
+        a.handle(Input::Click(x, y));
+        assert!(a.modal().is_none() && a.notice.starts_with("1 of 1 not deleted"), "{:?}", a.notice);
+    }
+
+    #[test]
+    fn a_modal_takes_all_input_and_enter_escape_tab_and_clicks_answer_it() {
+        let (mut a, centre) = asking();
+        let (scroll, marks) = (a.scroll, a.basket.len());
+        // Everything but its own buttons is swallowed, including the keys that would unmark or scroll the list.
+        for i in [Input::Wheel(3), Input::Edit(Edit::Delete), Input::Key(Key::Down), Input::Click(5.0, 5.0), Input::Find] {
+            assert_eq!(a.handle(i), Effect::None);
+        }
+        assert!(a.modal().is_some() && a.scroll == scroll && a.basket.len() == marks);
+        // Escape cancels; the marks stay.
+        assert_eq!(a.handle(Input::Escape), Effect::None);
+        assert!(a.modal().is_none() && a.basket.len() == marks);
+        // Enter presses the default: Recycle.
+        a.ask_delete();
+        let Effect::Delete { permanent, paths, .. } = a.handle(Input::Enter) else { panic!("Enter on the default button") };
+        assert!(!permanent && paths.len() == 1 && a.modal().is_none());
+        // Tab moves the focus; Enter then presses that button (Delete permanently asks a second question, defaulting to Cancel).
+        a.ask_delete();
+        a.handle(Input::Tab);
+        assert_eq!(a.handle(Input::Enter), Effect::None);
+        assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Permanent(_))));
+        assert_eq!(a.handle(Input::Enter), Effect::None, "the default of the second question is Cancel");
+        assert!(a.modal().is_none() && a.basket.len() == marks);
+        // A click on a button answers it: permanently, then Yes.
+        a.ask_delete();
+        let at = centre(&a, Pick::Permanent);
+        a.handle(Input::Click(at.0, at.1));
+        let at = centre(&a, Pick::Yes);
+        assert!(matches!(a.handle(Input::Click(at.0, at.1)), Effect::Delete { permanent: true, .. }));
+        // Unmark all clears the basket.
+        a.ask_delete();
+        let at = centre(&a, Pick::Unmark);
+        a.handle(Input::Click(at.0, at.1));
+        assert!(a.basket.is_empty() && a.modal().is_none());
+    }
+
+    #[test]
+    fn a_hovered_modal_button_is_hot_and_modals_queue_behind_each_other() {
+        let (mut a, centre) = asking();
+        let at = centre(&a, Pick::Cancel);
+        a.handle(Input::Hover(at.0, at.1));
+        assert_eq!(a.with_scene(false, |s| s.hot), a.modal_button(Pick::Cancel));
+        a.handle(Input::Hover(1.0, 1.0));
+        assert_eq!(a.with_scene(false, |s| s.hot), None);
+        // A failure and a close question arriving over the delete question wait their turn, the close question once.
+        a.ask(Modal::failed(0, false, &[("C:\\f".into(), "in use".into())], 1));
+        a.ask_close();
+        a.ask_close();
+        assert_eq!(a.modals.len(), 3);
+        a.handle(Input::Escape);
+        assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Failed { .. })));
+        let Effect::Delete { paths, .. } = a.handle(Input::Enter) else { panic!("Retry") };
+        assert_eq!(paths, ["C:\\f"]);
+        assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Close)));
+        assert_eq!(a.handle(Input::Escape), Effect::None, "Esc keeps the window open");
+        a.ask_close();
+        a.handle(Input::Key(Key::Left));
+        assert_eq!(a.handle(Input::Enter), Effect::Quit);
     }
 
     #[test]

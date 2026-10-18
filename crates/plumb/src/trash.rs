@@ -84,7 +84,7 @@ fn perform(paths: &[&str], permanent: bool, owner: isize, results: &Results) -> 
         let silent = owner == 0; // tests: no owner window to show the shell's progress or prompts over
         // Silent only for tests: the shell's progress window stays on otherwise. Its error dialog never shows: it offers
         // only Try again or Cancel (and Cancel abandons the rest), so a failure is reported per item instead and
-        // `dialog::failed` offers the retry. Our dialogs already asked; the shell would ask a third time before a
+        // the failure modal offers the retry. Our modals already asked; the shell would ask a third time before a
         // permanent delete.
         let mut flags = if silent { (FOF_SILENT | FOF_NOERRORUI | FOF_NOCONFIRMATION).0 } else if permanent { (FOF_NOERRORUI | FOF_NOCONFIRMATION).0 } else { FOF_NOERRORUI.0 };
         if !permanent {

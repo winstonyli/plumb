@@ -274,6 +274,8 @@ pub struct Scene<'a> {
     pub basket: Option<&'a str>,
     /// `None` when the map pane is hidden.
     pub map: Option<MapView<'a>>,
+    /// The modal over everything, if one is up.
+    pub modal: Option<&'a crate::modal::Modal>,
 }
 
 /// How a piece of text ranks. Sizes and weights live only in `Painter::new`; every text draw names a role.
@@ -702,6 +704,38 @@ impl Pen<'_> {
             let r = l.metric_button();
             let c = self.control(r, s, false, false);
             self.centered(crate::app::metric_label(s.metric), r, c);
+        }
+        if let Some(m) = s.modal {
+            self.modal(s, m);
+        }
+    }
+
+    /// The modal: the window dimmed, a panel in the middle with its heading, lines and buttons.
+    fn modal(&self, s: &Scene, m: &crate::modal::Modal) {
+        let (t, l) = (&s.theme, &s.layout);
+        let g = m.geometry(l.w, l.h);
+        // The scrim leaves the corner under the system's caption buttons alone: it is transparent so DWM shows through.
+        let dim = D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: if t.dark { 0.5 } else { 0.3 } };
+        self.fill(Rect { x: 0.0, y: 0.0, w: l.w - CAPTION_RESERVE, h: PICKER_H }, dim);
+        self.fill(Rect { x: 0.0, y: PICKER_H, w: l.w, h: l.h - PICKER_H }, dim);
+        self.round(g.panel, t.raised);
+        self.outline(g.panel, t.border);
+        self.text_as(Role::Title, &self.fit_middle(&m.heading, g.heading.w), g.heading, t.fg, false);
+        for (i, line) in m.body.iter().enumerate() {
+            let r = Rect { y: g.body.y + i as f32 * ROW_H, h: ROW_H, ..g.body };
+            self.text_as(Role::Caption, line, r, t.dim, false);
+        }
+        for (i, line) in m.detail.iter().enumerate() {
+            let r = Rect { y: g.detail.y + i as f32 * ROW_H, h: ROW_H, ..g.detail };
+            self.text_as(Role::Caption, &self.fit_middle(line, r.w), r, t.fg, false);
+        }
+        for (i, (b, r)) in m.buttons.iter().zip(&g.buttons).enumerate() {
+            let c = self.control(*r, s, b.primary, false);
+            self.centered(b.label, *r, c);
+            if i == m.focus {
+                // The key that presses it, shown: a ring just outside the button.
+                self.outline(Rect { x: r.x - 3.0, y: r.y - 3.0, w: r.w + 6.0, h: r.h + 6.0 }, t.accent);
+            }
         }
     }
 

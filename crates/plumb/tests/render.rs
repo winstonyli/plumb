@@ -64,6 +64,7 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         filter,
         basket: None,
         map: None,
+        modal: None,
     };
     render_scene(&gfx, &scene, &format!("plumb-{}{}", if dark { "dark" } else { "light" }, if filter.error { "-error" } else { "" }))
 }
@@ -263,6 +264,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
                 message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None,
                 map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
+                modal: None,
             };
             render_scene(&gfx, &scene, stem)
         };
@@ -301,6 +303,7 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
             view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
+            modal: None,
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
         painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
@@ -325,7 +328,7 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     let frame = |loading: bool| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-            view: None, message: if loading { "" } else { "Scan failed\nThe volume could not be opened." }, loading, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+            view: None, message: if loading { "" } else { "Scan failed\nThe volume could not be opened." }, loading, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_scene(&gfx, &scene, if loading { "plumb-loading" } else { "plumb-empty" })
     };
@@ -366,6 +369,7 @@ fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
         layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
         view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None,
         map: Some(MapView { tiles: &tiles, generation: 1, now, selected: None, hover: None, classes: &classes, marked: &[] }),
+        modal: None,
     };
     (render_scene(&gfx, &scene, "plumb-map-age"), [mid(600_000), mid(500_000)], theme)
 }
@@ -421,6 +425,7 @@ fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
             layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
             view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
+            modal: None,
         };
         let buf = render_scene(&gfx, &scene, "plumb-legend");
         // The strip's first swatch is the foreground colour itself, which nothing else in the status bar uses.
@@ -457,6 +462,7 @@ fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows
             layout: layout.with_basket(chip.is_some()), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
             view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: chip,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked }),
+            modal: None,
         };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
         painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
@@ -486,7 +492,7 @@ fn a_marked_row_is_tinted() {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_scene(&gfx, &scene, "plumb-marked-row")
     };
@@ -520,7 +526,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None,
+            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_on(&painter, &gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
     };
@@ -572,6 +578,7 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Default::default(), held: None, status: "6 processes, 1.1 GB in use of 16 GB", selection: "", banner: None,
         filter: FilterBar::default(), basket: None,
         map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
+        modal: None,
     };
     let shot = render_scene(&gfx, &scene, "plumb-processes");
     assert_eq!(shot.len(), (W * H * 4) as usize);
@@ -612,6 +619,7 @@ fn the_processes_map_follows_the_metric_button() {
             message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: m, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "", selection: "", banner: None,
             filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
+            modal: None,
         };
         render_scene(&gfx, &scene, &format!("plumb-processes-{m:?}").to_lowercase());
     }
@@ -621,6 +629,11 @@ fn the_processes_map_follows_the_metric_button() {
 /// The Processes scene (with the held pane, a filter and the metric button) drawn with `theme` at `scale`: a bitmap of
 /// `W x H` DIPs in physical pixels, through the real paint path. The frame goes to `PLUMB_SHOT_DIR` as `stem` for looking at.
 fn processes_shot(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, hot: &dyn Fn(&Layout) -> Rect, pressed: bool, stem: &str) -> Vec<u8> {
+    processes_shot_with(gfx, painter, theme, scale, hot, pressed, None, stem)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn processes_shot_with(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, hot: &dyn Fn(&Layout) -> Rect, pressed: bool, modal: Option<&plumb::modal::Modal>, stem: &str) -> Vec<u8> {
     use plumb_core::procs::{Metric, Procs, Sample};
     let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, cpu_100ns: cpu, io_bytes: io };
     let (mut procs, mut tree) = Procs::new(Metric::Memory);
@@ -644,6 +657,7 @@ fn processes_shot(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, hot: &
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Metric::Memory, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB", selection: "", banner: None,
         filter: FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() }, basket: None,
         map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
+        modal,
     };
     let (pw, ph) = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
     let target = bitmap_sized(gfx, D2D1_BITMAP_OPTIONS_TARGET, pw, ph, 96.0 * scale);
@@ -700,6 +714,42 @@ fn the_processes_view_paints_the_hover_state_of_each_control() {
             let t = if dark { "dark" } else { "light" };
             processes_shot(&gfx, &painter, Theme::new(dark), 1.0, &pick, false, &format!("plumb-hover-{name}-{t}"));
             processes_shot(&gfx, &painter, Theme::new(dark), 1.0, &pick, true, &format!("plumb-pressed-{name}-{t}"));
+        }
+    }
+}
+
+/// Every modal over the Processes view, in both themes at 1x and 2x: frames for looking at (`PLUMB_SHOT_DIR`), and the
+/// panel must dim the view behind it and sit in the middle with its primary button in the accent colour.
+#[test]
+fn each_modal_paints_over_a_dimmed_view_in_both_themes_and_scales() {
+    use plumb::app::CommitRequest;
+    use plumb::modal::Modal;
+    let gfx = Gfx::warp().expect("WARP device");
+    let painter = Painter::new(&gfx).unwrap();
+    let paths: Vec<String> = (0..12).map(|i| format!(r"C:\Users\me\Documents\a-rather-long-folder-name\file-{i}.bin")).collect();
+    let req = CommitRequest { view: 0, paths: paths.clone(), bytes: 3_500_000_000 };
+    let failed: Vec<(String, String)> = paths.iter().take(3).map(|p| (p.clone(), "in use by plumb.exe (4242)".to_string())).collect();
+    let holders = [plumb_scan::holders::Holder { pid: 4242, name: "plumb.exe".into() }, plumb_scan::holders::Holder { pid: 77, name: "notepad.exe".into() }];
+    let modals = [
+        ("delete", Modal::delete(req.clone())),
+        ("permanent", Modal::permanent(req)),
+        ("failed", Modal::failed(0, false, &failed, 12)),
+        ("holders", Modal::holders(r"C:\Users\me\notes.txt", &holders)),
+        ("closing", Modal::closing()),
+    ];
+    let none = |_: &Layout| Rect { x: -1.0, y: -1.0, w: 0.0, h: 0.0 };
+    for dark in [false, true] {
+        for scale in [1.0f32, 2.0] {
+            let t = if dark { "dark" } else { "light" };
+            let plain = processes_shot(&gfx, &painter, Theme::new(dark), scale, &none, false, "plumb-modal-base");
+            let w = (W as f32 * scale) as u32;
+            for (name, m) in &modals {
+                let shot = processes_shot_with(&gfx, &painter, Theme::new(dark), scale, &none, false, Some(m), &format!("plumb-modal-{name}-{t}-{}x", scale as u32));
+                // The view behind is dimmed: a pixel in the far corner of the body is darker than without the scrim.
+                let at = |b: &[u8]| rgb_at(b, 4, (H as f32 * scale) as u32 - 4).iter().sum::<i32>();
+                let _ = w;
+                assert!(at(&shot) < at(&plain), "{name} {t} {scale}x: the scrim did not darken the view behind");
+            }
         }
     }
 }

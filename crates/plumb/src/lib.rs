@@ -4,6 +4,7 @@ pub mod filter_ui;
 pub mod fmt;
 pub mod layout;
 pub mod live;
+pub mod modal;
 pub mod preview;
 pub mod restore;
 pub mod state;
@@ -19,5 +20,3 @@ pub mod icons;
 pub mod window;
 #[cfg(windows)]
 pub mod trash;
-#[cfg(windows)]
-pub mod dialog;

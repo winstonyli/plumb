@@ -1,7 +1,8 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
 use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, Parked, TipKey, ViewKind};
-use crate::{dialog, trash};
+use crate::modal::Modal;
+use crate::trash;
 use crate::draw::{Mark, Painter, Role};
 use crate::filter_ui::{byte_at, push_utf16, Edit, Motion};
 use crate::fmt;
@@ -1364,7 +1365,10 @@ fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: boo
 fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
     match e {
         Effect::None => {}
-        Effect::Commit => commit(hwnd),
+        Effect::Delete { view, paths, permanent } => start_delete(hwnd, view, paths, permanent),
+        Effect::Quit => {
+            let _ = unsafe { DestroyWindow(hwnd) };
+        }
         Effect::Scan(i) => {
             with(|w| w.start_scan(i));
         }
@@ -1398,28 +1402,6 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             }
         }
     }
-}
-
-/// Asks what to delete and runs it on a worker thread; the result comes back as `WM_DELETED`.
-/// Runs with no borrow held: the dialogs run their own message loops.
-fn commit(hwnd: HWND) {
-    let Some(req) = with(|w| w.app.commit_request()).flatten() else {
-        with(|w| w.invalidate());
-        return;
-    };
-    let choice = dialog::choose(hwnd, &req.paths, req.bytes);
-    let permanent = choice == dialog::Choice::Permanent;
-    match choice {
-        dialog::Choice::Cancel => {}
-        dialog::Choice::Clear => {
-            with(|w| w.app.clear_basket());
-        }
-        _ if permanent && !dialog::confirm_permanent(hwnd, req.paths.len(), req.bytes) => {}
-        _ => {
-            start_delete(hwnd, req.view, req.paths, permanent);
-        }
-    }
-    with(|w| w.invalidate());
 }
 
 /// Runs the delete of `paths` on a worker thread; the result comes back as `WM_DELETED`.
@@ -1872,26 +1854,24 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             let raw = lp.0 as *mut (usize, bool, Vec<trash::Outcome>);
             let done = with(|w| {
                 let (view, permanent, out) = *unsafe { Box::from_raw(raw) };
-                w.finish_delete(view, out).map(|f| (view, permanent, f))
+                // What failed and why, to retry only those.
+                if let Some((failed, total)) = w.finish_delete(view, out) {
+                    w.app.ask(Modal::failed(view, permanent, &failed, total));
+                    w.invalidate();
+                }
             });
-            match done {
-                // The state was borrowed (a nested message loop): try again rather than lose the result.
-                None => {
-                    let _ = unsafe { PostMessageW(Some(hwnd), WM_DELETED, WPARAM(0), lp) };
-                }
-                // With no borrow held (the dialog runs its own message loop): say what failed and why, retry only those.
-                Some(Some((view, permanent, (failed, total)))) => {
-                    if dialog::failed(hwnd, &failed, total) {
-                        start_delete(hwnd, view, failed.into_iter().map(|f| f.0).collect(), permanent);
-                    }
-                }
-                Some(None) => {}
+            // The state was borrowed (the box is gone only once taken): try again rather than lose the result.
+            if done.is_none() {
+                let _ = unsafe { PostMessageW(Some(hwnd), WM_DELETED, WPARAM(0), lp) };
             }
             LRESULT(0)
         }
         WM_HOLDERS => {
             let (path, found) = *unsafe { Box::from_raw(lp.0 as *mut (String, Vec<plumb_scan::holders::Holder>)) };
-            dialog::holders(hwnd, &path, &found);
+            with(|w| {
+                w.app.ask(Modal::holders(&path, &found));
+                w.invalidate();
+            });
             LRESULT(0)
         }
         WM_PROCS => {
@@ -1922,13 +1902,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         WM_CLOSE if with(|w| w.app.deleting()) == Some(true) => {
-            let text = w!("A delete is still running. Closing now stops it partway.\n\nClose anyway?");
-            let ask = unsafe { MessageBoxW(Some(hwnd), text, w!("plumb"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) };
-            if ask == IDYES {
-                unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
-            } else {
-                LRESULT(0)
-            }
+            with(|w| {
+                w.app.ask_close();
+                w.invalidate();
+            });
+            LRESULT(0)
         }
         WM_DESTROY => {
             with(|w| {

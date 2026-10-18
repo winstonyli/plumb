@@ -315,46 +315,13 @@ pub fn selftest_watch() -> Result<String> {
     out
 }
 
-/// Answers the next dialogs this process shows, one button id each, from a helper thread; true if all were answered.
-fn answer_dialogs(ids: Vec<i32>) -> std::thread::JoinHandle<bool> {
-    use windows::Win32::UI::Controls::TDM_CLICK_BUTTON;
-    let pid = std::process::id();
-    std::thread::spawn(move || {
-        let mut last = 0isize;
-        for id in ids {
-            let deadline = Instant::now() + Duration::from_secs(15);
-            let found = loop {
-                let mut seen = (0isize, pid, last);
-                unsafe extern "system" fn each(h: HWND, p: LPARAM) -> BOOL {
-                    let seen = unsafe { &mut *(p.0 as *mut (isize, u32, isize)) };
-                    let (mut pid, mut class) = (0u32, [0u16; 16]);
-                    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
-                    let n = unsafe { GetClassNameW(h, &mut class) } as usize;
-                    if pid == seen.1 && h.0 as isize != seen.2 && unsafe { IsWindowVisible(h) }.as_bool() && String::from_utf16_lossy(&class[..n]) == "#32770" {
-                        seen.0 = h.0 as isize;
-                        return false.into();
-                    }
-                    true.into()
-                }
-                let _ = unsafe { EnumWindows(Some(each), LPARAM(&mut seen as *mut _ as isize)) };
-                if seen.0 != 0 {
-                    break Some(seen.0);
-                }
-                if Instant::now() > deadline {
-                    break None;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            };
-            let Some(h) = found else { return false };
-            last = h;
-            // For a window capture from outside (`PLUMB_SELFTEST_PAUSE_MS`): the dialog stays up this long before it is answered.
-            if let Some(ms) = std::env::var("PLUMB_SELFTEST_PAUSE_MS").ok().and_then(|v| v.parse().ok()) {
-                std::thread::sleep(Duration::from_millis(ms));
-            }
-            unsafe { SendMessageW(HWND(h as *mut _), TDM_CLICK_BUTTON.0 as u32, Some(WPARAM(id as usize)), None) };
-        }
-        true
-    })
+/// Clicks the on-screen modal's button with this meaning, once it is up; fails after a deadline.
+fn press(hwnd: HWND, pick: crate::modal::Pick) -> Result<()> {
+    pump_until("a modal with that button", 15, &|w| w.app.modal_button(pick).is_some())?;
+    if let Some(Some(r)) = with(|w| w.app.modal_button(pick)) {
+        send(hwnd, crate::app::Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    }
+    Ok(())
 }
 
 /// Presses a button of the shell's own operation window (a DirectUI window the dialog helpers cannot click) through UI
@@ -378,7 +345,7 @@ fn press_shell_button(automation_id: &'static str) -> std::thread::JoinHandle<bo
     })
 }
 
-/// Not elevated. Marks files in a scratch directory, answers the real commit dialogs, and checks the disk, the
+/// Not elevated. Marks files in a scratch directory, answers the in-app modals, and checks the disk, the
 /// basket and the tree: Cancel keeps everything, a permanent delete (two dialogs) and a recycle each remove only
 /// the marked items and the tree follows. Run it from a normal prompt: `plumb --selftest-delete`.
 /// The file the recycle step sends to the Recycle Bin; named so it is recognisable there.
@@ -391,7 +358,7 @@ const BIG: &str = "big.bin";
 pub fn selftest_delete() -> Result<String> {
     use windows::Win32::Foundation::E_FAIL;
     use std::os::windows::fs::OpenOptionsExt;
-    use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDCLOSE, IDYES};
+    use crate::modal::Pick;
     let fail = |m: String| windows::core::Error::new(E_FAIL, m);
     if is_elevated() {
         return Err(fail("run this from a normal prompt: an elevated delete is not what users see".into()));
@@ -432,18 +399,16 @@ pub fn selftest_delete() -> Result<String> {
         if with(|w| w.app.basket().len()) != Some(2) {
             return Err(fail("marking two items did not fill the basket".into()));
         }
-        let h = answer_dialogs(vec![IDCANCEL.0]);
-        commit(hwnd);
-        if !h.join().unwrap_or(false) || !exists("a.bin") || !exists(r"folder\inner.bin") || with(|w| w.app.basket().len()) != Some(2) {
-            return Err(fail("Cancel on the commit dialog changed something".into()));
+        with(|w| w.app.ask_delete());
+        press(hwnd, Pick::Cancel)?;
+        if !exists("a.bin") || !exists(r"folder\inner.bin") || with(|w| w.app.basket().len()) != Some(2) {
+            return Err(fail("Cancel on the delete modal changed something".into()));
         }
 
         // Delete permanently: a file and a folder go, the rest stays; the tree and the basket follow.
-        let h = answer_dialogs(vec![crate::dialog::PERMANENT, IDYES.0]);
-        commit(hwnd);
-        if !h.join().unwrap_or(false) {
-            return Err(fail("the permanent delete did not show its two dialogs".into()));
-        }
+        with(|w| w.app.ask_delete());
+        press(hwnd, Pick::Permanent)?;
+        press(hwnd, Pick::Yes)?;
         pump_until("the delete result", 30, &|w| !w.app.deleting())?;
         if exists("a.bin") || exists("folder") || !exists("b.bin") || !exists("keep.txt") {
             return Err(fail("the permanent delete removed the wrong things".into()));
@@ -457,11 +422,8 @@ pub fn selftest_delete() -> Result<String> {
 
         // Recycle: goes to the bin without further questions.
         mark(&[REC]);
-        let h = answer_dialogs(vec![crate::dialog::RECYCLE]);
-        commit(hwnd);
-        if !h.join().unwrap_or(false) {
-            return Err(fail("the recycle dialog never appeared".into()));
-        }
+        with(|w| w.app.ask_delete());
+        press(hwnd, Pick::Recycle)?;
         pump_until("the recycle result", 30, &|w| !w.app.deleting())?;
         if exists(REC) || !exists("keep.txt") {
             return Err(fail("the recycle removed the wrong things".into()));
@@ -491,12 +453,14 @@ pub fn selftest_delete() -> Result<String> {
             return Err(fail("could not make a sparse test file".into()));
         }
         mark(&[BIG]);
-        let (h, no) = (answer_dialogs(vec![crate::dialog::RECYCLE, IDCLOSE.0]), press_shell_button("eltInterruptNoBtn"));
-        commit(hwnd);
-        pump_until("the too-big prompt", 40, &|_| h.is_finished() && no.is_finished())?;
-        if !(h.join().unwrap_or(false) && no.join().unwrap_or(false)) {
+        let no = press_shell_button("eltInterruptNoBtn");
+        with(|w| w.app.ask_delete());
+        press(hwnd, Pick::Recycle)?;
+        pump_until("the too-big prompt", 40, &|_| no.is_finished())?;
+        if !no.join().unwrap_or(false) {
             return Err(fail(format!("a recycle of a file too big for the Recycle Bin did not ask before deleting it (file still there: {})", exists(BIG))));
         }
+        press(hwnd, Pick::Close)?;
         pump_until("the too-big recycle to finish", 30, &|w| !w.app.deleting())?;
         if !exists(BIG) {
             return Err(fail("a file too big for the Recycle Bin was deleted although the prompt was answered No".into()));
@@ -510,12 +474,10 @@ pub fn selftest_delete() -> Result<String> {
         // released, the next commit removes it.
         let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(dir.join(LOCKED)).map_err(io)?;
         mark(&[LOCKED]);
-        let h = answer_dialogs(vec![crate::dialog::RECYCLE, crate::dialog::RETRY, IDCLOSE.0]);
-        commit(hwnd);
-        pump_until("the failure dialogs", 30, &|_| h.is_finished())?;
-        if !h.join().unwrap_or(false) {
-            return Err(fail("a held file did not bring up the failure dialog twice (Retry, then Close)".into()));
-        }
+        with(|w| w.app.ask_delete());
+        press(hwnd, Pick::Recycle)?;
+        press(hwnd, Pick::Retry)?;
+        press(hwnd, Pick::Close)?;
         pump_until("the failed delete to finish", 30, &|w| !w.app.deleting())?;
         if !exists(LOCKED) || with(|w| w.app.basket().len()) != Some(1) {
             return Err(fail("a failed delete removed the file or unmarked it".into()));
@@ -531,16 +493,14 @@ pub fn selftest_delete() -> Result<String> {
             return Err(fail(format!("the failure's reason does not name this process on the status line: {tip:?}")));
         }
         drop(held);
-        let h = answer_dialogs(vec![crate::dialog::PERMANENT, IDYES.0]);
-        commit(hwnd);
-        if !h.join().unwrap_or(false) {
-            return Err(fail("the commit dialogs did not appear once the file was released".into()));
-        }
+        with(|w| w.app.ask_delete());
+        press(hwnd, Pick::Permanent)?;
+        press(hwnd, Pick::Yes)?;
         pump_until("the delete after the release", 30, &|w| !w.app.deleting())?;
         if exists(LOCKED) || with(|w| w.app.basket().len()) != Some(0) {
             return Err(fail("the released file was not deleted".into()));
         }
-        Ok(format!("cancel keeps marks; permanent delete (2 dialogs) and recycle remove only the marked items, and a recycled file restores from the bin; a file too big for the Recycle Bin gets the shell's prompt and survives No; a held file (recycled) shows the failure dialog (Retry, Close) with its reason on the status line and stays marked; tree followed in {lag:.1?}"))
+        Ok(format!("cancel keeps marks; permanent delete (two modals) and recycle remove only the marked items, and a recycled file restores from the bin; a file too big for the Recycle Bin gets the shell's prompt and survives No; a held file (recycled) shows the failure dialog (Retry, Close) with its reason on the status line and stays marked; tree followed in {lag:.1?}"))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);
