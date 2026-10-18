@@ -119,13 +119,16 @@ mod tests {
     #[test]
     fn our_own_process_is_listed_with_a_plausible_working_set() {
         let mut child = std::process::Command::new("cmd").args(["/c", "ping -n 3 127.0.0.1 >nul"]).spawn().unwrap();
+        // Plausible, not exact: the snapshot's own buffer (several MB, freed before it returns) sits in the working set for
+        // part of the call, so the listed value can lie either side of a reading taken around it.
+        let mut pmc = PROCESS_MEMORY_COUNTERS { cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32, ..Default::default() };
+        unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb).unwrap() };
+        let before = pmc.WorkingSetSize as f64;
         let list = snapshot().unwrap();
         let me = std::process::id();
         let e = list.iter().find(|p| p.pid == me).expect("own pid listed");
-        let mut pmc = PROCESS_MEMORY_COUNTERS { cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32, ..Default::default() };
-        unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb).unwrap() };
-        let ws = pmc.WorkingSetSize as f64;
-        assert!((e.working_set as f64 - ws).abs() <= ws * 0.2, "{} vs {}", e.working_set, ws);
+        let got = e.working_set as f64;
+        assert!(got >= before * 0.5 && got <= before + (32 << 20) as f64, "{got} vs {before} before the call");
         let (mut c, mut x, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
         unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut x, &mut k, &mut u).unwrap() };
         assert_eq!(e.created, (c.dwHighDateTime as u64) << 32 | c.dwLowDateTime as u64);
