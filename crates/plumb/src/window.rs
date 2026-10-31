@@ -1248,9 +1248,9 @@ pub fn summary(used: Used, files: u64, elapsed: Duration, corrupt: Option<u64>, 
         Used::Mft => "MFT scan",
         Used::Walk => "Directory walk",
     };
-    let mut s = format!("{scanner}: {} files in {:.1}s", crate::fmt::count(files), elapsed.as_secs_f64());
+    let mut s = format!("{scanner}: {} in {:.1}s", crate::fmt::noun(files, "file", "files"), elapsed.as_secs_f64());
     if let Some(c) = corrupt.filter(|&c| c > 0) {
-        s.push_str(&format!(", {c} records skipped"));
+        s.push_str(&format!(", {} skipped", crate::fmt::noun(c, "record", "records")));
     }
     if let Some(n) = note {
         s.push_str(&format!(" ({n})"));

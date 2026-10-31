@@ -64,8 +64,8 @@ const GAP: f32 = 8.0;
 const HEADING_H: f32 = 28.0;
 const MIN_W: f32 = 460.0;
 
-fn plural(n: usize) -> String {
-    format!("{n} item{}", if n == 1 { "" } else { "s" })
+fn items(n: usize) -> String {
+    fmt::noun(n as u64, "item", "items")
 }
 
 fn lines(items: &[String]) -> Vec<String> {
@@ -83,7 +83,7 @@ impl Modal {
 
     /// What to do with the marked `req.paths`.
     pub fn delete(req: CommitRequest) -> Self {
-        let heading = format!("Delete {}? Up to {}.", plural(req.paths.len()), fmt::size(req.bytes));
+        let heading = format!("Delete {}? Up to {}.", items(req.paths.len()), fmt::size(req.bytes));
         let detail = lines(&req.paths);
         let body = ["Recycle moves them to the Recycle Bin (Explorer can undo it).", "Delete permanently cannot be undone."];
         let buttons = vec![button(Pick::Recycle, "Recycle", true), button(Pick::Permanent, "Delete permanently", false), button(Pick::Unmark, "Unmark all", false), button(Pick::Cancel, "Cancel", false)];
@@ -92,7 +92,7 @@ impl Modal {
 
     /// The second question before a permanent delete; Cancel is the default.
     pub fn permanent(req: CommitRequest) -> Self {
-        let heading = format!("Permanently delete {}?", plural(req.paths.len()));
+        let heading = format!("Permanently delete {}?", items(req.paths.len()));
         let size = format!("Up to {} will be removed for good.", fmt::size(req.bytes));
         let buttons = vec![button(Pick::Yes, "Delete", false), button(Pick::No, "Cancel", true)];
         Self::new(Ask::Permanent(req), heading, &[&size, "This cannot be undone."], Vec::new(), buttons, 1, Pick::No)

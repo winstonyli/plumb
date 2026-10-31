@@ -15,6 +15,11 @@ pub fn size(b: u64) -> String {
     format!("{v:.1} {}", U[u])
 }
 
+/// A count with its noun: `noun(1, "item", "items")` is "1 item", `noun(1234, ..)` is "1,234 items".
+pub fn noun(n: u64, one: &str, many: &str) -> String {
+    format!("{} {}", count(n), if n == 1 { one } else { many })
+}
+
 /// 1234567 -> "1,234,567".
 pub fn count(n: u64) -> String {
     let s = n.to_string();
@@ -132,6 +137,14 @@ mod tests {
         assert_eq!(size(1024), "1.0 KB");
         assert_eq!(size(1536), "1.5 KB");
         assert_eq!(size(5 * 1024 * 1024 * 1024), "5.0 GB");
+    }
+
+    #[test]
+    fn a_count_agrees_with_its_noun() {
+        assert_eq!(noun(0, "item", "items"), "0 items");
+        assert_eq!(noun(1, "item", "items"), "1 item");
+        assert_eq!(noun(2, "smaller process", "smaller processes"), "2 smaller processes");
+        assert_eq!(noun(1234, "file", "files"), "1,234 files");
     }
 
     #[test]

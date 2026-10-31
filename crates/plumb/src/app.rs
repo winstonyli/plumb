@@ -90,6 +90,16 @@ pub fn metric_label(m: Metric) -> &'static str {
     }
 }
 
+/// What a map metric counts, as a noun inside a sentence ("4 KB private", "12.3% CPU").
+pub fn metric_noun(m: Metric) -> &'static str {
+    match m {
+        Metric::Memory => "memory",
+        Metric::Private => "private",
+        Metric::Cpu => "CPU",
+        Metric::Io => "I/O",
+    }
+}
+
 /// One line saying what a map metric counts, for the metric button's tooltip.
 pub fn metric_help(m: Metric) -> &'static str {
     match m {
@@ -260,7 +270,7 @@ pub enum TipKey {
 
 fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
     match t.kind {
-        Kind::Rest => format!("{} smaller items, {}", fmt::count(t.count as u64), fmt::size(t.bytes)),
+        Kind::Rest => format!("{}, {}", fmt::noun(u64::from(t.count), "smaller item", "smaller items"), fmt::size(t.bytes)),
         Kind::Own => format!("{} itself  ({})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes)),
         _ => {
             let when = tree.mtime[t.node].map_or_else(String::new, |d| format!(", modified {}, {}", fmt::date(d.get()), fmt::age(now, d.get())));
@@ -732,10 +742,10 @@ impl App {
             let n = u64::from(t.count) - u64::from(own);
             let mut what = Vec::new();
             if n > 0 {
-                what.push(format!("{} smaller process{}", fmt::count(n), if n == 1 { "" } else { "es" }));
+                what.push(fmt::noun(n, "smaller process", "smaller processes"));
             }
             if own {
-                what.push(format!("its own {}", metric_label(self.proc_metric).to_lowercase()));
+                what.push(format!("its own {}", metric_noun(self.proc_metric)));
             }
             return format!("{}, {}", what.join(" and "), self.kind().size_text(self.proc_metric, t.bytes));
         }
@@ -743,12 +753,13 @@ impl App {
         if t.kind == Kind::Own {
             return format!(
                 "{}  (PID {pid})\n{} {} in the process itself",
-                tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_label(self.proc_metric).to_lowercase()
+                tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_noun(self.proc_metric)
             );
         }
+        let scope = if tree.flags[t.node].contains(NodeFlags::DIR) { "this and its children" } else { "this process" };
         let mut tip = format!(
-            "{}  (PID {pid})\n{} {} in this and its children; own CPU {:.1}%, I/O {}/s",
-            tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_label(self.proc_metric).to_lowercase(), cpu as f64 / 10.0, fmt::size(io)
+            "{}  (PID {pid})\n{} {} in {scope}; own CPU {:.1}%, I/O {}/s",
+            tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_noun(self.proc_metric), cpu as f64 / 10.0, fmt::size(io)
         );
         if let Some(info) = self.proc_info.get(&(pid as u32)) {
             if let Some(path) = &info.path {
@@ -768,7 +779,7 @@ impl App {
     fn process_status(&self) -> Option<String> {
         let tree = self.tree.as_ref()?;
         let total = tree.subtree_size[*tree.roots.first()?];
-        Some(format!("{} processes, {} {}", self.proc_info.len(), self.kind().size_text(self.proc_metric, total), metric_label(self.proc_metric).to_lowercase()))
+        Some(format!("{}, {} {}", fmt::noun(self.proc_info.len() as u64, "process", "processes"), self.kind().size_text(self.proc_metric, total), metric_noun(self.proc_metric)))
     }
 
     /// The Processes view took a new snapshot: the facts about each process and the chip's memory.
@@ -883,7 +894,7 @@ impl App {
                 let first = self.held.scroll.min(n.saturating_sub(crate::layout::HELD_ROWS));
                 let lines: Vec<String> = list.files.iter().skip(first).take(crate::layout::HELD_ROWS).cloned().collect();
                 let range = if n > crate::layout::HELD_ROWS { format!(" ({}\u{2013}{})", first + 1, first + lines.len()) } else { String::new() };
-                (head(format!("{n} file{}{range}{skipped}", if n == 1 { "" } else { "s" })), lines)
+                (head(format!("{}{range}{skipped}", fmt::noun(n as u64, "file", "files"))), lines)
             }
         })
     }
@@ -1346,7 +1357,7 @@ impl App {
         if ids.is_empty() {
             self.clear_basket();
             self.notice = match self.skipped.first() {
-                Some((_, why)) => format!("{} marked item{} skipped: {why}", self.skipped.len(), if self.skipped.len() == 1 { "" } else { "s" }),
+                Some((_, why)) => format!("{} skipped: {why}", fmt::noun(self.skipped.len() as u64, "marked item", "marked items")),
                 None => "the marked items are already gone".into(),
             };
             self.notice_detail = self.skipped.drain(..).map(|(p, why)| format!("{p}: {why}")).collect();
@@ -1363,11 +1374,11 @@ impl App {
         self.basket.remove_under(gone);
         self.basket_rev += 1;
         let deleted = gone.len() - missing.min(gone.len());
-        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        let items = fmt::noun(deleted as u64, "item", "items");
         self.notice_ok = failed.is_empty() && self.skipped.is_empty();
         self.notice = match failed.first() {
-            None if missing == 0 => format!("deleted {deleted} item{}", plural(deleted)),
-            None => format!("deleted {deleted} item{}, {missing} already gone", plural(deleted)),
+            None if missing == 0 => format!("deleted {items}"),
+            None => format!("deleted {items}, {missing} already gone"),
             Some((_, why)) => format!("{} of {} not deleted: {why}; still marked", failed.len(), gone.len() + failed.len()),
         };
         self.notice_detail = failed.iter().map(|(p, why)| format!("{p}: {why}")).collect();
@@ -1486,8 +1497,8 @@ impl App {
             Scan::Idle => "No drive selected\nSelect a drive above to scan it.".into(),
             Scan::Running { view, .. } if self.views[*view].kind == ViewKind::Processes => "Reading processes\u{2026}".into(),
             Scan::Running { view, dirs, files, bytes } => format!(
-                "Scanning {}  {} folders, {} files, {}",
-                self.views[*view].title(), fmt::count(*dirs), fmt::count(*files), fmt::size(*bytes)
+                "Scanning {}  {}, {}, {}",
+                self.views[*view].title(), fmt::noun(*dirs, "folder", "folders"), fmt::noun(*files, "file", "files"), fmt::size(*bytes)
             ),
             Scan::Failed(m) => format!("Scan failed\n{m}"),
             Scan::Cancelled => "Scan cancelled\nSelect a drive above to scan it again.".into(),
@@ -1502,7 +1513,7 @@ impl App {
             return Some(format!("{}  (PID {pid})  {}", tree.name_string(id), self.kind().size_text(self.proc_metric, tree.subtree_size[id])));
         }
         let path = fmt::display_path(&tree.path(id));
-        let items = if tree.flags[id].contains(NodeFlags::DIR) { format!(", {} items", fmt::count(tree.subtree_files[id] as u64)) } else { String::new() };
+        let items = if tree.flags[id].contains(NodeFlags::DIR) { format!(", {}", fmt::noun(tree.subtree_files[id] as u64, "item", "items")) } else { String::new() };
         let size = format!("{}{items}", fmt::size(tree.subtree_size[id]));
         Some(if full { format!("{path}  ({size})") } else { size })
     }
@@ -1901,6 +1912,19 @@ mod tests {
     }
 
     #[test]
+    fn a_process_tip_names_its_metric_and_its_scope() {
+        let (a, id) = process_app(); // a leaf: no children
+        let tree = a.tree.as_ref().unwrap();
+        let own = Tile { node: id, rect: plumb_core::Rect::default(), depth: 0, class: Class::Other, kind: Kind::Frame, bytes: 4096, count: 1, mtime: None };
+        let tip = a.process_tip(tree, &own);
+        assert!(tip.contains("memory in this process; own CPU"), "{tip}");
+        assert!(!tip.contains("children"), "a process with none does not mention them: {tip}");
+        for (m, noun) in [(Metric::Memory, "memory"), (Metric::Private, "private"), (Metric::Cpu, "CPU"), (Metric::Io, "I/O")] {
+            assert_eq!(metric_noun(m), noun);
+        }
+    }
+
+    #[test]
     fn the_rest_tile_of_a_process_view_counts_processes_and_names_a_merged_own_size() {
         let (mut a, id) = process_app(); // ping.exe: 4096 own bytes under the root
         let rest = |count| Tile { node: id, rect: plumb_core::Rect::default(), depth: 0, class: Class::Other, kind: Kind::Rest, bytes: 4096, count, mtime: None };
@@ -1923,7 +1947,7 @@ mod tests {
     fn the_process_status_line_totals_what_the_metric_counts() {
         let (mut a, _) = process_app();
         a.set_procs(2, HashMap::from([(77u32, ProcInfo::default())]), (16 << 30, 3 << 30));
-        assert!(a.status().ends_with(&format!("1 processes, {} memory", fmt::size(4096))), "{}", a.status());
+        assert!(a.status().ends_with(&format!("1 process, {} memory", fmt::size(4096))), "{}", a.status());
         assert_eq!(a.views[2].free, 3 << 30, "the chip follows the machine's free memory");
     }
 
