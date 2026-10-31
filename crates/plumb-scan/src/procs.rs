@@ -127,11 +127,11 @@ mod tests {
         assert!(before > 0, "a process always holds handles");
         let dir = std::env::temp_dir().join(format!("plumb-handles-{me}"));
         std::fs::create_dir_all(&dir).unwrap();
-        let files: Vec<std::fs::File> = (0..20).map(|i| std::fs::File::create(dir.join(format!("f{i}"))).unwrap()).collect();
+        let files: Vec<std::fs::File> = (0..200).map(|i| std::fs::File::create(dir.join(format!("f{i}"))).unwrap()).collect();
         let during = count();
         drop(files);
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(during >= before + 20, "{during} while 20 more files were open, {before} before");
+        assert!(during >= before + 100, "{during} while 200 more files were open, {before} before");
     }
 
     #[test]
