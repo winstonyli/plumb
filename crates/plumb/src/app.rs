@@ -111,6 +111,9 @@ enum HeldState {
     Ready(Result<HandleList, HandleError>),
 }
 
+/// Snapshots (one a second while the view is on screen) between two refreshes of the Files held list.
+const HELD_REFRESH_SNAPSHOTS: u32 = 10;
+
 #[derive(Default)]
 struct Held {
     pid: Option<u32>,
@@ -119,6 +122,14 @@ struct Held {
     state: HeldState,
     /// The first file line shown.
     scroll: usize,
+    /// The handle count when the list was last asked for.
+    handles: u32,
+    /// Snapshots since the list was last asked for.
+    age: u32,
+    /// A fresh look is wanted and not yet started.
+    stale: bool,
+    /// A fresh look is in flight (the old list stays on screen meanwhile).
+    refreshing: bool,
 }
 
 /// What the Processes view knows about a process besides what its tree holds.
@@ -128,6 +139,8 @@ pub struct ProcInfo {
     pub path: Option<String>,
     /// Creation time, FILETIME.
     pub created: u64,
+    /// Open handles when last seen; a change suggests the files held changed.
+    pub handles: u32,
 }
 
 /// The map class of a process by where its executable is: the Windows folder, Program Files, a user profile, or
@@ -744,6 +757,10 @@ impl App {
         if let Some(d) = self.views.get_mut(view) {
             (d.total, d.free) = ram;
         }
+        self.held.age = self.held.age.saturating_add(1);
+        if self.held_readable() && !self.held.refreshing && self.held.age >= HELD_REFRESH_SNAPSHOTS && self.held_handles().is_some_and(|n| n != self.held.handles) {
+            self.held.stale = true;
+        }
     }
 
     /// What the context menu of `id` acts on: the path in the tree's terms (to mark by) and as a file system path
@@ -772,7 +789,7 @@ impl App {
         if want == self.held.pid {
             return false;
         }
-        self.held = Held { pid: want, epoch: self.held.epoch + 1, state: if want.is_some() { HeldState::Waiting } else { HeldState::Idle }, scroll: 0 };
+        self.held = Held { pid: want, epoch: self.held.epoch + 1, state: if want.is_some() { HeldState::Waiting } else { HeldState::Idle }, ..Held::default() };
         want.is_some()
     }
 
@@ -780,13 +797,45 @@ impl App {
     pub fn held_request(&mut self) -> Option<(u64, u32)> {
         let pid = self.held.pid.filter(|_| matches!(self.held.state, HeldState::Waiting))?;
         self.held.state = HeldState::Loading;
+        self.held.handles = self.held_handles().unwrap_or(0);
+        self.held.age = 0;
+        Some((self.held.epoch, pid))
+    }
+
+    /// The handle count of the process the pane is about, from the latest snapshot.
+    fn held_handles(&self) -> Option<u32> {
+        self.proc_info.get(&self.held.pid?).map(|i| i.handles)
+    }
+
+    /// Whether the pane shows a list that was read (a refresh has something to replace).
+    fn held_readable(&self) -> bool {
+        matches!(self.held.state, HeldState::Ready(Ok(_)))
+    }
+
+    /// Wants a fresh look at the files held (the selected row was clicked again). Does nothing when there is no
+    /// readable list to replace.
+    pub fn held_mark_stale(&mut self) {
+        if self.held_readable() && !self.held.refreshing {
+            self.held.stale = true;
+        }
+    }
+
+    /// The (epoch, pid) to look up again, once, if a refresh is due; the old list stays until `held_done`.
+    pub fn held_take_refresh(&mut self) -> Option<(u64, u32)> {
+        let pid = self.held.pid.filter(|_| self.held.stale && !self.held.refreshing && self.held_readable())?;
+        self.held.stale = false;
+        self.held.refreshing = true;
+        self.held.handles = self.held_handles().unwrap_or(self.held.handles);
+        self.held.age = 0;
         Some((self.held.epoch, pid))
     }
 
     /// The lookup finished; an answer for a process no longer selected is dropped.
     pub fn held_done(&mut self, epoch: u64, result: Result<HandleList, HandleError>) {
-        if epoch == self.held.epoch && matches!(self.held.state, HeldState::Loading) {
+        if epoch == self.held.epoch && (matches!(self.held.state, HeldState::Loading) || self.held.refreshing) {
+            self.held.refreshing = false;
             self.held.state = HeldState::Ready(result);
+            self.held_scroll(0); // keeps the offset, clamped to the new list
         }
     }
 
@@ -1370,12 +1419,17 @@ impl App {
             }
             Hit::Row(i) => {
                 let folder = self.icon_at(i, x);
+                let mut again = false;
                 if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
+                    again = folder.is_none() && m.selected() == Some(id);
                     m.select(id);
                     if folder.is_some() {
                         m.toggle(t, id);
                         self.set_scroll(self.scroll);
                     }
+                }
+                if again {
+                    self.held_mark_stale();
                 }
             }
             Hit::Scrollbar => {
@@ -1717,6 +1771,114 @@ mod tests {
         assert!(head.ends_with("0 files") && lines.is_empty(), "{head}");
     }
 
+    /// One Processes snapshot as `set_procs` sees it: pid 77 with `handles` open handles.
+    fn snapshot_with(a: &mut App, handles: u32) {
+        let info = HashMap::from([(77u32, ProcInfo { path: None, created: 5, handles })]);
+        a.set_procs(2, info, String::new(), (16 << 30, 4 << 30));
+    }
+
+    /// `process_app` with pid 77 selected, its first lookup asked and answered with `files`.
+    fn held_ready(files: &[&str]) -> App {
+        let (mut a, id) = process_app();
+        snapshot_with(&mut a, 100);
+        a.model.as_mut().unwrap().select(id);
+        a.held_sync();
+        let (epoch, _) = a.held_request().unwrap();
+        a.held_done(epoch, Ok(HandleList { files: files.iter().map(|s| s.to_string()).collect(), skipped: 0 }));
+        a
+    }
+
+    #[test]
+    fn a_changed_handle_count_refreshes_the_list_after_ten_snapshots() {
+        let mut a = held_ready(&["C:/a"]);
+        for _ in 0..HELD_REFRESH_SNAPSHOTS - 1 {
+            snapshot_with(&mut a, 120);
+            assert_eq!(a.held_take_refresh(), None, "changed, but not ten snapshots since the lookup");
+        }
+        snapshot_with(&mut a, 120);
+        let (epoch, pid) = a.held_take_refresh().expect("ten snapshots and a changed count");
+        assert_eq!(pid, 77);
+        assert_eq!(a.held_take_refresh(), None, "asked once");
+        assert_eq!(a.held_text().unwrap().1, vec!["C:/a".to_string()], "the old list stays until the answer");
+        a.held_done(epoch, Ok(HandleList { files: vec!["C:/b".into()], skipped: 0 }));
+        assert_eq!(a.held_text().unwrap().1, vec!["C:/b".to_string()]);
+    }
+
+    #[test]
+    fn an_unchanged_handle_count_never_refreshes() {
+        let mut a = held_ready(&["C:/a"]);
+        for _ in 0..3 * HELD_REFRESH_SNAPSHOTS {
+            snapshot_with(&mut a, 100);
+            assert_eq!(a.held_take_refresh(), None);
+        }
+    }
+
+    #[test]
+    fn a_busy_process_is_looked_up_at_most_once_per_ten_snapshots_and_never_twice_at_once() {
+        let mut a = held_ready(&["C:/a"]);
+        let mut asked = 0;
+        for n in 0..4 * HELD_REFRESH_SNAPSHOTS {
+            snapshot_with(&mut a, 200 + n); // a different count every snapshot
+            if let Some((epoch, _)) = a.held_take_refresh() {
+                asked += 1;
+                snapshot_with(&mut a, 500 + n);
+                assert_eq!(a.held_take_refresh(), None, "one is already in flight");
+                a.held_done(epoch, Ok(HandleList::default()));
+            }
+        }
+        assert!(asked <= 4, "{asked} lookups in {} snapshots", 4 * HELD_REFRESH_SNAPSHOTS);
+        assert!(asked >= 3, "{asked}: a changing count must keep refreshing");
+    }
+
+    #[test]
+    fn clicking_the_selected_row_again_refreshes_at_once() {
+        let mut a = held_ready(&["C:/a"]);
+        a.held_mark_stale(); // what a click on the selected row does
+        let (epoch, pid) = a.held_take_refresh().expect("a re-click asks again without waiting for ten snapshots");
+        assert_eq!(pid, 77);
+        a.held_done(epoch, Ok(HandleList { files: vec!["C:/c".into()], skipped: 0 }));
+        assert_eq!(a.held_text().unwrap().1, vec!["C:/c".to_string()]);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_scroll_clamped_and_a_late_answer_for_another_selection_is_dropped() {
+        let many: Vec<String> = (0..20).map(|i| format!("C:/f{i:02}")).collect();
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        let mut a = held_ready(&refs);
+        a.held_scroll(100); // as far down as it goes
+        a.held_mark_stale();
+        let (epoch, _) = a.held_take_refresh().unwrap();
+        let shorter = HandleList { files: many[..crate::layout::HELD_ROWS + 1].to_vec(), skipped: 0 };
+        a.held_done(epoch, Ok(shorter));
+        let (_, lines) = a.held_text().unwrap();
+        assert_eq!((lines.len(), lines[0].as_str()), (crate::layout::HELD_ROWS, "C:/f01"), "the offset is clamped to the shorter list");
+        // a refresh answer arriving after the selection moved is dropped
+        let mut b = held_ready(&["C:/x"]);
+        b.held_mark_stale();
+        let (e2, _) = b.held_take_refresh().unwrap();
+        let root = b.model.as_ref().unwrap().rows()[0].id;
+        b.model.as_mut().unwrap().select(root);
+        b.held_sync();
+        b.held_done(e2, Ok(HandleList { files: vec!["C:/y".into()], skipped: 0 }));
+        assert!(b.held_text().is_none(), "no pane for the root, and the old answer did not revive one");
+    }
+
+    #[test]
+    fn a_denied_or_failed_lookup_is_not_refreshed() {
+        let (mut a, id) = process_app();
+        snapshot_with(&mut a, 100);
+        a.model.as_mut().unwrap().select(id);
+        a.held_sync();
+        let (epoch, _) = a.held_request().unwrap();
+        a.held_done(epoch, Err(HandleError::Denied));
+        for _ in 0..2 * HELD_REFRESH_SNAPSHOTS {
+            snapshot_with(&mut a, 999);
+            assert_eq!(a.held_take_refresh(), None);
+        }
+        a.held_mark_stale();
+        assert_eq!(a.held_take_refresh(), None, "nothing to refresh when it could not be read");
+    }
+
     #[test]
     fn a_process_view_cannot_mark() {
         let (a, id) = process_app();
@@ -1738,7 +1900,7 @@ mod tests {
         a.model.as_mut().unwrap().select(id);
         assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
         assert!(a.menu_target(id).is_none(), "no executable known: no menu");
-        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0 })]), String::new(), (1, 1));
+        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0 })]), String::new(), (1, 1));
         let (raw, path, mark, who) = a.menu_target(id).unwrap();
         assert!(!who, "a process has no holders to ask about");
         assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));

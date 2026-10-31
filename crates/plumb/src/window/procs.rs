@@ -136,7 +136,7 @@ impl ProcState {
             .collect();
         let used = entries.iter().filter(|e| e.pid != 0).map(|e| e.working_set).sum();
         let summary = process_summary(entries.len(), used, ram.0);
-        let info = entries.into_iter().map(|e| (e.pid, ProcInfo { path: e.path, created: e.created })).collect();
+        let info = entries.into_iter().map(|e| (e.pid, ProcInfo { path: e.path, created: e.created, handles: e.handles })).collect();
         let label = |app: &App| app.views.get(view).map(|d| crate::fmt::size(d.free));
         let before = label(app);
         app.set_procs(view, info, summary.clone(), ram);
