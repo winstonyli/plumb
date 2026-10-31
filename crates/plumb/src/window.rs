@@ -105,7 +105,7 @@ const APPLY_BUDGET: Duration = Duration::from_millis(5);
 struct Run {
     progress: Arc<Progress>,
     rx: Option<Receiver<ScanResult>>,
-    /// What the scan has found so far; kept views have none (a partial tree follows only the view on screen).
+    /// What the scan has found so far (a partial tree).
     preview: Option<Preview>,
     /// The scan in flight is a rescan: the old tree stays on screen until it finishes.
     background: bool,

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # One struct per side for per-view state (cleanup item A1)
@@ -23,7 +23,7 @@ A field added to one list and forgotten in another is a silent bug: a view that 
 
 **Goal:** a per-view field is declared once and swapped by construction. Behaviour is unchanged.
 
-- `app::Slot` replaces `Parked`: the 12 fields above, `#[derive(Default)]`, fields `pub`, the existing accessors
+- `app::Slot` replaces `Parked`: the 12 fields above, `#[derive(Default)]`, fields `pub` except `filter` (only the `app` module names it), the existing accessors
   (`has_tree`, `tree`, `tree_mut`, `scan`) kept. `App` holds `pub slot: Slot` in place of the 12 fields.
 - `window::Run` is the 8 window fields, `#[derive(Default)]`. `Win` holds `run: Run` in place of them. `View` becomes
   `{ app: Slot, run: Run, used: u64 }`.
@@ -70,4 +70,5 @@ elevated once after step 2. No timing claim is made, so no timed run.
 
 ## Result (2026-10-31)
 
-Done in `e539517` (app side), `bbb2d63` (window side) and `bd30633` (guard tests). The destructuring guard in `a_slot_swaps_whole_and_the_query_text_stays` and `a_run_names_every_field_the_swap_moves` makes a new field fail to compile. Deliberately breaking the `filter.ui` swap-back made the first test fail, as intended. The first draft of that test asserted `scroll` survives a swap into an empty slot; `swap_slot` clamps it (`set_scroll`), so the test checks `refreshing` and `summary` instead. 414 tests, clippy clean, four selftests pass. `--selftest-live` is still to be run elevated by the user.
+Done in `e539517` (app side), `bbb2d63` (window side) and `bd30633` (guard tests). The destructuring guard in `a_slot_swaps_whole_and_the_query_text_stays` and `a_run_names_every_field_the_swap_moves` makes a new field fail to compile. Deliberately breaking the `filter.ui` swap-back made the first test fail, as intended. The first draft of that test asserted `scroll` survives a swap into an empty slot; `swap_slot` clamps it (`set_scroll`), so the test checks `refreshing` and `summary` instead. 414 tests, clippy clean, four selftests pass. `--selftest-live` passed elevated (run by the user).
+

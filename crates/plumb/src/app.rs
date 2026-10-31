@@ -281,21 +281,27 @@ fn now_filetime() -> u64 {
     (unix_secs() + u64::from(plumb_core::age::UNIX_EPOCH_DAYS) * 86_400) * 10_000_000
 }
 
-/// What the app holds for one view, kept while another view is on screen. The filter box text
-/// and the sort stay with the app; everything derived from this view's tree travels with it.
+/// What the app holds for one view: `App::slot` for the one on screen, a parked copy for the
+/// rest. The filter box text and the sort stay with the app; everything derived from this view's
+/// tree travels with it.
 #[derive(Default)]
 pub struct Slot {
     pub tree: Option<Tree>,
     pub model: Option<RowModel>,
     pub scroll: usize,
     pub scan: Scan,
+    /// One line about the last finished scan (files, time, skipped records); empty before any.
     pub summary: String,
     pub live: LiveStatus,
+    /// A background rescan is running while the old tree stays on screen.
     pub refreshing: bool,
+    /// The partial tree stopped following the scan; the status line says so.
     pub preview_paused: bool,
     filter: filter::Filter,
     pub basket: Basket,
+    /// The Processes view's extra facts about each process, by pid.
     pub proc_info: HashMap<u32, ProcInfo>,
+    /// What the Processes view's map and Memory column weigh by.
     pub proc_metric: Metric,
 }
 
