@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # Own-memory tile Implementation Plan

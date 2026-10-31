@@ -38,15 +38,15 @@ Out (parked): cushion shading, a breadcrumb, a depth cap setting, the sunburst, 
 `layout(tree, root, rect, opts) -> Vec<Tile>`, pure.
 
 ```
-Tile { node: NodeId, rect: Rect (f32), depth: u8, class: Class, kind: File | Frame | Solid | Rest, bytes: u64, count: u32 }
-// Frame: a folder with its children inside; Solid: a folder too small to enter. For Rest, `node` is the folder it belongs to; `bytes` and `count` describe the merged items.
+Tile { node: NodeId, rect: Rect (f32), depth: u8, class: Class, kind: File | Frame | Solid | Rest | Own, bytes: u64, count: u32 }
+// Frame: a folder with its children inside; Solid: a folder too small to enter. For Rest, `node` is the folder it belongs to; `bytes` and `count` describe the merged items. Own: a folder's own bytes (`node` is the folder), laid out beside its children; present only where a folder has its own `size`, today the Processes view.
 ```
 
 - **Algorithm:** squarified (Bruls, Huizing, van Wijk). Children are ordered by `subtree_size` descending, ties by `NodeId`, so the layout is deterministic.
 - **Bounded tile count.** A child whose area would be under `MIN_AREA` (9 physical px², roughly 3x3; the caller passes it in device-independent units for the current DPI) is not laid out. All such children of one folder are merged into one `Rest` tile (a neutral fill, no node; hovering gives the count and total). `Rest` takes part in the squarify as one last, smallest child, so the folder is still fully tiled. The number of tiles is therefore bounded by the pane's pixel area; the traversal is bounded by the children of the folders actually visited (a visited folder of a million files costs one O(k) pass).
 - **No full sort of huge folders.** The cutoff is a size threshold, `parent_bytes * MIN_AREA / inner_area`, so one O(k) pass over a folder's children keeps those at or above it and sums the rest into `Rest`; only the kept children are sorted.
 - **Nesting.** Folders nest as far as their tiles stay above `MIN_AREA` after the 1 px inset on each side, with a hard cap of 24 levels (stack guard; the tree can be deeper). A folder tile whose inner area is under 64 physical px² is not entered: it is a `Solid` tile in the neutral folder colour.
-- **Invariants (tested):** every tile lies inside its parent; tiles of siblings do not overlap; the child tiles (including `Rest`) of a folder sum to its inner area (within one pixel of rounding); sibling areas are proportional to their weights within rounding; no zero-size file appears; layout of an unchanged tree is bit-identical.
+- **Invariants (tested):** every tile lies inside its parent; tiles of siblings do not overlap; the child tiles (including `Rest` and `Own`) of a folder sum to its inner area (within one pixel of rounding); sibling areas are proportional to their weights within rounding; no zero-size file appears; layout of an unchanged tree is bit-identical.
 - **Hit test:** `hit(&[Tile], x, y) -> Option<usize>` returns the deepest tile containing the point (tiles are stored parent before child, so a reverse scan finds it). It is O(tiles): at most about pane_area / 9 (around 100k worst case), under 0.2 ms; a grid index is the fallback if it ever measures slower.
 
 ## Colour (`plumb-core::treemap::Class`)
