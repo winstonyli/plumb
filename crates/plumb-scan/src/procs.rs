@@ -19,6 +19,8 @@ pub struct ProcEntry {
     pub cpu_100ns: u64,
     /// Bytes read, written and transferred by other operations.
     pub io_bytes: u64,
+    /// Open handles of all kinds (`HandleCount`, byte offset 96); a cheap sign that the files held may have changed.
+    pub handles: u32,
     /// `None` when the process cannot be opened (another user's, protected).
     pub path: Option<String>,
 }
@@ -92,6 +94,7 @@ fn read() -> Result<Vec<ProcEntry>, ProcError> {
             private_bytes: u64_at(e, 200),
             cpu_100ns: u64_at(e, 40) + u64_at(e, 48),
             io_bytes: u64_at(e, 232) + u64_at(e, 240) + u64_at(e, 248),
+            handles: u32::from_le_bytes(e[96..100].try_into().unwrap()),
             path: None,
         });
         let next = u32::from_le_bytes(e[0..4].try_into().unwrap()) as usize;
@@ -115,6 +118,21 @@ mod tests {
     use windows::Win32::Foundation::FILETIME;
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+
+    #[test]
+    fn the_handle_count_follows_the_handles_a_process_opens() {
+        let me = std::process::id();
+        let count = || snapshot().unwrap().iter().find(|p| p.pid == me).expect("own pid listed").handles;
+        let before = count();
+        assert!(before > 0, "a process always holds handles");
+        let dir = std::env::temp_dir().join(format!("plumb-handles-{me}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let files: Vec<std::fs::File> = (0..20).map(|i| std::fs::File::create(dir.join(format!("f{i}"))).unwrap()).collect();
+        let during = count();
+        drop(files);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(during >= before + 20, "{during} while 20 more files were open, {before} before");
+    }
 
     #[test]
     fn our_own_process_is_listed_with_a_plausible_working_set() {
