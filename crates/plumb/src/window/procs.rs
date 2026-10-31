@@ -132,7 +132,7 @@ impl ProcState {
         let Snapshot { view, entries, elapsed, ram } = snap;
         let samples: Vec<Sample> = entries
             .iter()
-            .map(|e| Sample { pid: e.pid, parent: e.parent, created: e.created, name: e.name.clone(), memory: e.working_set, cpu_100ns: e.cpu_100ns, io_bytes: e.io_bytes })
+            .map(|e| Sample { pid: e.pid, parent: e.parent, created: e.created, name: e.name.clone(), memory: e.working_set, private: e.private_bytes, cpu_100ns: e.cpu_100ns, io_bytes: e.io_bytes })
             .collect();
         let used = entries.iter().filter(|e| e.pid != 0).map(|e| e.working_set).sum();
         let summary = process_summary(entries.len(), used, ram.0);

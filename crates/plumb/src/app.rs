@@ -84,8 +84,19 @@ impl ViewKind {
 pub fn metric_label(m: Metric) -> &'static str {
     match m {
         Metric::Memory => "Memory",
+        Metric::Private => "Private",
         Metric::Cpu => "CPU",
         Metric::Io => "I/O",
+    }
+}
+
+/// One line saying what a map metric counts, for the metric button's tooltip.
+pub fn metric_help(m: Metric) -> &'static str {
+    match m {
+        Metric::Memory => "the working set: resident pages, shared ones counted once per process",
+        Metric::Private => "private bytes: committed memory not shared with other processes",
+        Metric::Cpu => "share of one core",
+        Metric::Io => "bytes transferred per second",
     }
 }
 
@@ -675,7 +686,7 @@ impl App {
             Hit::FilterRegex => Some((l.filter_regex(), "Regular expression".into())),
             Hit::FilterClear => Some((l.filter_clear(), "Clear the filter".into())),
             Hit::MapButton => Some((l.map_button(), "Show or hide the map  (Ctrl+M)".into())),
-            Hit::MetricButton => Some((l.metric_button(), format!("The map and the first column weigh processes by {}; click for the next", metric_label(self.proc_metric)))),
+            Hit::MetricButton => Some((l.metric_button(), format!("The map and the first column weigh processes by {}: {}; click for the next", metric_label(self.proc_metric), metric_help(self.proc_metric)))),
             _ => None,
         }
     }
@@ -1552,7 +1563,7 @@ mod tests {
         a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
         a.begin_scan(2);
         let (mut procs, mut tree) = Procs::new(Metric::Memory);
-        procs.apply(&mut tree, &[Sample { pid: 77, parent: 1, created: 5, name: "ping.exe".into(), memory: 4096, cpu_100ns: 0, io_bytes: 0 }], 0);
+        procs.apply(&mut tree, &[Sample { pid: 77, parent: 1, created: 5, name: "ping.exe".into(), memory: 4096, private: 2048, cpu_100ns: 0, io_bytes: 0 }], 0);
         let id = tree.find("Processes\\ping.exe").expect("the process is under the root");
         a.finish_scan(tree, "x".into());
         (a, id)
@@ -1573,7 +1584,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_the_metric_button_cycles_memory_cpu_io_and_back() {
+    fn clicking_the_metric_button_cycles_memory_private_cpu_io_and_back() {
         let (mut a, _) = process_app();
         a.layout.map_on = true;
         let click = |a: &mut App| {
@@ -1581,15 +1592,28 @@ mod tests {
             a.handle(Input::Click(b.x + 5.0, b.y + 5.0))
         };
         assert_eq!(a.proc_metric, Metric::Memory);
+        assert_eq!(click(&mut a), Effect::Metric(Metric::Private));
+        a.proc_metric = Metric::Private; // the window applies the effect
         assert_eq!(click(&mut a), Effect::Metric(Metric::Cpu));
         a.proc_metric = Metric::Cpu; // the window applies the effect
         assert_eq!(click(&mut a), Effect::Metric(Metric::Io));
         a.proc_metric = Metric::Io;
         assert_eq!(click(&mut a), Effect::Metric(Metric::Memory));
         assert_eq!(ViewKind::Processes.titles(Metric::Io)[1], "I/O");
+        assert_eq!(ViewKind::Processes.titles(Metric::Private)[1], "Private");
+        assert_eq!(ViewKind::Processes.size_text(Metric::Private, 2048), fmt::size(2048));
         assert_eq!(ViewKind::Processes.size_text(Metric::Cpu, 123), "12.3%");
         assert_eq!(ViewKind::Processes.size_text(Metric::Io, 2048), format!("{}/s", fmt::size(2048)));
         assert_eq!(ViewKind::Disk.size_text(Metric::Cpu, 2048), fmt::size(2048), "a disk ignores the metric");
+    }
+
+    #[test]
+    fn every_metric_has_a_label_and_a_one_line_definition() {
+        for m in [Metric::Memory, Metric::Private, Metric::Cpu, Metric::Io] {
+            assert!(!metric_label(m).is_empty() && !metric_help(m).is_empty(), "{m:?}");
+        }
+        assert!(metric_help(Metric::Private).contains("not shared"));
+        assert!(metric_help(Metric::Memory).contains("working set"));
     }
 
     #[test]
@@ -2362,7 +2386,7 @@ Test GPU", a.status())));
         a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
         a.begin_scan(2);
         let (mut procs, mut tree) = Procs::new(Metric::Memory);
-        let s = |pid, parent, name: &str, memory| Sample { pid, parent, created: 5, name: name.into(), memory, cpu_100ns: 0, io_bytes: 0 };
+        let s = |pid, parent, name: &str, memory| Sample { pid, parent, created: 5, name: name.into(), memory, private: memory / 2, cpu_100ns: 0, io_bytes: 0 };
         procs.apply(&mut tree, &[s(77, 1, "parent.exe", 400_000), s(78, 77, "child.exe", 100_000)], 0);
         let parent = tree.find("Processes\\parent.exe").expect("the parent is under the root");
         a.finish_scan(tree, "x".into());

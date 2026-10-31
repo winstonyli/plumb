@@ -546,7 +546,7 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
     use plumb_core::procs::{Metric, Procs, Sample};
     use plumb_core::treemap::layout as map_layout;
     let gfx = Gfx::warp().expect("WARP device");
-    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, cpu_100ns: cpu, io_bytes: io };
+    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
     let (mut procs, mut tree) = Procs::new(Metric::Memory);
     let list = |cpu: u64, io: u64| {
         vec![
@@ -588,7 +588,7 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
 fn the_processes_map_follows_the_metric_button() {
     use plumb_core::procs::{Metric, Procs, Sample};
     let gfx = Gfx::warp().expect("WARP device");
-    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, cpu_100ns: cpu, io_bytes: io };
+    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
     let (mut procs, mut tree) = Procs::new(Metric::Memory);
     let list = |k: u64| {
         vec![
@@ -602,7 +602,7 @@ fn the_processes_map_follows_the_metric_button() {
     let chips = [Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
     let mut areas = Vec::new();
     let held_lines = vec!["C:/Users/me/notes.txt".to_string(), "C:/Windows/Temp/x.log".to_string()];
-    for m in [Metric::Memory, Metric::Cpu, Metric::Io] {
+    for m in [Metric::Memory, Metric::Private, Metric::Cpu, Metric::Io] {
         procs.set_metric(&mut tree, m);
         let mut model = RowModel::new(&tree);
         model.set_sort(&tree, plumb_core::rows::SortKey::Size, true);
@@ -623,7 +623,8 @@ fn the_processes_map_follows_the_metric_button() {
         };
         render_scene(&gfx, &scene, &format!("plumb-processes-{m:?}").to_lowercase());
     }
-    assert!(areas[0] > areas[1] * 4.0 && areas[0] > areas[2] * 4.0, "the memory hog fills the map by memory only: {areas:?}");
+    assert!(areas[0] > areas[2] * 4.0 && areas[0] > areas[3] * 4.0, "the memory hog fills the map by memory only: {areas:?}");
+    assert!((areas[0] - areas[1]).abs() < areas[0] * 0.05, "private bytes are half of every working set here, so the shares match: {areas:?}");
 }
 
 /// The Processes scene (with the held pane, a filter and the metric button) drawn with `theme` at `scale`: a bitmap of
@@ -640,7 +641,7 @@ fn processes_shot_with(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, h
 #[allow(clippy::too_many_arguments)]
 fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme: Theme, scale: f32, hot: &dyn Fn(&Layout) -> Rect, pressed: bool, modal: Option<&plumb::modal::Modal>, notice: (&str, bool), stem: &str) -> Vec<u8> {
     use plumb_core::procs::{Metric, Procs, Sample};
-    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, cpu_100ns: cpu, io_bytes: io };
+    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
     let (mut procs, mut tree) = Procs::new(Metric::Memory);
     let list = |k: u64| vec![sample(2000, 1, "big-memory.exe", 900_000_000, k, 0), sample(2200, 1, "chatty.exe", 10_000_000, k, 400 * k)];
     procs.apply(&mut tree, &list(0), 0);
