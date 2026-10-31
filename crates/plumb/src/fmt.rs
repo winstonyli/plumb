@@ -38,6 +38,16 @@ pub fn display_path(p: &str) -> String {
     if p.ends_with(':') { format!("{p}\\") } else { p.to_string() }
 }
 
+/// The local calendar day (since 1601) of a FILETIME (100 ns since 1601, UTC), by the machine's time zone as set now.
+pub fn local_day(filetime: u64) -> u32 {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::Storage::FileSystem::FileTimeToLocalFileTime;
+    let utc = FILETIME { dwLowDateTime: filetime as u32, dwHighDateTime: (filetime >> 32) as u32 };
+    let mut local = FILETIME::default();
+    let ft = if unsafe { FileTimeToLocalFileTime(&utc, &mut local) }.is_ok() { (u64::from(local.dwHighDateTime) << 32) | u64::from(local.dwLowDateTime) } else { filetime };
+    (ft / 864_000_000_000) as u32
+}
+
 /// `YYYY-MM-DD` for a day count since 1601-01-01.
 pub fn date(day: u32) -> String {
     let z = i64::from(day) - 134_774 + 719_468; // days since 0000-03-01
@@ -82,6 +92,19 @@ mod tests {
         assert_eq!(path_list(&p, 5), "C:\\a\nC:\\b\nC:\\c");
         assert_eq!(path_list(&p, 2), "C:\\a\nC:\\b\nand 1 more");
         assert_eq!(path_list(&[], 2), "");
+    }
+
+    #[test]
+    fn the_local_day_is_the_utc_day_moved_by_the_zone_and_the_same_for_two_instants_in_one_local_day() {
+        let day = 864_000_000_000u64;
+        let t = 134_774 * day + 12 * 36_000_000_000; // noon UTC on 1970-01-01
+        let d = i64::from(local_day(t)) - 134_774;
+        assert!((-1..=1).contains(&d), "within a day of UTC, got {d}");
+        // two instants an hour apart land on the same local day unless a local midnight lies between them
+        let (a, b) = (local_day(t), local_day(t + 36_000_000_000));
+        assert!(a == b || a + 1 == b);
+        // one UTC day later is exactly one local day later (no DST step in 1970-01-01..02 for any zone rule applied today)
+        assert_eq!(local_day(t + day), local_day(t) + 1);
     }
 
     #[test]

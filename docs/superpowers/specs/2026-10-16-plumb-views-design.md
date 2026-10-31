@@ -90,6 +90,6 @@ Round 1 (against the code): found that the map and sort read `Tree` vectors dire
 - The metric (`App.proc_metric`) is swapped with the slot; the metric button is in the status bar, left of the Cancel slot.
 - "Who is using this": holders ride on `trash::Outcome.held_by` (looked up on the delete worker); the menu item answers by `WM_HOLDERS`.
 - Files held: `App::held_sync` / `held_request` / `held_done` with an epoch; the window arms a 300 ms timer from `WM_PAINT`. The pane shows six files; the wheel scrolls it. It is read when the selection settles and again when the process's handle count (`HandleCount`, offset 96 of the snapshot entry, free) has changed and 10 snapshots have passed since the last lookup, or when the selected row is clicked again; the old list and the scroll offset stay until the answer replaces them. A lookup reads the whole system handle table (75-96 ms on a process with 4,000-7,500 handles, measured 2026-10-18), so a fixed 5 s refresh would cost about 1.6 % of a core; the count gate bounds it near 0.8 %, and a 60 s idle selftest read 1.28 % of a core against 1.43 % before the change (2026-10-30, same machine, noisy).
-- Parked: pausing or slowing the poll while minimized; the tooltip's start time uses the UTC day.
+- Parked: pausing or slowing the poll while minimized.
 
 Parked items from this spec now live in `PARKED.md` (repo root); that file is the one list.

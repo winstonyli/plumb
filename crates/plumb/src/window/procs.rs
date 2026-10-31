@@ -1,6 +1,6 @@
 //! The Processes view's runtime: a poller thread that takes a snapshot every second, and the reconciler state that
 //! folds each snapshot into the app's tree.
-use crate::app::{process_summary, App, ProcInfo};
+use crate::app::{App, ProcInfo};
 use plumb_core::procs::{Metric, Procs, Sample};
 use plumb_scan::procs::{physical_memory, ProcEntry, Snapshotter};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -134,12 +134,10 @@ impl ProcState {
             .iter()
             .map(|e| Sample { pid: e.pid, parent: e.parent, created: e.created, name: e.name.clone(), memory: e.working_set, private: e.private_bytes, cpu_100ns: e.cpu_100ns, io_bytes: e.io_bytes })
             .collect();
-        let used = entries.iter().filter(|e| e.pid != 0).map(|e| e.working_set).sum();
-        let summary = process_summary(entries.len(), used, ram.0);
         let info = entries.into_iter().map(|e| (e.pid, ProcInfo { path: e.path, created: e.created, handles: e.handles })).collect();
         let label = |app: &App| app.views.get(view).map(|d| crate::fmt::size(d.free));
         let before = label(app);
-        app.set_procs(view, info, summary.clone(), ram);
+        app.set_procs(view, info, ram);
         let rebuild = self.sync.is_none() || app.tree.as_ref().is_none_or(|t| t.dead() > MAX_DEAD);
         match (rebuild, self.sync.as_mut(), app.tree.as_mut()) {
             (false, Some(sync), Some(tree)) => {
@@ -149,7 +147,7 @@ impl ProcState {
             _ => {
                 let (mut sync, mut tree) = Procs::new(app.proc_metric);
                 sync.apply(&mut tree, &samples, elapsed);
-                app.finish_scan(tree, summary);
+                app.finish_scan(tree, String::new());
                 self.sync = Some(sync);
             }
         }

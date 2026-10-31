@@ -159,11 +159,6 @@ pub fn location_class(path: Option<&str>, system_root: &str) -> Class {
     }
 }
 
-/// The status line of the Processes view.
-pub fn process_summary(count: usize, used: u64, total: u64) -> String {
-    format!("{count} processes, {} in use of {}", fmt::size(used), fmt::size(total))
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewInfo {
     /// Where the volume is mounted: a drive root like `C:\`, or a folder like `D:\Mounts\Data\`.
@@ -276,8 +271,16 @@ fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
 
 /// Today as a day count since 1601-01-01.
 fn today() -> u32 {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    plumb_core::age::day_from_unix(secs)
+    plumb_core::age::day_from_unix(unix_secs())
+}
+
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Now as a FILETIME (100 ns since 1601-01-01, UTC).
+fn now_filetime() -> u64 {
+    (unix_secs() + 11_644_473_600) * 10_000_000
 }
 
 /// What the app holds for one view, kept while another view is on screen. The filter box text
@@ -724,7 +727,17 @@ impl App {
     /// A map tile of the Processes view: name and pid, the numbers, the executable and when it started.
     fn process_tip(&self, tree: &Tree, t: &Tile) -> String {
         if t.kind == Kind::Rest {
-            return format!("{} smaller processes, {}", fmt::count(t.count as u64), self.kind().size_text(self.proc_metric, t.bytes));
+            // A parent whose own size is under the cutoff is merged here too, with no Own tile of its own.
+            let own = tree.size[t.node] > 0 && !self.map_tiles.iter().any(|o| o.kind == Kind::Own && o.node == t.node);
+            let n = u64::from(t.count) - u64::from(own);
+            let mut what = Vec::new();
+            if n > 0 {
+                what.push(format!("{} smaller process{}", fmt::count(n), if n == 1 { "" } else { "es" }));
+            }
+            if own {
+                what.push(format!("its own {}", metric_label(self.proc_metric).to_lowercase()));
+            }
+            return format!("{}, {}", what.join(" and "), self.kind().size_text(self.proc_metric, t.bytes));
         }
         let [cpu, io, pid] = tree.aux.get(t.node.idx()).copied().unwrap_or_default();
         if t.kind == Kind::Own {
@@ -743,17 +756,24 @@ impl App {
                 tip.push_str(path);
             }
             if info.created > 0 {
-                let day = (info.created / 864_000_000_000) as u32;
-                tip.push_str(&format!("\nstarted {}, {} ago", fmt::date(day), fmt::age(today(), day)));
+                let (day, now) = (fmt::local_day(info.created), fmt::local_day(now_filetime()));
+                tip.push_str(&format!("\nstarted {}, {} ago", fmt::date(day), fmt::age(now, day)));
             }
         }
         tip
     }
 
-    /// The Processes view took a new snapshot: the facts about each process, the status line, and the chip's memory.
-    pub fn set_procs(&mut self, view: usize, info: HashMap<u32, ProcInfo>, summary: String, ram: (u64, u64)) {
+    /// The Processes status line: how many processes, and what the map's metric adds up to over all of them (so the
+    /// total says what it counts, and only Private bytes can honestly be set beside the machine's RAM).
+    fn process_status(&self) -> Option<String> {
+        let tree = self.tree.as_ref()?;
+        let total = tree.subtree_size[*tree.roots.first()?];
+        Some(format!("{} processes, {} {}", self.proc_info.len(), self.kind().size_text(self.proc_metric, total), metric_label(self.proc_metric).to_lowercase()))
+    }
+
+    /// The Processes view took a new snapshot: the facts about each process and the chip's memory.
+    pub fn set_procs(&mut self, view: usize, info: HashMap<u32, ProcInfo>, ram: (u64, u64)) {
         self.proc_info = info;
-        self.summary = summary;
         if let Some(d) = self.views.get_mut(view) {
             (d.total, d.free) = ram;
         }
@@ -1509,6 +1529,7 @@ impl App {
                 format!("{}{paused}", self.message())
             }
             Scan::Failed(_) | Scan::Cancelled => self.message(),
+            _ if self.kind() == ViewKind::Processes => self.process_status().unwrap_or_else(|| self.message()),
             _ if self.summary.is_empty() => self.message(),
             _ => self.summary.clone(),
         };
@@ -1774,7 +1795,7 @@ mod tests {
     /// One Processes snapshot as `set_procs` sees it: pid 77 with `handles` open handles.
     fn snapshot_with(a: &mut App, handles: u32) {
         let info = HashMap::from([(77u32, ProcInfo { path: None, created: 5, handles })]);
-        a.set_procs(2, info, String::new(), (16 << 30, 4 << 30));
+        a.set_procs(2, info, (16 << 30, 4 << 30));
     }
 
     /// `process_app` with pid 77 selected, its first lookup asked and answered with `files`.
@@ -1880,17 +1901,29 @@ mod tests {
     }
 
     #[test]
+    fn the_rest_tile_of_a_process_view_counts_processes_and_names_a_merged_own_size() {
+        let (mut a, id) = process_app(); // ping.exe: 4096 own bytes under the root
+        let rest = |count| Tile { node: id, rect: plumb_core::Rect::default(), depth: 0, class: Class::Other, kind: Kind::Rest, bytes: 4096, count, mtime: None };
+        let tree = a.tree.take().unwrap();
+        let tip = |a: &App, t: &Tile| a.process_tip(&tree, t);
+        assert_eq!(tip(&a, &rest(1)), format!("its own memory, {}", fmt::size(4096)), "only its own size merged");
+        assert_eq!(tip(&a, &rest(3)), format!("2 smaller processes and its own memory, {}", fmt::size(4096)));
+        a.map_tiles = vec![Tile { kind: Kind::Own, count: 1, ..rest(1) }]; // the own tile is drawn: the merged items are processes
+        assert_eq!(tip(&a, &rest(1)), format!("1 smaller process, {}", fmt::size(4096)));
+        assert_eq!(tip(&a, &rest(2)), format!("2 smaller processes, {}", fmt::size(4096)));
+    }
+
+    #[test]
     fn a_process_view_cannot_mark() {
         let (a, id) = process_app();
         assert_eq!(a.mark_state(id), MarkState::Refused("processes cannot be deleted"));
     }
 
     #[test]
-    fn the_process_status_line_names_the_count_and_memory() {
-        assert_eq!(process_summary(412, 6 << 30, 16 << 30), format!("412 processes, {} in use of {}", fmt::size(6 << 30), fmt::size(16 << 30)));
+    fn the_process_status_line_totals_what_the_metric_counts() {
         let (mut a, _) = process_app();
-        a.set_procs(2, HashMap::new(), process_summary(1, 4096, 16 << 30), (16 << 30, 3 << 30));
-        assert!(a.status().contains("1 processes, "), "{}", a.status());
+        a.set_procs(2, HashMap::from([(77u32, ProcInfo::default())]), (16 << 30, 3 << 30));
+        assert!(a.status().ends_with(&format!("1 processes, {} memory", fmt::size(4096))), "{}", a.status());
         assert_eq!(a.views[2].free, 3 << 30, "the chip follows the machine's free memory");
     }
 
@@ -1900,7 +1933,7 @@ mod tests {
         a.model.as_mut().unwrap().select(id);
         assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
         assert!(a.menu_target(id).is_none(), "no executable known: no menu");
-        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0 })]), String::new(), (1, 1));
+        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0 })]), (1, 1));
         let (raw, path, mark, who) = a.menu_target(id).unwrap();
         assert!(!who, "a process has no holders to ask about");
         assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));
