@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to plumb. Format follows [Keep a Changelog](https://keepachangelog.com/); all crates share one version and are bumped together at each tag.
+All notable changes to plumb. Format follows [Common Changelog](https://common-changelog.org/) from 0.10.0 on (older entries are in Keep a Changelog form); all crates share one version and are bumped together at each tag.
 
 ## 0.10.1 - 2026-10-31
 

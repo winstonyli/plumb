@@ -89,7 +89,7 @@ Both implement `Scanner::scan(root, &mut TreeBuilder, &Progress)`, where `root` 
 - Redraw only on input, resize, or scan progress (throttled to 10 Hz). No timers or animation while idle.
 
 ### Layout
-Drive picker (one chip per drive letter from `GetLogicalDrives`, with used and free space from `GetDiskFreeSpaceEx`; click to scan; folder-only mount points get a chip too; a drive is identified by its root path) at the top, tree view in the middle, status bar at the bottom. The status bar shows scanner used, scan time, file count, skipped-record count and the chosen adapter. During a scan the tree view shows progress; the tree appears when the scan finishes.
+Drive picker (one chip per drive letter from `GetLogicalDrives`, with used and free space from `GetDiskFreeSpaceEx`; click to scan; folder-only mount points get a chip too (try one with `docs/folder-mount-test.ps1`); a drive is identified by its root path) at the top, tree view in the middle, status bar at the bottom. The status bar shows scanner used, scan time, file count, skipped-record count and the chosen adapter. During a scan the tree view shows progress; the tree appears when the scan finishes.
 
 ### Tree view
 - Columns: Name, Size (allocated), % of parent (bar behind the number), Items.

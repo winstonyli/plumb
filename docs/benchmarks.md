@@ -81,7 +81,7 @@ Filter highlight cost, 2026-10-14 (throwaway ignored test, release build, WARP o
 | `C:\Program Files` | 60,947 | 5.93 / 5.70 | 83 (0.4%) | 0.011 us/file | 92, 0 of 54,625 |
 | `C:\Users\Winston Li\Downloads` | 1,510 | 5.45 / 5.75 | 0 | - | 106, 1 of 1,341 (26 bytes, resident) |
 
-- **Hard links:** the walker counts every link, the MFT scanner counts a file once (`HARDLINK`), so the two disagree by 10-22% on trees with `WinSxS` or cargo output. Asking for file ids costs nothing measurable in the listing (the differences are within run-to-run noise, both ways), and de-duplicating is one hash-set insert per file (about 12 bytes each). Cheap and worth doing. The id is 128 bits; NTFS uses the low 64.
+- **Hard links:** the walker counts every link, the MFT scanner counts a file once (`HARDLINK`), so the two disagree by 10-22% on trees with `WinSxS` or cargo output. Asking for file ids costs nothing measurable in the listing (the differences are within run-to-run noise, both ways), and de-duplicating is one hash-set insert per file (about 12 bytes each). Cheap and worth doing. The id is 128 bits; NTFS uses the low 64. Done in 0.9.0: the walker now counts a file once.
 - **Alternate data streams:** 92-162 us per file to look (an open per file), 7-12x the cost of listing an entry, and none of about 110,000 sampled files had a stream that uses clusters (the one named stream found was a 26-byte `Zone.Identifier`, resident in the MFT record, so counted as 0 either way). The MFT scanner also ignores them (`parse_data`: "ignored in v1"), so the scanners agree. Not worth the cost; the gap stays, now measured. Only a sample was probed, not whole drives.
 - The `C:\Users\Winston Li` tree did not finish in 140 s (not measured).
 
