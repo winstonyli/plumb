@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "plumb"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "embed-resource",
  "plumb-core",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "plumb-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bitflags",
  "criterion",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "plumb-scan"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "plumb-core",
  "windows",

@@ -2,6 +2,26 @@
 
 All notable changes to plumb. Format follows [Keep a Changelog](https://keepachangelog.com/); all crates share one version and are bumped together at each tag.
 
+## 0.10.0 - 2026-10-31
+
+### Changed
+
+- Show a parent process's own memory as an Own tile inside its frame in the Processes map, so its children no longer fill the frame; hover and select work on it ([c7754c8](https://github.com/winstonyli/plumb/commit/c7754c8), [759dd83](https://github.com/winstonyli/plumb/commit/759dd83))
+- Keep the Files held list current while a process is selected: it is read again when the process's handle count has changed and ten snapshots have passed, or when its row is clicked again ([040c4b8](https://github.com/winstonyli/plumb/commit/040c4b8), [ac08819](https://github.com/winstonyli/plumb/commit/ac08819), [ae7d198](https://github.com/winstonyli/plumb/commit/ae7d198))
+- Read a process's open files from its own handle snapshot and ask only about File-typed handles, about 5 to 20 ms a lookup instead of 75 to 96 ms ([5a23f62](https://github.com/winstonyli/plumb/commit/5a23f62))
+- Follow the metric in the Processes status total, show the start day in local time, and count processes in the Rest tile's tooltip ([da7d55a](https://github.com/winstonyli/plumb/commit/da7d55a))
+- Write an age in a tooltip as a phrase ("today", "5 d ago") ([1e6d5a7](https://github.com/winstonyli/plumb/commit/1e6d5a7))
+
+### Added
+
+- Offer private bytes as a fourth Processes metric beside working set, CPU and I/O ([a2ea889](https://github.com/winstonyli/plumb/commit/a2ea889), [c30b880](https://github.com/winstonyli/plumb/commit/c30b880))
+- Scroll the Files held list with the mouse wheel over the pane, with the visible range in its title ([cd62f8f](https://github.com/winstonyli/plumb/commit/cd62f8f))
+- License plumb under MIT OR Apache-2.0 ([7ad408f](https://github.com/winstonyli/plumb/commit/7ad408f))
+
+### Internal
+
+- Format tooltips, status text and painted cells into reused buffers instead of allocating: 620 to 34 allocations a paint in the Processes view and 94 to 3 in a disk view ([bdf3fb7](https://github.com/winstonyli/plumb/commit/bdf3fb7), [a46e68f](https://github.com/winstonyli/plumb/commit/a46e68f), [854ebed](https://github.com/winstonyli/plumb/commit/854ebed))
+
 ## 0.9.0 - 2026-10-18
 
 ### Changed
