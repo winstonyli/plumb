@@ -278,5 +278,6 @@ fn notify_runs_once_per_event() {
         n2.fetch_add(1, Ordering::SeqCst);
     });
     while !matches!(reader.recv_timeout(Duration::from_secs(5)), Some(Event::Stopped(_))) {}
+    reader.stop(); // joins: notify runs after the send, so the count is settled only once the thread is done
     assert_eq!(n.load(Ordering::SeqCst), 2, "one Deltas, one Stopped");
 }
