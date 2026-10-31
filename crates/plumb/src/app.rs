@@ -909,19 +909,19 @@ impl App {
     }
 
     /// The pane's title line and the file lines in view (`HELD_ROWS` from the scroll offset; the title gives the range).
-    fn held_text(&self) -> Option<(String, Vec<String>)> {
+    fn held_text(&self) -> Option<(String, &[String])> {
         let pid = self.held.pid?;
         let name = self.tree.as_ref().zip(self.model.as_ref().and_then(|m| m.selected())).map_or_else(String::new, |(t, id)| t.name_string(id).to_string());
         let head = |what: String| format!("Files held by {name} (PID {pid}): {what}");
         Some(match &self.held.state {
-            HeldState::Idle | HeldState::Waiting | HeldState::Loading => (head("reading\u{2026}".into()), Vec::new()),
-            HeldState::Ready(Err(HandleError::Denied)) => (head("run as administrator to see the files of this process".into()), Vec::new()),
-            HeldState::Ready(Err(HandleError::Query(_))) => (head("the system handle list could not be read".into()), Vec::new()),
+            HeldState::Idle | HeldState::Waiting | HeldState::Loading => (head("reading\u{2026}".into()), &[]),
+            HeldState::Ready(Err(HandleError::Denied)) => (head("run as administrator to see the files of this process".into()), &[]),
+            HeldState::Ready(Err(HandleError::Query(_))) => (head("the system handle list could not be read".into()), &[]),
             HeldState::Ready(Ok(list)) => {
                 let n = list.files.len();
                 let skipped = if list.skipped > 0 { format!(", {} not readable", list.skipped) } else { String::new() };
                 let first = self.held.scroll.min(n.saturating_sub(crate::layout::HELD_ROWS));
-                let lines: Vec<String> = list.files.iter().skip(first).take(crate::layout::HELD_ROWS).cloned().collect();
+                let lines = &list.files[first..n.min(first + crate::layout::HELD_ROWS)];
                 let range = if n > crate::layout::HELD_ROWS { format!(" ({}\u{2013}{})", first + 1, first + lines.len()) } else { String::new() };
                 (head(format!("{}{range}{skipped}", fmt::noun(n as u64, "file", "files"))), lines)
             }
@@ -1683,7 +1683,7 @@ impl App {
         f(&Scene {
             layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes).with_held(self.kind() == ViewKind::Processes),
             metric: self.proc_metric,
-            held: held.as_ref().map(|(h, l)| (h.as_str(), l.as_slice())),
+            held: held.as_ref().map(|(h, l)| (h.as_str(), *l)),
             theme: Theme::with_accent(dark, self.accent),
             chips: &chips,
             active_chip: self.active,
