@@ -104,8 +104,8 @@ impl ProcState {
 
     /// Weighs the processes by `m` from now on (the view must be the app's active one).
     pub fn set_metric(&mut self, app: &mut App, m: Metric) {
-        app.proc_metric = m;
-        if let (Some(sync), Some(tree)) = (self.sync.as_mut(), app.tree.as_mut()) {
+        app.slot.proc_metric = m;
+        if let (Some(sync), Some(tree)) = (self.sync.as_mut(), app.slot.tree.as_mut()) {
             sync.set_metric(tree, m);
             app.refresh_rows();
         }
@@ -138,14 +138,14 @@ impl ProcState {
         let label = |app: &App| app.views.get(view).map(|d| crate::fmt::size(d.free).to_string());
         let before = label(app);
         app.set_procs(view, info, ram);
-        let rebuild = self.sync.is_none() || app.tree.as_ref().is_none_or(|t| t.dead() > MAX_DEAD);
-        match (rebuild, self.sync.as_mut(), app.tree.as_mut()) {
+        let rebuild = self.sync.is_none() || app.slot.tree.as_ref().is_none_or(|t| t.dead() > MAX_DEAD);
+        match (rebuild, self.sync.as_mut(), app.slot.tree.as_mut()) {
             (false, Some(sync), Some(tree)) => {
                 sync.apply(tree, &samples, elapsed);
                 app.refresh_rows();
             }
             _ => {
-                let (mut sync, mut tree) = Procs::new(app.proc_metric);
+                let (mut sync, mut tree) = Procs::new(app.slot.proc_metric);
                 sync.apply(&mut tree, &samples, elapsed);
                 app.finish_scan(tree, String::new());
                 self.sync = Some(sync);

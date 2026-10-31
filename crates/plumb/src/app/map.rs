@@ -16,18 +16,18 @@ impl App {
         if t.kind == Kind::Rest {
             return None;
         }
-        let (tree, m) = (self.tree.as_ref()?, self.model.as_mut()?);
+        let (tree, m) = (self.slot.tree.as_ref()?, self.slot.model.as_mut()?);
         m.reveal(tree, t.node);
         self.map_seen = Some(t.node);
-        let s = m.scroll_to_selected(self.scroll, self.layout.rows_visible());
+        let s = m.scroll_to_selected(self.slot.scroll, self.layout.rows_visible());
         self.set_scroll(s);
         Some(t.node)
     }
 
     /// Whether `map_root` still names a live node of the current tree.
     pub(super) fn live_map_root(&self) -> Option<NodeId> {
-        let t = self.tree.as_ref()?;
-        let sel = self.model.as_ref().and_then(|m| m.selected());
+        let t = self.slot.tree.as_ref()?;
+        let sel = self.slot.model.as_ref().and_then(|m| m.selected());
         self.map_root.filter(|&r| r.idx() < t.len() && !t.flags[r].contains(NodeFlags::DEAD)).or_else(|| treemap::root_for(t, sel))
     }
 
@@ -41,7 +41,7 @@ impl App {
     pub(super) fn update_tiles(&mut self, px: f32) {
         self.follow_selection();
         let (rect, root) = (self.layout.map(), self.live_map_root());
-        let (Some(tree), Some(rect), Some(root)) = (&self.tree, rect, root) else {
+        let (Some(tree), Some(rect), Some(root)) = (&self.slot.tree, rect, root) else {
             self.map_tiles.clear();
             self.map_key = None;
             self.map_classes.clear();
@@ -55,7 +55,7 @@ impl App {
         self.map_tiles = if self.kind() == ViewKind::Processes {
             let by_location = |id: NodeId| {
                 let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]) as u32;
-                location_class(self.proc_info.get(&pid).and_then(|i| i.path.as_deref()), &self.system_root)
+                location_class(self.slot.proc_info.get(&pid).and_then(|i| i.path.as_deref()), &self.system_root)
             };
             treemap::layout_by(tree, root, rect, px, &by_location)
         } else {
@@ -73,7 +73,7 @@ impl App {
 
     /// The tile of the selected node, if it has one (a node inside a `Rest` tile has none, and `Own` is not the node's tile).
     pub fn map_selected_tile(&self) -> Option<usize> {
-        let sel = self.model.as_ref()?.selected()?;
+        let sel = self.slot.model.as_ref()?.selected()?;
         self.map_tiles.iter().position(|t| t.node == sel && !t.kind.is_pseudo())
     }
 }

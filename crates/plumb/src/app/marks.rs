@@ -30,7 +30,7 @@ pub(super) struct BasketView {
 
 impl App {
     pub fn basket(&self) -> &Basket {
-        &self.basket
+        &self.slot.basket
     }
 
     pub fn basket_active(&self) -> bool {
@@ -43,23 +43,23 @@ impl App {
     }
 
     /// Keeps the marks of `view`, whose state is being let go, for its next scan.
-    pub fn stash_basket(&mut self, view: usize, from: &mut Parked) {
+    pub fn stash_basket(&mut self, view: usize, from: &mut Slot) {
         if !from.basket.is_empty() {
             self.stash.insert(view, std::mem::take(&mut from.basket));
         }
     }
 
     pub fn clear_basket(&mut self) {
-        self.basket.clear();
+        self.slot.basket.clear();
         self.basket_rev += 1;
     }
 
     pub fn mark_state(&self, id: NodeId) -> MarkState {
-        let Some(tree) = &self.tree else { return MarkState::Refused("no drive is shown") };
+        let Some(tree) = &self.slot.tree else { return MarkState::Refused("no drive is shown") };
         if self.kind() == ViewKind::Processes {
             return MarkState::Refused("processes cannot be deleted");
         }
-        if self.basket.contains(&tree.path(id)) {
+        if self.slot.basket.contains(&tree.path(id)) {
             return MarkState::Unmark;
         }
         if self.cancelable() {
@@ -74,32 +74,32 @@ impl App {
             self.notice = format!("cannot mark: {why}");
             return;
         }
-        let Some(path) = self.tree.as_ref().map(|t| t.path(id)) else { return };
-        self.basket.toggle(&path);
+        let Some(path) = self.slot.tree.as_ref().map(|t| t.path(id)) else { return };
+        self.slot.basket.toggle(&path);
         self.basket_rev += 1;
     }
 
     /// Marks or unmarks the node at `path`, found afresh: the tree may have changed since the caller chose it.
     pub fn toggle_mark_path(&mut self, path: &str) {
-        match self.tree.as_ref().and_then(|t| t.find(path)) {
+        match self.slot.tree.as_ref().and_then(|t| t.find(path)) {
             Some(id) => self.toggle_mark(id),
             None => self.notice = "that item is gone".into(),
         }
     }
 
     pub(super) fn toggle_mark_selected(&mut self) {
-        if let Some(id) = self.model.as_ref().and_then(|m| m.selected()) {
+        if let Some(id) = self.slot.model.as_ref().and_then(|m| m.selected()) {
             self.toggle_mark(id);
         }
     }
 
     /// Rebuilds what the chip and the tiles show when the marks, the tree or the tiles changed.
     pub(super) fn refresh_basket(&mut self) {
-        let Some(tree) = &self.tree else {
+        let Some(tree) = &self.slot.tree else {
             self.basket_view = BasketView::default();
             return;
         };
-        if self.basket.is_empty() {
+        if self.slot.basket.is_empty() {
             if self.basket_view.key.is_some() {
                 self.basket_view = BasketView::default();
             }
@@ -110,7 +110,7 @@ impl App {
         if self.basket_view.key == Some(key) {
             return;
         }
-        let ids = self.basket.covered(tree);
+        let ids = self.slot.basket.covered(tree);
         let set: HashSet<NodeId> = ids.iter().copied().collect();
         let under = |mut n: NodeId| {
             while !n.is_none() {
@@ -157,14 +157,14 @@ impl App {
             self.notice = "cannot delete while the drive is being scanned".into();
             return None;
         }
-        let (view, tree) = (self.active?, self.tree.as_ref()?);
-        self.basket.prune(tree);
+        let (view, tree) = (self.active?, self.slot.tree.as_ref()?);
+        self.slot.basket.prune(tree);
         self.basket_rev += 1;
         // A mark that cannot be deleted now (a rename gave it an unsafe name) is dropped and reported with the result.
-        let (ids, refused): (Vec<NodeId>, Vec<NodeId>) = self.basket.covered(tree).into_iter().partition(|&i| basket::refusal(tree, i, &self.system_root).is_none());
+        let (ids, refused): (Vec<NodeId>, Vec<NodeId>) = self.slot.basket.covered(tree).into_iter().partition(|&i| basket::refusal(tree, i, &self.system_root).is_none());
         self.skipped = refused.iter().map(|&i| (tree.path(i), basket::refusal(tree, i, &self.system_root).unwrap_or(""))).collect();
         let skipped: Vec<String> = self.skipped.iter().map(|(p, _)| p.clone()).collect();
-        self.basket.remove_under(&skipped);
+        self.slot.basket.remove_under(&skipped);
         self.basket_rev += 1;
         if ids.is_empty() {
             self.clear_basket();
@@ -183,7 +183,7 @@ impl App {
     /// A delete ended: `gone` (deleted, `missing` of them already absent) leave the basket, `failed` (path, reason) stay.
     pub fn finish_delete(&mut self, gone: &[String], missing: usize, failed: &[(String, String)]) {
         self.deleting = false;
-        self.basket.remove_under(gone);
+        self.slot.basket.remove_under(gone);
         self.basket_rev += 1;
         let deleted = gone.len() - missing.min(gone.len());
         let items = fmt::noun(deleted as u64, "item", "items");

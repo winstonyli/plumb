@@ -35,7 +35,7 @@ pub fn selftest() -> Result<String> {
     let win = Win::new(hwnd, crate::drives::list())?;
     STATE.with(|s| *s.borrow_mut() = Some(win));
     with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned(), false));
-    pump_until("the scan", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle | crate::app::Scan::Failed(_)))?;
+    pump_until("the scan", 30, &|w| matches!(w.app.slot.scan, crate::app::Scan::Idle | crate::app::Scan::Failed(_)))?;
     // A scan that finishes in a kept view must leave the preview of the view on screen alone.
     with(|w| {
         w.app.views.push(ViewInfo { root: "Z:\\".into(), total: 0, free: 0, kind: crate::app::ViewKind::Disk });
@@ -55,7 +55,7 @@ pub fn selftest() -> Result<String> {
     // A scan keeps building its tree while another view is shown, and the view comes back with it.
     let big = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
     with(|w| w.spawn_scan(0, big.clone(), false));
-    let started = |w: &mut Win| matches!(w.app.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200) && w.app.tree.is_some();
+    let started = |w: &mut Win| matches!(w.app.slot.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200) && w.app.slot.tree.is_some();
     pump_until("the big scan to get going", 60, &started)?;
     let other = with(|w| {
         w.open(w.app.views.len() - 1, dir.to_string_lossy().into_owned());
@@ -65,13 +65,13 @@ pub fn selftest() -> Result<String> {
     let away = |w: &mut Win| w.parked.first().and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).map_or(0, |t| t.len());
     pump_until("the kept scan's tree to grow", 30, &|w| away(w) > other + 1000 || w.parked.first().and_then(|d| d.as_ref()).is_none_or(|d| d.rx.is_none()))?;
     with(|w| w.open(0, big.clone()));
-    let back = with(|w| w.app.tree.is_some() && w.app.model.is_some() && (w.preview.is_some() || matches!(w.app.scan, crate::app::Scan::Idle)));
+    let back = with(|w| w.app.slot.tree.is_some() && w.app.slot.model.is_some() && (w.preview.is_some() || matches!(w.app.slot.scan, crate::app::Scan::Idle)));
     if back != Some(true) {
         return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "coming back to a view that is still scanning showed no tree"));
     }
     with(|w| w.cancel_scan());
     with(|w| w.open(0, dir.to_string_lossy().into_owned()));
-    pump_until("the small scan again", 30, &|w| matches!(w.app.scan, crate::app::Scan::Idle) && w.app.tree.is_some())?;
+    pump_until("the small scan again", 30, &|w| matches!(w.app.slot.scan, crate::app::Scan::Idle) && w.app.slot.tree.is_some())?;
     // A scan that finishes while another view is shown comes back finished: a tree, rows, no scan.
     with(|w| {
         w.spawn_scan(0, dir.to_string_lossy().into_owned(), false);
@@ -79,7 +79,7 @@ pub fn selftest() -> Result<String> {
     });
     pump_until("the parked scan to finish", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.rx.is_none() && d.app.has_tree()))?;
     with(|w| w.open(0, dir.to_string_lossy().into_owned()));
-    let done = with(|w| w.app.tree.is_some() && w.app.model.is_some() && w.preview.is_none() && matches!(w.app.scan, crate::app::Scan::Idle));
+    let done = with(|w| w.app.slot.tree.is_some() && w.app.slot.model.is_some() && w.preview.is_none() && matches!(w.app.slot.scan, crate::app::Scan::Idle));
     if done != Some(true) {
         return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a scan that finished while parked came back without a finished tree"));
     }
@@ -92,7 +92,7 @@ pub fn selftest() -> Result<String> {
         w.run_filter();
     });
     pump_until("the filter result", 10, &|w| w.app.filter_installed())?;
-    let filtered = with(|w| w.app.model.as_ref().map(|m| m.rows().len())).flatten();
+    let filtered = with(|w| w.app.slot.model.as_ref().map(|m| m.rows().len())).flatten();
     if filtered != Some(3) {
         return Err(windows::core::Error::new(
             windows::Win32::Foundation::E_FAIL,
@@ -101,9 +101,9 @@ pub fn selftest() -> Result<String> {
     }
     let out = with(|w| {
         w.resize();
-        let sub = w.app.tree.as_ref().map(|t| t.subtree_size[NodeId(0)]);
+        let sub = w.app.slot.tree.as_ref().map(|t| t.subtree_size[NodeId(0)]);
         w.try_render().map(|_| {
-            format!("{}; {}; root {:?} bytes; filter ok: {} rows", w.gfx.adapter, w.app.summary, sub, filtered.unwrap_or(0))
+            format!("{}; {}; root {:?} bytes; filter ok: {} rows", w.gfx.adapter, w.app.slot.summary, sub, filtered.unwrap_or(0))
         })
     });
     let _ = std::fs::remove_dir_all(&dir);
@@ -148,11 +148,11 @@ pub fn selftest_live() -> Result<String> {
         Ok(())
     };
     let size_at = |w: &mut Win, rel: &str| -> Option<u64> {
-        let t = w.app.tree.as_ref()?;
+        let t = w.app.slot.tree.as_ref()?;
         let id = t.find(&format!("{shown}\\{rel}"))?;
         Some(t.subtree_size[id])
     };
-    let dir_gone = |w: &mut Win| w.app.tree.as_ref().is_some_and(|t| t.find(&shown).is_none());
+    let dir_gone = |w: &mut Win| w.app.slot.tree.as_ref().is_some_and(|t| t.find(&shown).is_none());
     let run = || -> Result<String> {
         let i = with(|w| w.app.views.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
         let i = i.ok_or_else(|| fail(format!("view {letter}: is not in the view list")))?;
@@ -161,14 +161,14 @@ pub fn selftest_live() -> Result<String> {
         std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
         std::fs::write(dir.join("f.bin"), vec![1u8; 1 << 20]).map_err(|e| fail(e.to_string()))?;
         wait("the new file", 20, &|w| size_at(w, "f.bin") == Some(1 << 20))?;
-        wait("the live marker", 20, &|w| matches!(&w.app.live, LiveStatus::On { last: Some(_) }))?;
+        wait("the live marker", 20, &|w| matches!(&w.app.slot.live, LiveStatus::On { last: Some(_) }))?;
         std::fs::write(dir.join("f.bin"), vec![1u8; 3 << 20]).map_err(|e| fail(e.to_string()))?;
         wait("the grown file", 20, &|w| size_at(w, "f.bin") == Some(3 << 20))?;
         std::fs::rename(dir.join("f.bin"), dir.join("g.bin")).map_err(|e| fail(e.to_string()))?;
         wait("the rename", 20, &|w| size_at(w, "g.bin") == Some(3 << 20) && size_at(w, "f.bin").is_none())?;
         std::fs::remove_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
         wait("the delete", 20, &|w| size_at(w, "g.bin").is_none() && dir_gone(w))?;
-        let stale = with(|w| matches!(w.app.live, LiveStatus::Stale(_))).unwrap_or(false);
+        let stale = with(|w| matches!(w.app.slot.live, LiveStatus::Stale(_))).unwrap_or(false);
         if stale {
             return Err(fail("live updates reported stale".into()));
         }
@@ -225,7 +225,7 @@ pub fn selftest_watch() -> Result<String> {
         let id = t.children(dir).find(|&c| t.name_string(c) == name)?;
         Some(t.subtree_size[id])
     };
-    let size_at = |w: &mut Win, rel: &str| -> Option<u64> { size_in(w.app.tree.as_ref()?, rel) };
+    let size_at = |w: &mut Win, rel: &str| -> Option<u64> { size_in(w.app.slot.tree.as_ref()?, rel) };
     let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
     let run = || -> Result<String> {
         let io = |e: std::io::Error| fail(e.to_string());
@@ -235,7 +235,7 @@ pub fn selftest_watch() -> Result<String> {
         wait("the scan and the directory watch", 60, &|w| w.watch.is_some())?;
         std::fs::write(dir.join("f.bin"), vec![1u8; 1 << 20]).map_err(io)?;
         wait("the new file", 20, &|w| size_at(w, "f.bin") == Some(1 << 20))?;
-        wait("the live marker", 20, &|w| matches!(&w.app.live, LiveStatus::On { last: Some(_) }))?;
+        wait("the live marker", 20, &|w| matches!(&w.app.slot.live, LiveStatus::On { last: Some(_) }))?;
         std::fs::write(dir.join("f.bin"), vec![1u8; 3 << 20]).map_err(io)?;
         wait("the grown file", 20, &|w| size_at(w, "f.bin") == Some(3 << 20))?;
         std::fs::rename(dir.join("f.bin"), dir.join("g.bin")).map_err(io)?;
@@ -245,17 +245,17 @@ pub fn selftest_watch() -> Result<String> {
         wait("the new folder", 20, &|w| size_at(w, "new\\deep\\x.bin") == Some(8192))?;
         std::fs::remove_dir_all(dir.join("sub")).map_err(io)?;
         wait("the delete", 20, &|w| size_at(w, "sub").is_none() && size_at(w, "g.bin") == Some(3 << 20))?;
-        if with(|w| matches!(w.app.live, LiveStatus::Stale(_))).unwrap_or(false) {
+        if with(|w| matches!(w.app.slot.live, LiveStatus::Stale(_))).unwrap_or(false) {
             return Err(fail("live updates reported stale".into()));
         }
         // Cancel a long scan of the whole drive, then replace one with another mid-scan.
         let big = format!("{letter}:\\");
         let big2 = big.clone();
-        let running = |w: &mut Win| matches!(w.app.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200);
+        let running = |w: &mut Win| matches!(w.app.slot.scan, crate::app::Scan::Running { dirs, .. } if dirs > 200);
         with(|w| w.spawn_scan(i, big.clone(), false));
         wait("the view scan to get going", 60, &running)?;
         with(|w| w.cancel_scan());
-        let cancelled = with(|w| matches!(w.app.scan, crate::app::Scan::Cancelled) && w.app.tree.is_none() && w.rx.is_none());
+        let cancelled = with(|w| matches!(w.app.slot.scan, crate::app::Scan::Cancelled) && w.app.slot.tree.is_none() && w.rx.is_none());
         if cancelled != Some(true) {
             return Err(fail("cancelling did not leave a cancelled, empty state".into()));
         }
@@ -300,7 +300,7 @@ pub fn selftest_watch() -> Result<String> {
             return Err(fail("the scan did not keep running while another view was shown".into()));
         }
         with(|w| w.open(i, big2.clone()));
-        let resumed = with(|w| w.rx.is_some() && matches!(w.app.scan, crate::app::Scan::Running { .. }));
+        let resumed = with(|w| w.rx.is_some() && matches!(w.app.slot.scan, crate::app::Scan::Running { .. }));
         if resumed != Some(true) {
             return Err(fail("the running scan was not on screen after switching back".into()));
         }
@@ -378,7 +378,7 @@ pub fn selftest_delete() -> Result<String> {
     unsafe { SetTimer(Some(hwnd), 99, 50, None) }; // keeps the watch's wake-ups flowing
     let letter = shown.chars().next().unwrap_or('C').to_ascii_uppercase();
     let at = |rel: &str| format!(r"{shown}\{rel}");
-    let in_tree = |w: &mut Win, rel: &str| w.app.tree.as_ref().is_some_and(|t| t.find(&at(rel)).is_some());
+    let in_tree = |w: &mut Win, rel: &str| w.app.slot.tree.as_ref().is_some_and(|t| t.find(&at(rel)).is_some());
     let exists = |rel: &str| dir.join(rel).exists();
     let mark = |rels: &[&str]| {
         with(|w| {
@@ -614,19 +614,19 @@ pub fn selftest_processes() -> Result<String> {
     };
     // The live node of a process, by pid.
     let node = |w: &Win, pid: u32| -> Option<NodeId> {
-        let t = w.app.tree.as_ref()?;
+        let t = w.app.slot.tree.as_ref()?;
         (0..t.len() as u32).map(NodeId).find(|&n| !t.flags[n].contains(plumb_core::NodeFlags::DEAD) && t.aux.get(n.idx()).is_some_and(|a| a[2] == u64::from(pid)) && n.0 != 0)
     };
     let parent_pid = |w: &Win, id: NodeId| -> u32 {
-        let t = w.app.tree.as_ref().unwrap();
+        let t = w.app.slot.tree.as_ref().unwrap();
         t.aux.get(t.parent[id].idx()).map_or(0, |a| a[2] as u32)
     };
     let run = || -> Result<String> {
         let me = std::process::id();
         let pi = with(|w| w.app.views.iter().position(|d| d.kind == ViewKind::Processes)).flatten().ok_or_else(|| fail("no Processes view in the list".into()))?;
         with(|w| w.start_scan(pi));
-        wait("this process in the list", 20, &|w| node(w, me).is_some_and(|n| w.app.tree.as_ref().unwrap().size[n] > 0))?;
-        let ws = with(|w| w.app.tree.as_ref().unwrap().size[node(w, me).unwrap()]).unwrap_or(0);
+        wait("this process in the list", 20, &|w| node(w, me).is_some_and(|n| w.app.slot.tree.as_ref().unwrap().size[n] > 0))?;
+        let ws = with(|w| w.app.slot.tree.as_ref().unwrap().size[node(w, me).unwrap()]).unwrap_or(0);
         let status = with(|w| w.app.with_scene(false, |s| s.status.to_string())).unwrap_or_default();
         if !status.contains(" processes, ") {
             return Err(fail(format!("status line: {status:?}")));
@@ -644,7 +644,7 @@ pub fn selftest_processes() -> Result<String> {
             z
         })
         .unwrap_or(0);
-        wait("the other view's scan", 30, &|w| w.app.tree.is_some() && w.app.active == Some(z) && matches!(w.app.scan, crate::app::Scan::Idle))?;
+        wait("the other view's scan", 30, &|w| w.app.slot.tree.is_some() && w.app.active == Some(z) && matches!(w.app.slot.scan, crate::app::Scan::Idle))?;
         let parked_polling = with(|w| w.parked[pi].as_ref().and_then(|d| d.procs.as_ref()).map(procs::ProcState::polling)).flatten();
         if parked_polling != Some(false) || with(|w| w.procs_polling()) != Some(false) {
             return Err(fail(format!("polling while away: {parked_polling:?}")));
@@ -671,7 +671,7 @@ pub fn selftest_processes() -> Result<String> {
             .collect::<Result<_>>()?;
         with(|w| {
             let id = node(w, me).unwrap();
-            let (t, m) = (w.app.tree.as_ref().unwrap(), w.app.model.as_mut().unwrap());
+            let (t, m) = (w.app.slot.tree.as_ref().unwrap(), w.app.slot.model.as_mut().unwrap());
             m.reveal(t, id);
             m.select(id);
             w.held_poll();
@@ -710,7 +710,7 @@ pub fn selftest_processes() -> Result<String> {
         drop(held);
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
         let worst = with(|w| {
-            let t = w.app.tree.as_ref().unwrap();
+            let t = w.app.slot.tree.as_ref().unwrap();
             (0..t.len()).filter(|&i| !t.flags[i].contains(plumb_core::NodeFlags::DEAD)).map(|i| t.aux.get(i).map_or(0, |a| a[0])).max().unwrap_or(0)
         })
         .unwrap_or(0);

@@ -77,12 +77,12 @@ pub(super) fn edit_for_key(k: Key) -> Option<Edit> {
 
 impl App {
     pub fn filter_ui(&self) -> &FilterUi {
-        &self.filter.ui
+        &self.slot.filter.ui
     }
 
     /// The input method's in-progress text at the caret (empty when it ends or is cancelled).
     pub fn set_preedit(&mut self, s: String) {
-        self.filter.ui.preedit = s;
+        self.slot.filter.ui.preedit = s;
     }
 
     /// Whether (x, y) is in the filter box.
@@ -101,21 +101,21 @@ impl App {
 
     /// True when the installed result is out of date, so `start_filter` has work to do.
     pub fn filter_dirty(&self) -> bool {
-        self.filter.dirty
+        self.slot.filter.dirty
     }
 
     pub fn filter_installed(&self) -> bool {
-        self.filter.installed.is_some()
+        self.slot.filter.installed.is_some()
     }
 
     /// The pattern of the result on screen, for highlighting what it matched in the names.
     pub(super) fn filter_matcher(&self) -> Option<&Matcher> {
-        self.filter.installed.as_ref().map(|i| &i.matcher)
+        self.slot.filter.installed.as_ref().map(|i| &i.matcher)
     }
 
     /// "1,240 matches", "searching…", "invalid pattern", or empty.
     pub(super) fn filter_count(&self) -> String {
-        let f = &self.filter;
+        let f = &self.slot.filter;
         if let Some(e) = &f.error {
             return match e {
                 FilterError::Invalid(_) => "invalid pattern",
@@ -139,7 +139,7 @@ impl App {
     }
 
     pub(super) fn filter_bar<'a>(&'a self, count: &'a str) -> FilterBar<'a> {
-        let u = &self.filter.ui;
+        let u = &self.slot.filter.ui;
         FilterBar {
             text: &u.text,
             caret: u.caret,
@@ -147,7 +147,7 @@ impl App {
             focus: u.focus,
             sel: u.selection(),
             preedit: &u.preedit,
-            error: self.filter.error.is_some(),
+            error: self.slot.filter.error.is_some(),
             count,
         }
     }
@@ -155,35 +155,35 @@ impl App {
     /// The text or the Regex toggle changed. An emptied box clears the filter at once; anything
     /// else waits for the debounce timer.
     pub(super) fn filter_changed(&mut self) -> Effect {
-        self.filter.bump();
-        if self.filter.ui.text.is_empty() {
+        self.slot.filter.bump();
+        if self.slot.filter.ui.text.is_empty() {
             self.clear_filter_results();
             return Effect::None;
         }
-        self.filter.dirty = true;
+        self.slot.filter.dirty = true;
         Effect::Filter
     }
 
     pub(super) fn filter_edit(&mut self, e: Edit) -> Effect {
-        if !self.filter.ui.focus {
+        if !self.slot.filter.ui.focus {
             return Effect::None;
         }
-        if self.filter.ui.edit(e) { self.filter_changed() } else { Effect::None }
+        if self.slot.filter.ui.edit(e) { self.filter_changed() } else { Effect::None }
     }
 
     /// Esc: clears the text if there is any, and takes the focus off the box.
     pub(super) fn filter_escape(&mut self) -> Effect {
-        self.filter.ui.focus = false;
-        if self.filter.ui.clear() { self.filter_changed() } else { Effect::None }
+        self.slot.filter.ui.focus = false;
+        if self.slot.filter.ui.clear() { self.filter_changed() } else { Effect::None }
     }
 
     /// Enter in the box: focus moves to the tree, on its first row.
     pub(super) fn filter_enter(&mut self) {
-        if !self.filter.ui.focus {
+        if !self.slot.filter.ui.focus {
             return;
         }
-        self.filter.ui.focus = false;
-        if let Some(m) = &mut self.model
+        self.slot.filter.ui.focus = false;
+        if let Some(m) = &mut self.slot.model
             && let Some(id) = m.rows().first().map(|r| r.id)
         {
             m.select(id);
@@ -193,16 +193,16 @@ impl App {
 
     /// Removes the filter from the rows and forgets the installed result.
     fn clear_filter_results(&mut self) {
-        self.filter.dirty = false;
-        if self.filter.installed.take().is_some() {
+        self.slot.filter.dirty = false;
+        if self.slot.filter.installed.take().is_some() {
             self.unfilter_rows();
         }
     }
 
     /// Takes the filter off the rows and returns to the scroll position from before it.
     pub(super) fn unfilter_rows(&mut self) {
-        let (vis, saved) = (self.layout.rows_visible(), self.filter.saved_scroll);
-        let s = match (&self.tree, &mut self.model) {
+        let (vis, saved) = (self.layout.rows_visible(), self.slot.filter.saved_scroll);
+        let s = match (&self.slot.tree, &mut self.slot.model) {
             (Some(t), Some(m)) => {
                 m.set_filter(t, None);
                 Some(m.scroll_to_selected(saved, vis))
@@ -217,23 +217,23 @@ impl App {
     /// The tree is being replaced: drop everything derived from the old one. With text in the box
     /// `dirty` stays set, so the window starts a run on the new tree.
     pub(super) fn filter_reset(&mut self) {
-        self.filter.bump();
-        self.filter.installed = None;
-        self.filter.dirty = !self.filter.ui.text.is_empty();
+        self.slot.filter.bump();
+        self.slot.filter.installed = None;
+        self.slot.filter.dirty = !self.slot.filter.ui.text.is_empty();
     }
 
     /// Compiles the query and snapshots the names for a worker, if a run is wanted. An invalid
     /// pattern sets the error and keeps the previous result on screen.
     pub fn start_filter(&mut self) -> Option<FilterJob> {
-        let tree = self.tree.as_ref()?;
+        let tree = self.slot.tree.as_ref()?;
         // Nothing to do when the result is current, or when a scan for this very query is running.
-        if !self.filter.dirty || self.filter.running.is_some() {
+        if !self.slot.filter.dirty || self.slot.filter.running.is_some() {
             return None;
         }
-        match self.filter.query().compile() {
+        match self.slot.filter.query().compile() {
             Err(e) => {
-                self.filter.error = Some(e);
-                self.filter.dirty = false;
+                self.slot.filter.error = Some(e);
+                self.slot.filter.dirty = false;
                 None
             }
             Ok(None) => {
@@ -241,7 +241,7 @@ impl App {
                 None
             }
             Ok(Some(matcher)) => {
-                let f = &mut self.filter;
+                let f = &mut self.slot.filter;
                 f.error = None;
                 f.touched.clear();
                 f.running = Some((f.generation, matcher.clone()));
@@ -252,16 +252,16 @@ impl App {
 
     /// Installs a finished scan unless a newer query or tree has replaced it.
     pub fn filter_ready(&mut self, generation: u64, mut hits: Hits) {
-        let f = &mut self.filter;
+        let f = &mut self.slot.filter;
         let Some((_, matcher)) = f.running.take_if(|(g, _)| *g == generation) else { return };
-        let (Some(tree), Some(model)) = (&self.tree, &mut self.model) else { return };
+        let (Some(tree), Some(model)) = (&self.slot.tree, &mut self.slot.model) else { return };
         // The tree kept changing while the worker scanned: re-test what changed since the snapshot
         // (nodes added since are covered by `update`, which also tests everything past the end).
         hits.update(tree, &matcher, &f.touched);
         f.touched.clear();
         let keep = Rc::new(Keep::build(tree, &hits));
         if f.installed.is_none() {
-            f.saved_scroll = self.scroll;
+            f.saved_scroll = self.slot.scroll;
         }
         model.set_filter(tree, Some(keep.clone()));
         f.installed = Some(Installed { matcher, hits, keep });
@@ -273,8 +273,8 @@ impl App {
     /// rebuilds the keep set when one of them was, or became, part of it. Also logs the changes
     /// for a run in flight.
     pub(super) fn filter_live(&mut self) {
-        let (Some(tree), Some(model)) = (&self.tree, &mut self.model) else { return };
-        let f = &mut self.filter;
+        let (Some(tree), Some(model)) = (&self.slot.tree, &mut self.slot.model) else { return };
+        let f = &mut self.slot.filter;
         let touched = tree.touched();
         if touched.is_empty() {
             return;
@@ -323,8 +323,8 @@ mod tests {
     }
 
     fn names(a: &App) -> Vec<String> {
-        let t = a.tree.as_ref().unwrap();
-        a.model.as_ref().unwrap().rows().iter().map(|r| t.name_string(r.id)).collect()
+        let t = a.slot.tree.as_ref().unwrap();
+        a.slot.model.as_ref().unwrap().rows().iter().map(|r| t.name_string(r.id)).collect()
     }
 
     fn row_y(i: usize) -> f32 {
@@ -380,7 +380,7 @@ mod tests {
     fn escape_clears_the_filter_and_restores_the_view() {
         let mut a = app();
         let before = names(&a);
-        let root = a.model.as_ref().unwrap().selected();
+        let root = a.slot.model.as_ref().unwrap().selected();
         type_text(&mut a, "txt");
         run(&mut a);
         assert_ne!(names(&a), before);
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(names(&a), before);
         assert!(!a.filter_installed() && !a.filter_dirty());
         assert_eq!((a.filter_ui().text.as_str(), a.filter_ui().focus), ("", false));
-        assert_eq!(a.model.as_ref().unwrap().selected(), root);
+        assert_eq!(a.slot.model.as_ref().unwrap().selected(), root);
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
         run(&mut a);
         assert_eq!(a.filter_count(), "0 matches");
         assert!(names(&a).is_empty(), "with no match even the root is hidden");
-        assert_eq!(a.model.as_ref().unwrap().selected(), None);
+        assert_eq!(a.slot.model.as_ref().unwrap().selected(), None);
         let r = a.layout.filter_regex();
         assert_eq!(a.handle(Input::Click(r.x + 2.0, r.y + 2.0)), Effect::Filter);
         run(&mut a);
@@ -454,20 +454,20 @@ mod tests {
         let mut a = app();
         type_text(&mut a, "txt");
         run(&mut a);
-        let src = a.tree.as_ref().unwrap().find("C:\\src").unwrap();
-        let t = a.tree.as_mut().unwrap();
+        let src = a.slot.tree.as_ref().unwrap().find("C:\\src").unwrap();
+        let t = a.slot.tree.as_mut().unwrap();
         t.add_child(src, &u("new.txt"), 40, NodeFlags::empty());
         a.refresh_rows();
         assert!(names(&a).contains(&"new.txt".to_string()));
         assert_eq!(a.filter_count(), "3 matches");
-        let more = a.tree.as_ref().unwrap().find("C:\\src\\deep\\more.txt").unwrap();
-        a.tree.as_mut().unwrap().rename(more, &u("more.rs"));
+        let more = a.slot.tree.as_ref().unwrap().find("C:\\src\\deep\\more.txt").unwrap();
+        a.slot.tree.as_mut().unwrap().rename(more, &u("more.rs"));
         a.refresh_rows();
         let n = names(&a);
         assert!(!n.contains(&"more.rs".to_string()) && !n.contains(&"deep".to_string()), "{n:?}");
         assert_eq!(a.filter_count(), "2 matches");
-        let notes = a.tree.as_ref().unwrap().find("C:\\docs\\notes.txt").unwrap();
-        a.tree.as_mut().unwrap().remove(notes);
+        let notes = a.slot.tree.as_ref().unwrap().find("C:\\docs\\notes.txt").unwrap();
+        a.slot.tree.as_mut().unwrap().remove(notes);
         a.refresh_rows();
         assert!(!names(&a).contains(&"docs".to_string()));
         assert_eq!(a.filter_count(), "1 match");
@@ -478,9 +478,9 @@ mod tests {
         let mut a = app();
         type_text(&mut a, "txt");
         let j = a.start_filter().unwrap(); // the snapshot is taken here
-        let src = a.tree.as_ref().unwrap().find("C:\\src").unwrap();
-        let main = a.tree.as_ref().unwrap().find("C:\\src\\main.rs").unwrap();
-        let t = a.tree.as_mut().unwrap();
+        let src = a.slot.tree.as_ref().unwrap().find("C:\\src").unwrap();
+        let main = a.slot.tree.as_ref().unwrap().find("C:\\src\\main.rs").unwrap();
+        let t = a.slot.tree.as_mut().unwrap();
         t.add_child(src, &u("late.txt"), 7, NodeFlags::empty()); // past the snapshot's end
         t.rename(main, &u("main.txt")); // inside it
         a.refresh_rows();
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn keys_go_to_the_box_only_while_it_has_focus() {
         let mut a = app();
-        let root = a.model.as_ref().unwrap().selected();
+        let root = a.slot.model.as_ref().unwrap().selected();
         a.handle(Input::Edit(Edit::Char('z'))); // not focused: ignored
         assert_eq!(a.filter_ui().text, "");
         let b = a.layout.filter_box();
@@ -529,9 +529,9 @@ mod tests {
         a.handle(Input::Edit(Edit::Char('b')));
         a.handle(Input::Key(Key::Left));
         assert_eq!(a.filter_ui().caret, 1);
-        assert_eq!(a.model.as_ref().unwrap().selected(), root, "Left edited the box, not the tree");
+        assert_eq!(a.slot.model.as_ref().unwrap().selected(), root, "Left edited the box, not the tree");
         a.handle(Input::Key(Key::Down));
-        assert_ne!(a.model.as_ref().unwrap().selected(), root, "Down still moves the tree selection");
+        assert_ne!(a.slot.model.as_ref().unwrap().selected(), root, "Down still moves the tree selection");
         a.handle(Input::Click(20.0, row_y(1)));
         assert!(!a.filter_ui().focus);
         a.handle(Input::Edit(Edit::Char('z')));
@@ -571,7 +571,7 @@ mod tests {
         a.handle(Input::Key(Key::Down)); // move the selection off the first row
         a.handle(Input::Enter);
         assert!(!a.filter_ui().focus);
-        let m = a.model.as_ref().unwrap();
+        let m = a.slot.model.as_ref().unwrap();
         assert_eq!(m.selected(), Some(m.rows()[0].id));
         a.handle(Input::Enter); // not focused: nothing happens
         a.handle(Input::Tab);

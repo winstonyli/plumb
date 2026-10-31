@@ -1,6 +1,6 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
-use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, Parked, TipKey, ViewKind};
+use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, Slot, TipKey, ViewKind};
 use crate::modal::Modal;
 use crate::trash;
 use crate::draw::{Mark, Painter, Role};
@@ -99,11 +99,11 @@ const PREVIEW_TICK_MS: u32 = 15;
 const PREVIEW_QUEUE: usize = 200_000;
 /// Longest a batch of journal deltas may hold the UI thread.
 const APPLY_BUDGET: Duration = Duration::from_millis(5);
-/// Everything the window keeps per view besides what the app holds (`Parked`). The fields of the
+/// Everything the window keeps per view besides what the app holds (`Slot`). The fields of the
 /// view on screen live directly in `Win`; the others wait in `Win::parked` as one of these.
 #[derive(Default)]
 struct View {
-    app: Parked,
+    app: Slot,
     progress: Arc<Progress>,
     rx: Option<Receiver<ScanResult>>,
     /// What the scan has found so far; kept views have none (a partial tree follows only the view on screen).
@@ -709,7 +709,7 @@ impl Win {
         }
         self.background = background;
         if background {
-            self.app.refreshing = true;
+            self.app.slot.refreshing = true;
         } else {
             self.drop_watch();
             self.app.begin_scan(view);
@@ -840,13 +840,13 @@ impl Win {
             }
         }
         let Some(p) = &mut self.preview else { return };
-        let a = p.apply(&mut self.app.tree, deadline);
+        let a = p.apply(&mut self.app.slot.tree, deadline);
         if a.reset || a.created {
             self.app.preview_installed(); // builds the model from whatever tree there is now
         } else {
             self.preview_dirty |= a.changes > 0;
         }
-        self.app.preview_paused = p.paused();
+        self.app.slot.preview_paused = p.paused();
         if self.preview_dirty && self.preview_pacer.due(Instant::now()) {
             let t0 = Instant::now();
             self.app.refresh_rows();
@@ -869,7 +869,7 @@ impl Win {
                 let s = summary(sc.report.used, files, sc.elapsed, corrupt, sc.report.note.as_deref());
                 // `begin_scan` cleared the tree, so one on screen is the preview (or the tree
                 // being rescanned); with none yet the scan finished before the first preview.
-                if self.app.tree.is_some() {
+                if self.app.slot.tree.is_some() {
                     self.app.swap_tree(sc.tree, s);
                     self.drop_watch();
                 } else {
@@ -891,7 +891,7 @@ impl Win {
             }
             Err(e) if background => {
                 self.drop_pending();
-                self.app.refreshing = false;
+                self.app.slot.refreshing = false;
                 self.app.set_live(LiveStatus::Stale(format!("the rescan failed: {e}")));
             }
             Err(e) => {
@@ -907,7 +907,7 @@ impl Win {
     }
 
     fn selected_path(&self) -> Option<String> {
-        let id = self.app.model.as_ref()?.selected()?;
+        let id = self.app.slot.model.as_ref()?.selected()?;
         self.app.menu_target(id).map(|t| t.1)
     }
 }

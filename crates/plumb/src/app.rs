@@ -284,22 +284,22 @@ fn now_filetime() -> u64 {
 /// What the app holds for one view, kept while another view is on screen. The filter box text
 /// and the sort stay with the app; everything derived from this view's tree travels with it.
 #[derive(Default)]
-pub struct Parked {
-    tree: Option<Tree>,
-    model: Option<RowModel>,
-    scroll: usize,
-    scan: Scan,
-    summary: String,
-    live: LiveStatus,
-    refreshing: bool,
-    preview_paused: bool,
+pub struct Slot {
+    pub tree: Option<Tree>,
+    pub model: Option<RowModel>,
+    pub scroll: usize,
+    pub scan: Scan,
+    pub summary: String,
+    pub live: LiveStatus,
+    pub refreshing: bool,
+    pub preview_paused: bool,
     filter: filter::Filter,
-    basket: Basket,
-    proc_info: HashMap<u32, ProcInfo>,
-    proc_metric: Metric,
+    pub basket: Basket,
+    pub proc_info: HashMap<u32, ProcInfo>,
+    pub proc_metric: Metric,
 }
 
-impl Parked {
+impl Slot {
     pub fn has_tree(&self) -> bool {
         self.tree.is_some()
     }
@@ -330,22 +330,13 @@ pub struct App {
     pub hot: Option<Rect>,
     /// The left button went down on `hot` and is still down.
     pub pressed: bool,
-    pub tree: Option<Tree>,
-    pub model: Option<RowModel>,
-    pub scroll: usize,
-    pub scan: Scan,
-    /// One line about the last finished scan (scanner, time, counts); empty before any.
-    pub summary: String,
+    /// What swaps when another view is put on screen.
+    pub slot: Slot,
     /// Show the "Run as administrator" button (the process is not elevated).
     pub can_elevate: bool,
     /// The system's accent colour (`0xRRGGBB`), set by the window; `None` keeps plumb's blue.
     pub accent: Option<u32>,
     pub adapter: String,
-    pub live: LiveStatus,
-    /// A background rescan is running while the old tree stays on screen.
-    pub refreshing: bool,
-    /// The partial tree stopped following the scan; the status line says so.
-    pub preview_paused: bool,
     /// Header column last clicked (0 Name, 1 Size, 2 % of parent, 3 Items, 4 Modified) and direction.
     sort: (usize, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
@@ -374,12 +365,6 @@ pub struct App {
     pub map_hover: Option<usize>,
     /// While dragging the divider: the pointer x and the pane width at the start.
     map_drag: Option<(f32, f32)>,
-    filter: filter::Filter,
-    basket: Basket,
-    /// The Processes view's extra facts about each process, by pid.
-    proc_info: HashMap<u32, ProcInfo>,
-    /// What the Processes view's map and Memory column weigh by.
-    pub proc_metric: Metric,
     /// The files the selected process holds (see `held_sync`).
     held: Held,
     /// Bumped when the marks change or the shown view's basket is swapped.
@@ -404,11 +389,10 @@ impl App {
     pub fn new(layout: Layout, views: Vec<ViewInfo>, adapter: String) -> Self {
         let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
-            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), tree: None, model: None, scroll: 0,
-            can_elevate: false, accent: None, scan: Scan::Idle, summary: String::new(), sort: (1, true), grab: None, col_drag: None,
+            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), slot: Slot::default(),
+            can_elevate: false, accent: None, sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
-            live: LiveStatus::Off, refreshing: false, preview_paused: false, filter: Default::default(),
-            basket: Basket::default(), proc_info: HashMap::new(), proc_metric: Metric::default(), held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), notice_ok: false, stash: HashMap::new(), skipped: Vec::new(),
+            held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), notice_ok: false, stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -452,32 +436,21 @@ impl App {
 
     /// Exchanges the per-view state with `p`. The result is consistent on its own (banner and
     /// Cancel button follow the new state) but leaves the filter alone: see `switch_slot`.
-    pub fn swap_slot(&mut self, p: &mut Parked) {
+    pub fn swap_slot(&mut self, p: &mut Slot) {
         use std::mem::swap;
-        swap(&mut self.tree, &mut p.tree);
-        swap(&mut self.model, &mut p.model);
-        swap(&mut self.scroll, &mut p.scroll);
-        swap(&mut self.scan, &mut p.scan);
-        swap(&mut self.summary, &mut p.summary);
-        swap(&mut self.live, &mut p.live);
-        swap(&mut self.refreshing, &mut p.refreshing);
-        swap(&mut self.preview_paused, &mut p.preview_paused);
-        swap(&mut self.filter, &mut p.filter);
-        swap(&mut self.filter.ui, &mut p.filter.ui); // the query text belongs to the window
-        swap(&mut self.basket, &mut p.basket);
-        swap(&mut self.proc_info, &mut p.proc_info);
-        swap(&mut self.proc_metric, &mut p.proc_metric);
+        swap(&mut self.slot, p);
+        swap(&mut self.slot.filter.ui, &mut p.filter.ui); // the query text belongs to the window
         self.basket_rev += 1;
         let procs = self.kind() == ViewKind::Processes;
-        self.layout = self.layout.with_banner(matches!(self.live, LiveStatus::Stale(_))).with_cancel(self.cancelable()).with_metric(procs).with_held(procs);
-        self.set_scroll(self.scroll);
+        self.layout = self.layout.with_banner(matches!(self.slot.live, LiveStatus::Stale(_))).with_cancel(self.cancelable()).with_metric(procs).with_held(procs);
+        self.set_scroll(self.slot.scroll);
         self.map_reset();
     }
 
     /// Puts another view on screen: the outgoing rows lose the filter so they come back whole, and
     /// the incoming ones are filtered afresh.
-    pub fn switch_slot(&mut self, p: &mut Parked) {
-        if self.filter.installed.is_some() {
+    pub fn switch_slot(&mut self, p: &mut Slot) {
+        if self.slot.filter.installed.is_some() {
             self.unfilter_rows();
         }
         self.filter_reset();
@@ -490,22 +463,22 @@ impl App {
         self.map_reset();
         if self.active != Some(view) {
             // A rescan of the view on screen keeps its marks; another view brings back the ones it was let go with.
-            self.basket = self.stash.remove(&view).unwrap_or_default();
+            self.slot.basket = self.stash.remove(&view).unwrap_or_default();
             self.basket_rev += 1;
         }
         self.active = Some(view);
-        self.tree = None;
-        self.model = None;
-        self.scroll = 0;
-        self.summary.clear();
+        self.slot.tree = None;
+        self.slot.model = None;
+        self.slot.scroll = 0;
+        self.slot.summary.clear();
         self.set_live(LiveStatus::Off);
-        self.refreshing = false;
-        self.preview_paused = false;
-        self.scan = Scan::Running { view, dirs: 0, files: 0, bytes: 0 };
+        self.slot.refreshing = false;
+        self.slot.preview_paused = false;
+        self.slot.scan = Scan::Running { view, dirs: 0, files: 0, bytes: 0 };
     }
 
     pub fn progress(&mut self, d: u64, f: u64, b: u64) {
-        if let Scan::Running { dirs, files, bytes, .. } = &mut self.scan {
+        if let Scan::Running { dirs, files, bytes, .. } = &mut self.slot.scan {
             (*dirs, *files, *bytes) = (d, f, b);
         }
     }
@@ -520,25 +493,25 @@ impl App {
             model.expand(&tree, r);
             model.select(r);
         }
-        self.tree = Some(tree);
-        self.model = Some(model);
-        self.scroll = 0;
-        self.summary = summary;
-        self.scan = Scan::Idle;
-        self.preview_paused = false;
+        self.slot.tree = Some(tree);
+        self.slot.model = Some(model);
+        self.slot.scroll = 0;
+        self.slot.summary = summary;
+        self.slot.scan = Scan::Idle;
+        self.slot.preview_paused = false;
         self.set_live(LiveStatus::Off);
     }
 
-    /// The preview applier just created `self.tree` or dropped it (a scanner fell back to
+    /// The preview applier just created `self.slot.tree` or dropped it (a scanner fell back to
     /// another): build the rows for the tree, or show nothing. The scan state is untouched, so
     /// the progress line keeps counting.
     pub fn preview_installed(&mut self) {
         self.filter_reset();
         self.map_reset();
-        self.scroll = 0;
-        self.model = None;
+        self.slot.scroll = 0;
+        self.slot.model = None;
         let key = self.kind().sort_key(self.sort.0);
-        let Some(tree) = &mut self.tree else { return };
+        let Some(tree) = &mut self.slot.tree else { return };
         tree.take_touched(); // the model is built from the tree as it is now
         let mut model = RowModel::new(tree);
         model.set_sort(tree, key, self.sort.1);
@@ -546,30 +519,30 @@ impl App {
             model.expand(tree, r);
             model.select(r);
         }
-        self.model = Some(model);
+        self.slot.model = Some(model);
     }
 
     /// Replaces the tree with a rescanned one, keeping the sort, the expanded folders and the
     /// selection (by path) and where it sits on screen.
     pub fn swap_tree(&mut self, tree: Tree, summary: String) {
         self.basket_rev += 1; // the marks are counted against the new tree
-        if self.filter.installed.is_some() {
+        if self.slot.filter.installed.is_some() {
             self.unfilter_rows();
         }
-        let kept = match (&self.tree, &self.model) {
-            (Some(t), Some(m)) => Some(Snapshot::take(t, m, self.scroll)),
+        let kept = match (&self.slot.tree, &self.slot.model) {
+            (Some(t), Some(m)) => Some(Snapshot::take(t, m, self.slot.scroll)),
             _ => None,
         };
         self.map_reset();
         let Some(snap) = kept else { return self.finish_scan(tree, summary) };
         let (model, scroll) = snap.apply(&tree, self.kind().sort_key(self.sort.0), self.sort.1, self.layout.rows_visible());
-        self.tree = Some(tree);
-        self.model = Some(model);
-        self.scroll = scroll;
-        self.summary = summary;
-        self.refreshing = false;
-        self.scan = Scan::Idle;
-        self.preview_paused = false;
+        self.slot.tree = Some(tree);
+        self.slot.model = Some(model);
+        self.slot.scroll = scroll;
+        self.slot.summary = summary;
+        self.slot.refreshing = false;
+        self.slot.scan = Scan::Idle;
+        self.slot.preview_paused = false;
         self.filter_reset();
         self.set_live(LiveStatus::Off);
     }
@@ -577,8 +550,8 @@ impl App {
     /// Brings the rows up to date after the tree changed in place.
     pub fn refresh_rows(&mut self) {
         self.filter_live();
-        if let (Some(t), Some(m)) = (&mut self.tree, &mut self.model) {
-            let s = m.refresh(t, self.scroll);
+        if let (Some(t), Some(m)) = (&mut self.slot.tree, &mut self.slot.model) {
+            let s = m.refresh(t, self.slot.scroll);
             self.set_scroll(s);
         }
         self.map_dirty = true;
@@ -586,50 +559,50 @@ impl App {
 
     pub fn set_live(&mut self, live: LiveStatus) {
         self.layout = self.layout.with_banner(matches!(live, LiveStatus::Stale(_)));
-        self.live = live;
-        self.set_scroll(self.scroll);
+        self.slot.live = live;
+        self.set_scroll(self.slot.scroll);
     }
 
     /// Records the clock time of the last change applied by live updates.
     pub fn live_changed(&mut self, at: String) {
-        if let LiveStatus::On { last } = &mut self.live {
+        if let LiveStatus::On { last } = &mut self.slot.live {
             *last = Some(at);
         }
     }
 
     /// A scan is in flight (a first scan, or a background rescan).
     pub fn cancelable(&self) -> bool {
-        self.refreshing || matches!(self.scan, Scan::Running { .. })
+        self.slot.refreshing || matches!(self.slot.scan, Scan::Running { .. })
     }
 
     /// The user cancelled the scan in flight. A first scan leaves no tree; a background rescan
     /// leaves the old one on screen.
     pub fn cancel_scan(&mut self) {
-        if matches!(self.scan, Scan::Running { .. }) {
-            self.tree = None;
-            self.model = None;
-            self.preview_paused = false;
-            self.scan = Scan::Cancelled;
+        if matches!(self.slot.scan, Scan::Running { .. }) {
+            self.slot.tree = None;
+            self.slot.model = None;
+            self.slot.preview_paused = false;
+            self.slot.scan = Scan::Cancelled;
             self.map_reset();
         }
-        self.refreshing = false;
+        self.slot.refreshing = false;
     }
 
     pub fn fail_scan(&mut self, msg: String) {
-        self.tree = None;
-        self.model = None;
-        self.preview_paused = false;
-        self.scan = Scan::Failed(msg);
+        self.slot.tree = None;
+        self.slot.model = None;
+        self.slot.preview_paused = false;
+        self.slot.scan = Scan::Failed(msg);
         self.map_reset();
     }
 
     fn total_rows(&self) -> usize {
-        self.model.as_ref().map_or(0, |m| m.rows().len())
+        self.slot.model.as_ref().map_or(0, |m| m.rows().len())
     }
 
     /// The scrollbar thumb, if the rows overflow.
     fn thumb(&self) -> Option<Rect> {
-        self.layout.thumb(self.total_rows(), self.scroll)
+        self.layout.thumb(self.total_rows(), self.slot.scroll)
     }
 
     fn max_scroll(&self) -> usize {
@@ -637,13 +610,13 @@ impl App {
     }
 
     fn set_scroll(&mut self, s: usize) {
-        self.scroll = s.min(self.max_scroll());
+        self.slot.scroll = s.min(self.max_scroll());
     }
 
     /// The folder whose icon is at x on visible row `i`, if `x` is over that icon and the folder can expand.
     fn icon_at(&self, i: usize, x: f32) -> Option<NodeId> {
-        let (t, m) = (self.tree.as_ref()?, self.model.as_ref()?);
-        let row = m.rows().get(self.scroll + i)?;
+        let (t, m) = (self.slot.tree.as_ref()?, self.slot.model.as_ref()?);
+        let row = m.rows().get(self.slot.scroll + i)?;
         let left = self.layout.column(0).0 + 8.0 + row.depth as f32 * INDENT;
         (x >= left && x < left + 16.0 && m.is_expandable(t, row.id)).then_some(row.id)
     }
@@ -685,7 +658,7 @@ impl App {
                 }
             }
             ButtonTip::Metric => {
-                let _ = write!(out, "The map and the first column weigh processes by {}: {}; click for the next", metric_label(self.proc_metric), metric_help(self.proc_metric));
+                let _ = write!(out, "The map and the first column weigh processes by {}: {}; click for the next", metric_label(self.slot.proc_metric), metric_help(self.slot.proc_metric));
             }
         }
     }
@@ -705,14 +678,14 @@ impl App {
             return Some(TipKey::Area(bar));
         }
         let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.views.len()), Hit::Map))?)?;
-        let tree = self.tree.as_ref()?;
+        let tree = self.slot.tree.as_ref()?;
         if self.kind() == ViewKind::Processes { self.process_tip(tree, t, out) } else { tile_tip(tree, t, self.map_now, out) }
         Some(TipKey::Tile(t.node, t.kind))
     }
 
     /// A map tile of the Processes view: name and pid, the numbers, the executable and when it started.
     fn process_tip(&self, tree: &Tree, t: &Tile, out: &mut String) {
-        let (metric, size) = (metric_noun(self.proc_metric), self.kind().size_text(self.proc_metric, t.bytes));
+        let (metric, size) = (metric_noun(self.slot.proc_metric), self.kind().size_text(self.slot.proc_metric, t.bytes));
         if t.kind == Kind::Rest {
             // A parent whose own size is under the cutoff is merged here too, with no Own tile of its own.
             let own = tree.size[t.node] > 0 && !self.map_tiles.iter().any(|o| o.kind == Kind::Own && o.node == t.node);
@@ -737,7 +710,7 @@ impl App {
         }
         let scope = if tree.flags[t.node].contains(NodeFlags::DIR) { "this and its children" } else { "this process" };
         let _ = write!(out, "{name}  (PID {pid})\n{size} {metric} in {scope}; own CPU {}, I/O {}", fmt::tenths(cpu), fmt::rate(io));
-        if let Some(info) = self.proc_info.get(&(pid as u32)) {
+        if let Some(info) = self.slot.proc_info.get(&(pid as u32)) {
             if let Some(path) = &info.path {
                 out.push('\n');
                 out.push_str(path);
@@ -752,16 +725,16 @@ impl App {
     /// The Processes status line: how many processes, and what the map's metric adds up to over all of them (so the
     /// total says what it counts, and only Private bytes can honestly be set beside the machine's RAM).
     fn write_process_status(&self, out: &mut String) -> bool {
-        let Some(tree) = self.tree.as_ref() else { return false };
+        let Some(tree) = self.slot.tree.as_ref() else { return false };
         let Some(&root) = tree.roots.first() else { return false };
         let total = tree.subtree_size[root];
-        let _ = write!(out, "{}, {} {}", fmt::noun(self.proc_info.len() as u64, "process", "processes"), self.kind().size_text(self.proc_metric, total), metric_noun(self.proc_metric));
+        let _ = write!(out, "{}, {} {}", fmt::noun(self.slot.proc_info.len() as u64, "process", "processes"), self.kind().size_text(self.slot.proc_metric, total), metric_noun(self.slot.proc_metric));
         true
     }
 
     /// The Processes view took a new snapshot: the facts about each process and the chip's memory.
     pub fn set_procs(&mut self, view: usize, info: HashMap<u32, ProcInfo>, ram: (u64, u64)) {
-        self.proc_info = info;
+        self.slot.proc_info = info;
         if let Some(d) = self.views.get_mut(view) {
             (d.total, d.free) = ram;
         }
@@ -775,10 +748,10 @@ impl App {
     /// (to reveal and copy). A process offers its executable; none when that is unknown.
     /// The last element is whether to offer "Who is using this": a file on a disk.
     pub fn menu_target(&self, id: NodeId) -> Option<(String, String, MarkState, bool)> {
-        let tree = self.tree.as_ref()?;
+        let tree = self.slot.tree.as_ref()?;
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx())?[2] as u32;
-            let path = self.proc_info.get(&pid)?.path.clone()?;
+            let path = self.slot.proc_info.get(&pid)?.path.clone()?;
             return Some((String::new(), path, self.mark_state(id), false));
         }
         let file = !tree.flags[id].contains(NodeFlags::DIR);
@@ -900,7 +873,7 @@ impl App {
     }
 
     fn row_at(&self, i: usize) -> Option<NodeId> {
-        self.model.as_ref()?.rows().get(self.scroll + i).map(|r| r.id)
+        self.slot.model.as_ref()?.rows().get(self.slot.scroll + i).map(|r| r.id)
     }
 
     pub fn handle(&mut self, input: Input) -> Effect {
@@ -919,35 +892,35 @@ impl App {
         match input {
             Input::Resize(w, h) => {
                 (self.layout.w, self.layout.h) = (w, h);
-                self.set_scroll(self.scroll);
+                self.set_scroll(self.slot.scroll);
             }
             Input::Wheel(rows, x, y) if self.layout.held && self.layout.held_pane().contains(x, y) => self.held_scroll(rows),
-            Input::Wheel(rows, ..) => self.set_scroll((self.scroll as i64 + rows as i64).max(0) as usize),
+            Input::Wheel(rows, ..) => self.set_scroll((self.slot.scroll as i64 + rows as i64).max(0) as usize),
             Input::Key(k) => {
-                if self.filter.ui.focus
+                if self.slot.filter.ui.focus
                     && let Some(e) = filter::edit_for_key(k)
                 {
                     return self.filter_edit(e);
                 }
-                if let (Some(t), Some(m)) = (&self.tree, &mut self.model) {
+                if let (Some(t), Some(m)) = (&self.slot.tree, &mut self.slot.model) {
                     m.handle_key(t, k, self.layout.rows_visible().max(1));
-                    let s = m.scroll_to_selected(self.scroll, self.layout.rows_visible());
+                    let s = m.scroll_to_selected(self.slot.scroll, self.layout.rows_visible());
                     self.set_scroll(s);
                 }
             }
-            Input::Edit(Edit::Delete) if !self.filter.ui.focus => self.toggle_mark_selected(),
+            Input::Edit(Edit::Delete) if !self.slot.filter.ui.focus => self.toggle_mark_selected(),
             Input::Edit(e) => return self.filter_edit(e),
             Input::Find => {
-                self.filter.ui.focus = true;
-                self.filter.ui.edit(Edit::SelectAll);
+                self.slot.filter.ui.focus = true;
+                self.slot.filter.ui.edit(Edit::SelectAll);
             }
             Input::Escape => {
-                let used = self.filter.ui.focus || !self.filter.ui.text.is_empty();
+                let used = self.slot.filter.ui.focus || !self.slot.filter.ui.text.is_empty();
                 let e = self.filter_escape();
                 return if !used && self.cancelable() { Effect::Cancel } else { e };
             }
             Input::Enter => self.filter_enter(),
-            Input::Tab => self.filter.ui.focus = !self.filter.ui.focus,
+            Input::Tab => self.slot.filter.ui.focus = !self.slot.filter.ui.focus,
             Input::Hover(x, y) => {
                 self.hover = match self.layout.hit(x, y, self.views.len()) {
                     Hit::Row(i) if self.row_at(i).is_some() => Some(i),
@@ -968,7 +941,7 @@ impl App {
             Input::DoubleClick(x, y) => {
                 if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map) {
                     if let Some(id) = treemap::hit(&self.map_tiles, x, y).and_then(|i| self.select_from_map(i))
-                        && self.tree.as_ref().is_some_and(|t| t.flags[id].contains(NodeFlags::DIR))
+                        && self.slot.tree.as_ref().is_some_and(|t| t.flags[id].contains(NodeFlags::DIR))
                     {
                         self.map_root = Some(id);
                         self.map_dirty = true;
@@ -981,15 +954,15 @@ impl App {
                 if self.icon_at(i, x).is_some() {
                     return self.click(x, y);
                 }
-                if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
+                if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.slot.tree, &mut self.slot.model) {
                     m.select(id);
                     m.toggle(t, id);
-                    self.set_scroll(self.scroll);
+                    self.set_scroll(self.slot.scroll);
                 }
             }
             Input::RightClick(x, y) => {
                 if let Hit::Row(i) = self.layout.hit(x, y, self.views.len())
-                    && let (Some(id), Some(m)) = (self.row_at(i), &mut self.model)
+                    && let (Some(id), Some(m)) = (self.row_at(i), &mut self.slot.model)
                 {
                     m.select(id);
                     return Effect::Menu(id);
@@ -1024,12 +997,12 @@ impl App {
     /// (`select_from_map` records it in `map_seen`). Runs from `update_map`, so every way the selection can change
     /// (mouse, keys, the filter, a rescan) is picked up before the next paint without hooking each one.
     fn follow_selection(&mut self) {
-        let sel = self.model.as_ref().and_then(|m| m.selected());
-        if sel == self.map_seen && self.map_root.is_some() == self.tree.is_some() {
+        let sel = self.slot.model.as_ref().and_then(|m| m.selected());
+        if sel == self.map_seen && self.map_root.is_some() == self.slot.tree.is_some() {
             return;
         }
         self.map_seen = sel;
-        self.map_root = self.tree.as_ref().and_then(|t| treemap::root_for(t, sel));
+        self.map_root = self.slot.tree.as_ref().and_then(|t| treemap::root_for(t, sel));
         self.map_dirty = true;
     }
 
@@ -1041,27 +1014,27 @@ impl App {
         let hit = self.layout.hit(x, y, self.views.len());
         match hit {
             Hit::FilterBox => {
-                self.filter.ui.focus = true;
+                self.slot.filter.ui.focus = true;
                 return Effect::None;
             }
             Hit::FilterRegex => {
-                self.filter.ui.focus = true;
-                self.filter.ui.regex = !self.filter.ui.regex;
+                self.slot.filter.ui.focus = true;
+                self.slot.filter.ui.regex = !self.slot.filter.ui.regex;
                 return self.filter_changed();
             }
             Hit::FilterClear => {
-                self.filter.ui.focus = true;
-                return if self.filter.ui.clear() { self.filter_changed() } else { Effect::None };
+                self.slot.filter.ui.focus = true;
+                return if self.slot.filter.ui.clear() { self.filter_changed() } else { Effect::None };
             }
-            _ => self.filter.ui.focus = false,
+            _ => self.slot.filter.ui.focus = false,
         }
         match hit {
             Hit::Cancel => return Effect::Cancel,
             Hit::Basket => self.ask_delete(),
             // Picking another view mid-scan cancels the scan in flight; the same view does nothing.
-            Hit::Chip(i) if !(matches!(self.scan, Scan::Running { .. }) && self.active == Some(i)) => return Effect::Scan(i),
+            Hit::Chip(i) if !(matches!(self.slot.scan, Scan::Running { .. }) && self.active == Some(i)) => return Effect::Scan(i),
             Hit::Rescan => {
-                if let Some(i) = self.active.filter(|_| !self.refreshing && !matches!(self.scan, Scan::Running { .. })) {
+                if let Some(i) = self.active.filter(|_| !self.slot.refreshing && !matches!(self.slot.scan, Scan::Running { .. })) {
                     return Effect::Rescan(i);
                 }
             }
@@ -1069,14 +1042,14 @@ impl App {
                 let desc = if self.sort.0 == c { !self.sort.1 } else { c != 0 };
                 self.sort = (c, desc);
                 let kind = self.kind();
-                if let (Some(t), Some(m)) = (&self.tree, &mut self.model) {
+                if let (Some(t), Some(m)) = (&self.slot.tree, &mut self.slot.model) {
                     m.set_sort(t, kind.sort_key(c), desc);
-                    self.scroll = 0;
+                    self.slot.scroll = 0;
                 }
             }
             Hit::Divider(c) => self.col_drag = Some((c, x, self.layout.col_w[c - 1])),
             Hit::MapButton => self.layout.map_on = !self.layout.map_on,
-            Hit::MetricButton => return Effect::Metric(self.proc_metric.next()),
+            Hit::MetricButton => return Effect::Metric(self.slot.proc_metric.next()),
             Hit::MapDivider => self.map_drag = Some((x, self.layout.map_w)),
             Hit::Map => {
                 if let Some(i) = treemap::hit(&self.map_tiles, x, y) {
@@ -1086,12 +1059,12 @@ impl App {
             Hit::Row(i) => {
                 let folder = self.icon_at(i, x);
                 let mut again = false;
-                if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.tree, &mut self.model) {
+                if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.slot.tree, &mut self.slot.model) {
                     again = folder.is_none() && m.selected() == Some(id);
                     m.select(id);
                     if folder.is_some() {
                         m.toggle(t, id);
-                        self.set_scroll(self.scroll);
+                        self.set_scroll(self.slot.scroll);
                     }
                 }
                 if again {
@@ -1100,11 +1073,11 @@ impl App {
             }
             Hit::Scrollbar => {
                 let total = self.total_rows();
-                match self.layout.thumb(total, self.scroll) {
+                match self.layout.thumb(total, self.slot.scroll) {
                     Some(t) if y >= t.y && y < t.y + t.h => self.grab = Some(y - t.y),
                     Some(t) => {
                         let page = self.layout.rows_visible().max(1);
-                        self.set_scroll(if y < t.y { self.scroll.saturating_sub(page) } else { self.scroll + page });
+                        self.set_scroll(if y < t.y { self.slot.scroll.saturating_sub(page) } else { self.slot.scroll + page });
                     }
                     None => {}
                 }
@@ -1134,7 +1107,7 @@ impl App {
     }
 
     fn write_message(&self, out: &mut String) {
-        match &self.scan {
+        match &self.slot.scan {
             Scan::Idle => out.push_str("No drive selected\nSelect a drive above to scan it."),
             Scan::Running { view, .. } if self.views[*view].kind == ViewKind::Processes => out.push_str("Reading processes\u{2026}"),
             Scan::Running { view, dirs, files, bytes } => {
@@ -1159,10 +1132,10 @@ impl App {
 
     /// Writes [`App::selection`]; false (writing nothing) when no row is selected.
     fn write_selection(&self, full: bool, out: &mut String) -> bool {
-        let (Some(tree), Some(id)) = (self.tree.as_ref(), self.model.as_ref().and_then(|m| m.selected())) else { return false };
+        let (Some(tree), Some(id)) = (self.slot.tree.as_ref(), self.slot.model.as_ref().and_then(|m| m.selected())) else { return false };
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]);
-            let _ = write!(out, "{}  (PID {pid})  {}", fmt::node_name(tree, id), self.kind().size_text(self.proc_metric, tree.subtree_size[id]));
+            let _ = write!(out, "{}  (PID {pid})  {}", fmt::node_name(tree, id), self.kind().size_text(self.slot.proc_metric, tree.subtree_size[id]));
             return true;
         }
         if full {
@@ -1216,10 +1189,10 @@ impl App {
             }
         }
         sep(out);
-        match &self.scan {
+        match &self.slot.scan {
             Scan::Running { .. } => {
                 self.write_message(out);
-                if self.preview_paused {
+                if self.slot.preview_paused {
                     out.push_str("   (preview paused)");
                 }
             }
@@ -1229,10 +1202,10 @@ impl App {
                     self.write_message(out);
                 }
             }
-            _ if self.summary.is_empty() => self.write_message(out),
-            _ => out.push_str(&self.summary),
+            _ if self.slot.summary.is_empty() => self.write_message(out),
+            _ => out.push_str(&self.slot.summary),
         }
-        match &self.live {
+        match &self.slot.live {
             LiveStatus::Off => {}
             LiveStatus::On { last: None } | LiveStatus::On { last: Some(_) } if !full => {
                 sep(out);
@@ -1251,14 +1224,14 @@ impl App {
                 out.push_str("live updates stopped");
             }
         }
-        if self.refreshing {
+        if self.slot.refreshing {
             sep(out);
             out.push_str("refreshing\u{2026}");
         }
     }
 
     fn banner(&self) -> Option<String> {
-        match &self.live {
+        match &self.slot.live {
             LiveStatus::Stale(why) => Some(format!("live updates stopped: {why}; the tree may be out of date")),
             _ => None,
         }
@@ -1268,7 +1241,7 @@ impl App {
     /// has already counted more than the drive reports used (hard links, placeholders and compressed
     /// files can make it, and then the used space says nothing about what is left).
     pub fn unscanned(&self) -> Option<u64> {
-        let Scan::Running { view, bytes, .. } = self.scan else { return None };
+        let Scan::Running { view, bytes, .. } = self.slot.scan else { return None };
         let d = self.views.get(view)?;
         d.total.saturating_sub(d.free).checked_sub(bytes)
     }
@@ -1280,16 +1253,16 @@ impl App {
         let held = self.held_text();
         let selection = self.selection(true).unwrap_or_default();
         let basket_label = self.basket_label();
-        let running = matches!(self.scan, Scan::Running { .. });
+        let running = matches!(self.slot.scan, Scan::Running { .. });
         let count = self.filter_count();
-        let view = match (&self.tree, &self.model) {
-            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.scroll, partial: matches!(self.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher(), basket: &self.basket }),
+        let view = match (&self.slot.tree, &self.slot.model) {
+            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.slot.scroll, partial: matches!(self.slot.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher(), basket: &self.slot.basket }),
             _ => None,
         };
         let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
         f(&Scene {
             layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes).with_held(self.kind() == ViewKind::Processes),
-            metric: self.proc_metric,
+            metric: self.slot.proc_metric,
             held: held.as_ref().map(|(h, l)| (h.as_str(), *l)),
             theme: Theme::with_accent(dark, self.accent),
             chips: &chips,
@@ -1304,7 +1277,7 @@ impl App {
             view,
             // The status bar already says what a running scan has found.
             message: if running { "" } else { &message },
-            loading: running && self.tree.is_none(),
+            loading: running && self.slot.tree.is_none(),
             status: &status,
             notice: &self.notice,
             notice_ok: self.notice_ok,
@@ -1399,13 +1372,13 @@ mod tests {
             let b = a.layout.with_metric(true).metric_button();
             a.handle(Input::Click(b.x + 5.0, b.y + 5.0))
         };
-        assert_eq!(a.proc_metric, Metric::Memory);
+        assert_eq!(a.slot.proc_metric, Metric::Memory);
         assert_eq!(click(&mut a), Effect::Metric(Metric::Private));
-        a.proc_metric = Metric::Private; // the window applies the effect
+        a.slot.proc_metric = Metric::Private; // the window applies the effect
         assert_eq!(click(&mut a), Effect::Metric(Metric::Cpu));
-        a.proc_metric = Metric::Cpu; // the window applies the effect
+        a.slot.proc_metric = Metric::Cpu; // the window applies the effect
         assert_eq!(click(&mut a), Effect::Metric(Metric::Io));
-        a.proc_metric = Metric::Io;
+        a.slot.proc_metric = Metric::Io;
         assert_eq!(click(&mut a), Effect::Metric(Metric::Memory));
         assert_eq!(ViewKind::Processes.titles(Metric::Io)[1], "I/O");
         assert_eq!(ViewKind::Processes.titles(Metric::Private)[1], "Private");
@@ -1427,8 +1400,8 @@ mod tests {
     #[test]
     fn who_is_using_this_is_offered_for_a_file_on_a_drive_only() {
         let a = scanned();
-        let tree = a.tree.as_ref().unwrap();
-        let dir = a.model.as_ref().unwrap().rows()[0].id;
+        let tree = a.slot.tree.as_ref().unwrap();
+        let dir = a.slot.model.as_ref().unwrap().rows()[0].id;
         let mut file = dir;
         while tree.flags[file].contains(NodeFlags::DIR) {
             file = tree.children(file).next().expect("every folder in the tree has something in it");
@@ -1440,7 +1413,7 @@ mod tests {
     #[test]
     fn selecting_a_process_requests_its_files_once_it_settles() {
         let (mut a, id) = process_app();
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         assert!(a.held_sync(), "the selection is a process");
         assert!(!a.held_sync(), "the same selection again changes nothing");
         assert_eq!(a.held_request().map(|r| r.1), Some(77));
@@ -1451,18 +1424,18 @@ mod tests {
     #[test]
     fn a_lookup_in_flight_survives_slot_swaps_and_epochs_never_repeat() {
         let (mut a, id) = process_app();
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
         let (first, _) = a.held_request().unwrap();
-        let mut other = Parked::default();
+        let mut other = Slot::default();
         a.swap_slot(&mut other); // a parked view's journal event swaps a slot in and out
         a.swap_slot(&mut other);
         a.held_done(first, Ok(HandleList { files: vec!["C:/x".into()], skipped: 0 }));
         assert!(a.held_text().unwrap().0.ends_with("1 file"), "{:?}", a.held_text());
-        let root = a.model.as_ref().unwrap().rows()[0].id;
-        a.model.as_mut().unwrap().select(root);
+        let root = a.slot.model.as_ref().unwrap().rows()[0].id;
+        a.slot.model.as_mut().unwrap().select(root);
         a.held_sync();
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
         let (second, _) = a.held_request().unwrap();
         assert!(second > first, "{second} after {first}");
@@ -1471,11 +1444,11 @@ mod tests {
     #[test]
     fn a_stale_result_for_a_previous_selection_is_ignored() {
         let (mut a, id) = process_app();
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
         let (old, _) = a.held_request().unwrap();
-        let root = a.model.as_ref().unwrap().rows()[0].id;
-        a.model.as_mut().unwrap().select(root); // the root: pid 0, no pane
+        let root = a.slot.model.as_ref().unwrap().rows()[0].id;
+        a.slot.model.as_mut().unwrap().select(root); // the root: pid 0, no pane
         assert!(!a.held_sync());
         assert!(a.held_text().is_none());
         a.held_done(old, Ok(HandleList { files: vec!["C:/x".into()], skipped: 0 }));
@@ -1485,13 +1458,13 @@ mod tests {
     #[test]
     fn the_pane_reports_files_denied_and_overflow() {
         let (mut a, id) = process_app();
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
         let (g, _) = a.held_request().unwrap();
         a.held_done(g, Err(HandleError::Denied));
         assert!(a.held_text().unwrap().0.contains("run as administrator"));
         let (mut a, id) = process_app();
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
         let (g, _) = a.held_request().unwrap();
         let files: Vec<String> = (0..9).map(|i| format!("C:/f{i}")).collect();
@@ -1504,7 +1477,7 @@ mod tests {
         let (px, py) = (pane.x + 10.0, pane.y + 10.0);
         a.handle(Input::Wheel(2, px, py));
         let (head, lines) = a.held_text().unwrap();
-        assert_eq!((head.contains("(3\u{2013}8)"), lines[0].as_str(), a.scroll), (true, "C:/f2", 0), "{head}");
+        assert_eq!((head.contains("(3\u{2013}8)"), lines[0].as_str(), a.slot.scroll), (true, "C:/f2", 0), "{head}");
         a.handle(Input::Wheel(100, px, py));
         assert_eq!(a.held_text().unwrap().1[0], "C:/f3", "clamped so the last line is the last file");
         a.handle(Input::Wheel(-100, px, py));
@@ -1517,7 +1490,7 @@ mod tests {
         assert_eq!(a.held.scroll, 0, "a new selection starts at the top");
         // A process with nothing open says so in its title and has no lines.
         let (mut a, id) = process_app();
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
         let (g, _) = a.held_request().unwrap();
         a.held_done(g, Ok(HandleList { files: Vec::new(), skipped: 0 }));
@@ -1535,7 +1508,7 @@ mod tests {
     fn held_ready(files: &[&str]) -> App {
         let (mut a, id) = process_app();
         snapshot_with(&mut a, 100);
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
         let (epoch, _) = a.held_request().unwrap();
         a.held_done(epoch, Ok(HandleList { files: files.iter().map(|s| s.to_string()).collect(), skipped: 0 }));
@@ -1610,8 +1583,8 @@ mod tests {
         let mut b = held_ready(&["C:/x"]);
         b.held_mark_stale();
         let (e2, _) = b.held_take_refresh().unwrap();
-        let root = b.model.as_ref().unwrap().rows()[0].id;
-        b.model.as_mut().unwrap().select(root);
+        let root = b.slot.model.as_ref().unwrap().rows()[0].id;
+        b.slot.model.as_mut().unwrap().select(root);
         b.held_sync();
         b.held_done(e2, Ok(HandleList { files: vec!["C:/y".into()], skipped: 0 }));
         assert!(b.held_text().is_none(), "no pane for the root, and the old answer did not revive one");
@@ -1621,7 +1594,7 @@ mod tests {
     fn a_denied_or_failed_lookup_is_not_refreshed() {
         let (mut a, id) = process_app();
         snapshot_with(&mut a, 100);
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
         let (epoch, _) = a.held_request().unwrap();
         a.held_done(epoch, Err(HandleError::Denied));
@@ -1636,7 +1609,7 @@ mod tests {
     #[test]
     fn a_process_tip_names_its_metric_and_its_scope() {
         let (a, id) = process_app(); // a leaf: no children
-        let tree = a.tree.as_ref().unwrap();
+        let tree = a.slot.tree.as_ref().unwrap();
         let own = Tile { node: id, rect: plumb_core::Rect::default(), depth: 0, class: Class::Other, kind: Kind::Frame, bytes: 4096, count: 1, mtime: None };
         let tip = proc_tip_str(&a, tree, &own);
         assert!(tip.contains("memory in this process; own CPU"), "{tip}");
@@ -1650,7 +1623,7 @@ mod tests {
     fn the_rest_tile_of_a_process_view_counts_processes_and_names_a_merged_own_size() {
         let (mut a, id) = process_app(); // ping.exe: 4096 own bytes under the root
         let rest = |count| Tile { node: id, rect: plumb_core::Rect::default(), depth: 0, class: Class::Other, kind: Kind::Rest, bytes: 4096, count, mtime: None };
-        let tree = a.tree.take().unwrap();
+        let tree = a.slot.tree.take().unwrap();
         let tip = |a: &App, t: &Tile| proc_tip_str(a, &tree, t);
         assert_eq!(tip(&a, &rest(1)), format!("its own memory, {}", fmt::size(4096)), "only its own size merged");
         assert_eq!(tip(&a, &rest(3)), format!("2 smaller processes and its own memory, {}", fmt::size(4096)));
@@ -1676,7 +1649,7 @@ mod tests {
     #[test]
     fn a_process_row_names_its_pid_and_its_menu_acts_on_its_executable() {
         let (mut a, id) = process_app();
-        a.model.as_mut().unwrap().select(id);
+        a.slot.model.as_mut().unwrap().select(id);
         assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
         assert!(a.menu_target(id).is_none(), "no executable known: no menu");
         a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0 })]), (1, 1));
@@ -1766,29 +1739,29 @@ mod tests {
         assert_eq!(a.handle(Input::Click(b.x + 5.0, b.y + 5.0)), Effect::Cancel);
         assert_eq!(a.handle(Input::Escape), Effect::Cancel);
         // Esc that clears the filter does not cancel.
-        a.filter.ui.focus = true;
+        a.slot.filter.ui.focus = true;
         assert_ne!(a.handle(Input::Escape), Effect::Cancel);
         a.cancel_scan();
-        assert!(a.message().starts_with("Scan cancelled") && a.tree.is_none() && !a.cancelable());
+        assert!(a.message().starts_with("Scan cancelled") && a.slot.tree.is_none() && !a.cancelable());
         assert_eq!(a.handle(Input::Escape), Effect::None);
     }
 
     #[test]
     fn switching_drives_keeps_each_drives_tree_selection_and_scan_apart() {
         let mut a = scanned();
-        let sel = a.model.as_ref().and_then(|m| m.selected());
-        a.refreshing = true;
-        let mut away = Parked::default();
+        let sel = a.slot.model.as_ref().and_then(|m| m.selected());
+        a.slot.refreshing = true;
+        let mut away = Slot::default();
         a.switch_slot(&mut away);
-        assert!(a.tree.is_none() && a.model.is_none() && !a.cancelable() && !a.refreshing);
+        assert!(a.slot.tree.is_none() && a.slot.model.is_none() && !a.cancelable() && !a.slot.refreshing);
         assert!(away.has_tree());
         a.begin_scan(1);
-        assert!(matches!(a.scan, Scan::Running { view: 1, .. }) && a.cancelable());
-        let mut other = Parked::default();
+        assert!(matches!(a.slot.scan, Scan::Running { view: 1, .. }) && a.cancelable());
+        let mut other = Slot::default();
         a.switch_slot(&mut other); // the running scan goes away, then the first view comes back
         a.switch_slot(&mut away);
-        assert!(a.tree.is_some() && a.refreshing && a.cancelable());
-        assert_eq!(a.model.as_ref().and_then(|m| m.selected()), sel);
+        assert!(a.slot.tree.is_some() && a.slot.refreshing && a.cancelable());
+        assert_eq!(a.slot.model.as_ref().and_then(|m| m.selected()), sel);
         assert!(matches!(other.scan(), Scan::Running { view: 1, .. }) && !other.has_tree());
     }
 
@@ -1796,13 +1769,13 @@ mod tests {
     fn switching_drives_takes_the_filter_off_the_rows_and_refilters_the_other_drive() {
         let mut a = scanned();
         let all = a.total_rows();
-        a.filter.ui.text = "zzz".into();
+        a.slot.filter.ui.text = "zzz".into();
         a.filter_changed();
         let job = a.start_filter().expect("a run");
         let h = job.names.scan(&job.matcher, &job.cancel, job.generation).unwrap();
         a.filter_ready(job.generation, h);
         assert!(a.filter_installed());
-        let mut away = Parked::default();
+        let mut away = Slot::default();
         a.switch_slot(&mut away);
         assert!(!a.filter_installed() && a.filter_ui().text == "zzz");
         a.switch_slot(&mut away);
@@ -1813,10 +1786,10 @@ mod tests {
     #[test]
     fn cancelling_a_background_rescan_keeps_the_tree() {
         let mut a = scanned();
-        a.refreshing = true;
+        a.slot.refreshing = true;
         assert!(a.cancelable());
         a.cancel_scan();
-        assert!(a.tree.is_some() && !a.refreshing && matches!(a.scan, Scan::Idle));
+        assert!(a.slot.tree.is_some() && !a.slot.refreshing && matches!(a.slot.scan, Scan::Idle));
     }
 
     #[test]
@@ -1850,19 +1823,19 @@ mod tests {
     fn a_preview_tree_is_browsable_and_the_final_tree_keeps_the_view() {
         let mut a = app();
         a.begin_scan(0);
-        a.tree = Some(kary_builder(60, 3).finish().unwrap());
+        a.slot.tree = Some(kary_builder(60, 3).finish().unwrap());
         a.preview_installed();
-        assert!(matches!(a.scan, Scan::Running { .. }), "the scan is still running");
-        assert!(a.model.as_ref().unwrap().rows().len() > 1, "the root is expanded");
+        assert!(matches!(a.slot.scan, Scan::Running { .. }), "the scan is still running");
+        assert!(a.slot.model.as_ref().unwrap().rows().len() > 1, "the root is expanded");
         assert!(status_tail(&a).starts_with("Scanning"));
         // The user selects another row, then the exact tree (the same shape) arrives.
-        let second = a.model.as_ref().unwrap().rows()[1].id;
-        a.model.as_mut().unwrap().select(second);
-        let name = a.tree.as_ref().unwrap().path(second);
+        let second = a.slot.model.as_ref().unwrap().rows()[1].id;
+        a.slot.model.as_mut().unwrap().select(second);
+        let name = a.slot.tree.as_ref().unwrap().path(second);
         a.swap_tree(kary_builder(60, 3).finish().unwrap(), "done".into());
-        assert!(matches!(a.scan, Scan::Idle));
-        let sel = a.model.as_ref().unwrap().selected().unwrap();
-        assert_eq!(a.tree.as_ref().unwrap().path(sel), name, "the selection survives by path");
+        assert!(matches!(a.slot.scan, Scan::Idle));
+        let sel = a.slot.model.as_ref().unwrap().selected().unwrap();
+        assert_eq!(a.slot.tree.as_ref().unwrap().path(sel), name, "the selection survives by path");
         assert!(status_tail(&a).starts_with("done"));
     }
 
@@ -1870,59 +1843,59 @@ mod tests {
     fn a_failed_scan_drops_the_preview() {
         let mut a = app();
         a.begin_scan(0);
-        a.tree = Some(kary_builder(10, 2).finish().unwrap());
+        a.slot.tree = Some(kary_builder(10, 2).finish().unwrap());
         a.preview_installed();
         a.fail_scan("boom".into());
-        assert!(a.tree.is_none() && a.model.is_none());
+        assert!(a.slot.tree.is_none() && a.slot.model.is_none());
     }
 
     #[test]
     fn a_dropped_preview_tree_clears_the_view_but_not_the_scan() {
         let mut a = app();
         a.begin_scan(0);
-        a.tree = Some(kary_builder(10, 2).finish().unwrap());
+        a.slot.tree = Some(kary_builder(10, 2).finish().unwrap());
         a.preview_installed();
-        a.tree = None; // what the applier does on a Reset
+        a.slot.tree = None; // what the applier does on a Reset
         a.preview_installed();
-        assert!(a.model.is_none());
-        assert!(matches!(a.scan, Scan::Running { .. }));
+        assert!(a.slot.model.is_none());
+        assert!(matches!(a.slot.scan, Scan::Running { .. }));
     }
 
     #[test]
     fn finishing_a_scan_shows_an_expanded_root() {
         let a = scanned();
-        let m = a.model.as_ref().unwrap();
+        let m = a.slot.model.as_ref().unwrap();
         assert!(m.rows().len() > 1);
         assert_eq!(m.selected(), Some(m.rows()[0].id));
-        assert!(matches!(a.scan, Scan::Idle));
+        assert!(matches!(a.slot.scan, Scan::Idle));
     }
 
     #[test]
     fn click_selects_and_double_click_toggles() {
         let mut a = scanned();
-        let before = a.model.as_ref().unwrap().rows().len();
+        let before = a.slot.model.as_ref().unwrap().rows().len();
         a.handle(Input::Click(20.0, row_y(1)));
-        let id = a.model.as_ref().unwrap().rows()[1].id;
-        assert_eq!(a.model.as_ref().unwrap().selected(), Some(id));
+        let id = a.slot.model.as_ref().unwrap().rows()[1].id;
+        assert_eq!(a.slot.model.as_ref().unwrap().selected(), Some(id));
         a.handle(Input::DoubleClick(20.0, row_y(1)));
-        assert!(a.model.as_ref().unwrap().rows().len() > before);
+        assert!(a.slot.model.as_ref().unwrap().rows().len() > before);
         a.handle(Input::DoubleClick(20.0, row_y(1)));
-        assert_eq!(a.model.as_ref().unwrap().rows().len(), before);
+        assert_eq!(a.slot.model.as_ref().unwrap().rows().len(), before);
     }
 
     #[test]
     fn clicking_a_folders_icon_toggles_it_and_a_double_click_on_it_toggles_again() {
         let mut a = scanned();
-        let before = a.model.as_ref().unwrap().rows().len();
-        let depth = a.model.as_ref().unwrap().rows()[1].depth as f32;
+        let before = a.slot.model.as_ref().unwrap().rows().len();
+        let depth = a.slot.model.as_ref().unwrap().rows()[1].depth as f32;
         let icon_x = a.layout.column(0).0 + 8.0 + depth * INDENT + 4.0;
         a.handle(Input::Click(icon_x, row_y(1)));
-        let opened = a.model.as_ref().unwrap().rows().len();
+        let opened = a.slot.model.as_ref().unwrap().rows().len();
         assert!(opened > before, "one click on the icon opens the folder");
         a.handle(Input::DoubleClick(icon_x, row_y(1)));
-        assert_eq!(a.model.as_ref().unwrap().rows().len(), before, "the second press of a pair toggles again");
+        assert_eq!(a.slot.model.as_ref().unwrap().rows().len(), before, "the second press of a pair toggles again");
         a.handle(Input::Click(icon_x + 200.0, row_y(1)));
-        assert_eq!(a.model.as_ref().unwrap().rows().len(), before, "a click on the name only selects");
+        assert_eq!(a.slot.model.as_ref().unwrap().rows().len(), before, "a click on the name only selects");
     }
 
     #[test]
@@ -2027,37 +2000,37 @@ mod tests {
     #[test]
     fn right_click_selects_and_asks_for_a_menu() {
         let mut a = scanned();
-        let id = a.model.as_ref().unwrap().rows()[2].id;
+        let id = a.slot.model.as_ref().unwrap().rows()[2].id;
         assert_eq!(a.handle(Input::RightClick(20.0, row_y(2))), Effect::Menu(id));
-        assert_eq!(a.model.as_ref().unwrap().selected(), Some(id));
+        assert_eq!(a.slot.model.as_ref().unwrap().selected(), Some(id));
     }
 
     #[test]
     fn wheel_and_keys_keep_the_selection_visible_and_scroll_in_range() {
         let mut a = scanned();
-        let m = a.model.as_mut().unwrap();
-        let t = a.tree.as_ref().unwrap();
+        let m = a.slot.model.as_mut().unwrap();
+        let t = a.slot.tree.as_ref().unwrap();
         for _ in 0..8 {
             let r = m.rows().iter().find(|r| m.is_expandable(t, r.id) && !m.is_expanded(r.id)).map(|r| r.id);
             if let Some(r) = r { m.expand(t, r); }
         }
-        let n = a.model.as_ref().unwrap().rows().len();
+        let n = a.slot.model.as_ref().unwrap().rows().len();
         let vis = a.layout.rows_visible();
         assert!(n > vis, "need more rows than fit: {n} vs {vis}");
         a.handle(Input::Wheel(10_000, 5.0, 100.0));
-        assert_eq!(a.scroll, n - vis);
+        assert_eq!(a.slot.scroll, n - vis);
         a.handle(Input::Wheel(-10_000, 5.0, 100.0));
-        assert_eq!(a.scroll, 0);
+        assert_eq!(a.slot.scroll, 0);
         a.handle(Input::Key(Key::End));
-        assert_eq!(a.scroll, n - vis);
+        assert_eq!(a.slot.scroll, n - vis);
         a.handle(Input::Key(Key::Home));
-        assert_eq!(a.scroll, 0);
+        assert_eq!(a.slot.scroll, 0);
     }
 
     #[test]
     fn header_click_sorts_and_second_click_reverses() {
         let mut a = scanned();
-        let name = |a: &App, i: usize| a.tree.as_ref().unwrap().name_string(a.model.as_ref().unwrap().rows()[i].id);
+        let name = |a: &App, i: usize| a.slot.tree.as_ref().unwrap().name_string(a.slot.model.as_ref().unwrap().rows()[i].id);
         let hy = PICKER_H + 2.0;
         assert_eq!(a.sort(), (1, true)); // default: Size descending
         a.handle(Input::Click(5.0, hy));
@@ -2071,8 +2044,8 @@ mod tests {
     #[test]
     fn dragging_the_thumb_scrolls() {
         let mut a = scanned();
-        let t = a.tree.as_ref().unwrap();
-        let m = a.model.as_mut().unwrap();
+        let t = a.slot.tree.as_ref().unwrap();
+        let m = a.slot.model.as_mut().unwrap();
         for _ in 0..8 {
             let r = m.rows().iter().find(|r| m.is_expandable(t, r.id) && !m.is_expanded(r.id)).map(|r| r.id);
             if let Some(r) = r { m.expand(t, r); }
@@ -2084,14 +2057,14 @@ mod tests {
         a.handle(Input::Click(795.0, th.y + 2.0));
         assert!(a.with_scene(false, |s| s.pressed), "and is pressed while dragged");
         a.handle(Input::Drag(795.0, th.y + 2.0 + 100.0));
-        assert!(a.scroll > 0);
+        assert!(a.slot.scroll > 0);
         a.handle(Input::Release);
         assert!(a.with_scene(false, |s| !s.pressed));
         a.handle(Input::Hover(5.0, th.y));
         assert_eq!(a.with_scene(false, |s| s.hot), None, "off the thumb it is not hot");
-        let s = a.scroll;
+        let s = a.slot.scroll;
         a.handle(Input::Drag(795.0, th.y + 300.0));
-        assert_eq!(a.scroll, s);
+        assert_eq!(a.slot.scroll, s);
     }
 
     #[test]
@@ -2103,7 +2076,7 @@ mod tests {
         assert_eq!(a.banner().unwrap(), "live updates stopped: the journal is off; the tree may be out of date");
         let b = a.layout.rescan_button();
         assert_eq!(a.handle(Input::Click(b.x + 2.0, b.y + 2.0)), Effect::Rescan(0));
-        a.refreshing = true;
+        a.slot.refreshing = true;
         assert_eq!(a.handle(Input::Click(b.x + 2.0, b.y + 2.0)), Effect::None);
         a.handle(Input::Resize(900.0, 700.0));
         assert!(a.layout.banner, "a resize keeps the banner");
@@ -2135,9 +2108,9 @@ mod tests {
     #[test]
     fn the_status_line_leads_with_the_selected_rows_path_size_and_items() {
         let mut a = scanned();
-        let id = a.model.as_ref().unwrap().rows()[1].id;
-        a.model.as_mut().unwrap().select(id);
-        let tree = a.tree.as_ref().unwrap();
+        let id = a.slot.model.as_ref().unwrap().rows()[1].id;
+        a.slot.model.as_mut().unwrap().select(id);
+        let tree = a.slot.tree.as_ref().unwrap();
         let want = format!(
             "{}  ({}, {} items)   |   done",
             fmt::node_path(tree, id),
@@ -2154,7 +2127,7 @@ mod tests {
         a.set_live(LiveStatus::On { last: None });
         assert_eq!(status_tail(&a), "done   |   live");
         a.live_changed("12:03:41".into());
-        a.refreshing = true;
+        a.slot.refreshing = true;
         assert_eq!(status_tail(&a), "done   |   live, last change 12:03:41   |   refreshing\u{2026}");
         a.set_live(LiveStatus::Stale("x".into()));
         a.live_changed("12:04:00".into());
@@ -2164,11 +2137,11 @@ mod tests {
     #[test]
     fn the_status_bar_shows_a_compact_line_and_its_tooltip_the_whole_one_and_the_adapter() {
         let mut a = scanned();
-        let id = a.model.as_ref().unwrap().rows()[1].id;
-        a.model.as_mut().unwrap().select(id);
+        let id = a.slot.model.as_ref().unwrap().rows()[1].id;
+        a.slot.model.as_mut().unwrap().select(id);
         a.set_live(LiveStatus::On { last: None });
         a.live_changed("12:03:41".into());
-        let tree = a.tree.as_ref().unwrap();
+        let tree = a.slot.tree.as_ref().unwrap();
         let size = format!("{}, {} items", fmt::size(tree.subtree_size[id]), fmt::count(tree.subtree_files[id] as u64));
         assert_eq!(status_str(&a, false), format!("{size}   |   done   |   live"), "no path, no time of the last change");
         assert!(status_str(&a, true).contains("12:03:41") && status_str(&a, true).contains(&fmt::node_path(tree, id).to_string()));
@@ -2197,34 +2170,34 @@ Test GPU", status_str(&a, true))));
     fn a_rescanned_tree_keeps_sort_expansion_selection_and_screen_row() {
         let mut a = scanned();
         a.handle(Input::Click(5.0, PICKER_H + 2.0)); // sort by Name ascending
-        let t = a.tree.as_ref().unwrap();
-        let m = a.model.as_mut().unwrap();
+        let t = a.slot.tree.as_ref().unwrap();
+        let m = a.slot.model.as_mut().unwrap();
         let first = m.rows()[1].id;
         m.expand(t, first);
         let kid = m.rows()[2].id;
         m.select(kid);
-        a.scroll = 0;
-        let path = a.tree.as_ref().unwrap().path(kid);
-        a.refreshing = true;
+        a.slot.scroll = 0;
+        let path = a.slot.tree.as_ref().unwrap().path(kid);
+        a.slot.refreshing = true;
         a.swap_tree(kary_builder(300, 3).finish().unwrap(), "again".into());
-        let (t, m) = (a.tree.as_ref().unwrap(), a.model.as_ref().unwrap());
+        let (t, m) = (a.slot.tree.as_ref().unwrap(), a.slot.model.as_ref().unwrap());
         assert_eq!(t.path(m.selected().unwrap()), path);
         assert_eq!(a.sort(), (0, false));
         assert!(m.is_expanded(m.rows()[1].id));
-        assert_eq!(a.summary, "again");
-        assert!(!a.refreshing);
+        assert_eq!(a.slot.summary, "again");
+        assert!(!a.slot.refreshing);
     }
 
     #[test]
     fn refresh_rows_picks_up_tree_changes_and_keeps_the_selection_in_place() {
         let mut a = scanned();
-        let sel = a.model.as_ref().unwrap().rows()[3].id;
-        a.model.as_mut().unwrap().select(sel);
-        let n = a.model.as_ref().unwrap().rows().len();
-        let root = a.model.as_ref().unwrap().rows()[0].id;
-        a.tree.as_mut().unwrap().add_child(root, &[b'n' as u16, b'w' as u16], 1 << 40, plumb_core::NodeFlags::empty());
+        let sel = a.slot.model.as_ref().unwrap().rows()[3].id;
+        a.slot.model.as_mut().unwrap().select(sel);
+        let n = a.slot.model.as_ref().unwrap().rows().len();
+        let root = a.slot.model.as_ref().unwrap().rows()[0].id;
+        a.slot.tree.as_mut().unwrap().add_child(root, &[b'n' as u16, b'w' as u16], 1 << 40, plumb_core::NodeFlags::empty());
         a.refresh_rows();
-        let m = a.model.as_ref().unwrap();
+        let m = a.slot.model.as_ref().unwrap();
         assert_eq!(m.rows().len(), n + 1);
         assert_eq!(m.selected(), Some(sel));
     }
@@ -2232,9 +2205,9 @@ Test GPU", status_str(&a, true))));
     #[test]
     fn resize_reclamps_scroll() {
         let mut a = scanned();
-        a.scroll = 5;
+        a.slot.scroll = 5;
         a.handle(Input::Resize(800.0, 2000.0));
-        assert_eq!(a.scroll, 0);
+        assert_eq!(a.slot.scroll, 0);
     }
 
     fn with_map() -> App {
@@ -2254,17 +2227,17 @@ Test GPU", status_str(&a, true))));
         assert_eq!(a.map_root, Some(NodeId(0)));
         a.handle(Input::Click(20.0, row_y(1)));
         a.update_map(1.0); // the hook that notices the selection moved
-        let sel = a.model.as_ref().unwrap().selected();
-        assert_eq!(a.map_root, treemap::root_for(a.tree.as_ref().unwrap(), sel), "a click in the tree re-roots the map");
+        let sel = a.slot.model.as_ref().unwrap().selected();
+        assert_eq!(a.map_root, treemap::root_for(a.slot.tree.as_ref().unwrap(), sel), "a click in the tree re-roots the map");
         let (i, t) = a.map_tiles().iter().copied().enumerate().find(|(_, t)| t.kind == Kind::File).unwrap();
         let before = a.map_root;
         let (x, y) = centre(&t);
         a.handle(Input::Click(x, y));
         a.update_map(1.0);
-        assert_eq!(a.model.as_ref().unwrap().selected(), Some(t.node));
+        assert_eq!(a.slot.model.as_ref().unwrap().selected(), Some(t.node));
         assert_eq!(a.map_root, before, "a click on the map keeps the root");
         assert_eq!(a.map_selected_tile(), Some(i));
-        assert!(a.model.as_ref().unwrap().selected_index().is_some(), "its row is revealed in the tree");
+        assert!(a.slot.model.as_ref().unwrap().selected_index().is_some(), "its row is revealed in the tree");
     }
 
     #[test]
@@ -2275,9 +2248,9 @@ Test GPU", status_str(&a, true))));
         a.handle(Input::Click(x, y));
         a.handle(Input::DoubleClick(x, y));
         assert_eq!(a.map_root, Some(t.node));
-        assert_eq!(a.model.as_ref().unwrap().selected(), Some(t.node));
+        assert_eq!(a.slot.model.as_ref().unwrap().selected(), Some(t.node));
         a.update_map(1.0);
-        assert!(a.map_tiles().iter().all(|k| k.depth > 0 || a.tree.as_ref().unwrap().parent[k.node] == t.node || k.kind == Kind::Rest));
+        assert!(a.map_tiles().iter().all(|k| k.depth > 0 || a.slot.tree.as_ref().unwrap().parent[k.node] == t.node || k.kind == Kind::Rest));
     }
 
     #[test]
@@ -2287,7 +2260,7 @@ Test GPU", status_str(&a, true))));
         let (x, y) = centre(&t);
         let before = a.map_root;
         a.handle(Input::DoubleClick(x, y));
-        assert_eq!((a.map_root, a.model.as_ref().unwrap().selected()), (before, Some(t.node)));
+        assert_eq!((a.map_root, a.slot.model.as_ref().unwrap().selected()), (before, Some(t.node)));
     }
 
     #[test]
@@ -2315,7 +2288,7 @@ Test GPU", status_str(&a, true))));
         a.handle(Input::Hover(x, y));
         assert!(a.map_hover.is_some());
         let tip = tip_str(&a, x, y).unwrap();
-        assert!(tip.contains(&a.tree.as_ref().unwrap().name_string(t.node)), "{tip}");
+        assert!(tip.contains(&a.slot.tree.as_ref().unwrap().name_string(t.node)), "{tip}");
         a.handle(Input::Hover(5.0, 5.0));
         assert_eq!((a.map_hover, tip_str(&a, 5.0, 5.0)), (None, None));
     }
@@ -2355,7 +2328,7 @@ Test GPU", status_str(&a, true))));
         assert_eq!(a.select_from_map(i), Some(parent), "a click on the own tile selects the process");
         let sel = a.map_selected_tile().expect("the process is outlined");
         assert_eq!(a.map_tiles()[sel].kind, Kind::Frame, "by its frame, not by the own tile");
-        let tip = proc_tip_str(&a, a.tree.as_ref().unwrap(), &a.map_tiles()[i]);
+        let tip = proc_tip_str(&a, a.slot.tree.as_ref().unwrap(), &a.map_tiles()[i]);
         assert!(tip.contains("parent.exe") && tip.contains("itself"), "{tip}");
     }
 
@@ -2375,7 +2348,7 @@ Test GPU", status_str(&a, true))));
         let t = a.map_tiles().iter().copied().find(|t| t.kind == Kind::File).unwrap();
         let (x, y) = centre(&t);
         assert_eq!(a.handle(Input::RightClick(x, y)), Effect::Menu(t.node));
-        assert_eq!(a.model.as_ref().unwrap().selected(), Some(t.node));
+        assert_eq!(a.slot.model.as_ref().unwrap().selected(), Some(t.node));
     }
 
     #[test]
@@ -2431,7 +2404,7 @@ Test GPU", status_str(&a, true))));
 
     /// A non-root file and a non-root folder that has children, and one of that folder's children.
     fn picks(a: &App) -> (NodeId, NodeId, NodeId) {
-        let t = a.tree.as_ref().unwrap();
+        let t = a.slot.tree.as_ref().unwrap();
         let all = || (0..t.len() as u32).map(NodeId).filter(|&i| !t.parent[i].is_none());
         let file = all().find(|&i| !t.has_children(i)).unwrap();
         let dir = all().find(|&i| t.has_children(i)).unwrap();
@@ -2439,7 +2412,7 @@ Test GPU", status_str(&a, true))));
     }
 
     fn select(a: &mut App, id: NodeId) {
-        let (t, m) = (a.tree.as_ref().unwrap(), a.model.as_mut().unwrap());
+        let (t, m) = (a.slot.tree.as_ref().unwrap(), a.slot.model.as_mut().unwrap());
         m.reveal(t, id);
         m.select(id);
     }
@@ -2468,7 +2441,7 @@ Test GPU", status_str(&a, true))));
         a.toggle_mark(child);
         a.toggle_mark(dir);
         a.update_map(1.0);
-        let t = a.tree.as_ref().unwrap();
+        let t = a.slot.tree.as_ref().unwrap();
         assert_eq!(a.basket_label(), Some(format!("1 marked, up to {}", fmt::size(t.subtree_size[dir]))));
         let (dir_path, dir_size) = (t.path(dir), t.subtree_size[dir]);
         let req = a.commit_request().unwrap();
@@ -2479,7 +2452,7 @@ Test GPU", status_str(&a, true))));
     #[test]
     fn roots_and_scans_are_refused_with_a_reason_that_reaches_the_status_line() {
         let mut a = scanned();
-        let root = a.tree.as_ref().unwrap().roots[0];
+        let root = a.slot.tree.as_ref().unwrap().roots[0];
         assert_eq!(a.mark_state(root), MarkState::Refused("a drive root cannot be deleted"));
         a.toggle_mark(root);
         assert!(a.basket().is_empty());
@@ -2487,7 +2460,7 @@ Test GPU", status_str(&a, true))));
         a.handle(Input::Click(5.0, a.layout.header().y + 5.0)); // any click clears the notice
         assert!(!status_str(&a, true).starts_with("cannot mark"));
         let (file, ..) = picks(&a);
-        a.refreshing = true;
+        a.slot.refreshing = true;
         assert_eq!(a.mark_state(file), MarkState::Refused("the drive is being scanned"));
     }
 
@@ -2496,7 +2469,7 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         let (file, ..) = picks(&a);
         a.toggle_mark(file);
-        let mut other = Parked::default();
+        let mut other = Slot::default();
         a.swap_slot(&mut other);
         assert!(a.basket().is_empty(), "the other view has no marks");
         a.swap_slot(&mut other);
@@ -2516,13 +2489,13 @@ Test GPU", status_str(&a, true))));
     fn a_mark_that_can_no_longer_be_deleted_is_dropped_and_reported_with_the_result() {
         let mut a = scanned();
         let (bad, good) = {
-            let t = a.tree.as_ref().unwrap();
+            let t = a.slot.tree.as_ref().unwrap();
             let mut leaves = (0..t.len() as u32).map(NodeId).filter(|&i| !t.parent[i].is_none() && !t.has_children(i));
             (leaves.next().unwrap(), leaves.next().unwrap())
         };
         a.toggle_mark(bad);
         a.toggle_mark(good);
-        let bad_path = a.tree.as_ref().unwrap().path(bad);
+        let bad_path = a.slot.tree.as_ref().unwrap().path(bad);
         a.system_root = bad_path.clone(); // now the first one is refused, as if renamed to an unsafe name
         let req = a.commit_request().expect("the other mark still goes");
         assert_eq!(req.paths.len(), 1);
@@ -2533,7 +2506,7 @@ Test GPU", status_str(&a, true))));
         // Alone, it gives no request, only the reason.
         let mut a = scanned();
         a.toggle_mark(bad);
-        a.system_root = a.tree.as_ref().unwrap().path(bad);
+        a.system_root = a.slot.tree.as_ref().unwrap().path(bad);
         assert!(a.commit_request().is_none());
         assert!(a.notice.starts_with("1 marked item skipped"), "{}", a.notice);
         assert!(a.basket().is_empty());
@@ -2544,7 +2517,7 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         let (file, ..) = picks(&a);
         a.toggle_mark(file);
-        let mut gone = Parked::default();
+        let mut gone = Slot::default();
         a.swap_slot(&mut gone); // the view goes away with its mark
         a.stash_basket(2, &mut gone); // and is let go
         a.begin_scan(3);
@@ -2558,7 +2531,7 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         let (file, ..) = picks(&a);
         a.toggle_mark(file);
-        assert!(a.tree.as_mut().unwrap().remove(file));
+        assert!(a.slot.tree.as_mut().unwrap().remove(file));
         assert!(a.commit_request().is_none());
         assert!(a.basket().is_empty());
         assert!(status_str(&a, true).starts_with("the marked items are already gone"), "{}", status_str(&a, true));
@@ -2569,9 +2542,9 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         let (file, ..) = picks(&a);
         a.toggle_mark(file);
-        a.refreshing = true;
+        a.slot.refreshing = true;
         assert!(a.commit_request().is_none());
-        a.refreshing = false;
+        a.slot.refreshing = false;
         assert!(a.commit_request().is_some());
         a.set_deleting(true);
         assert!(a.commit_request().is_none(), "one delete at a time");
@@ -2583,7 +2556,7 @@ Test GPU", status_str(&a, true))));
         let (file, dir, _) = picks(&a);
         a.toggle_mark(file);
         a.toggle_mark(dir);
-        let t = a.tree.as_ref().unwrap();
+        let t = a.slot.tree.as_ref().unwrap();
         let (gone, kept) = (t.path(file), t.path(dir));
         a.set_deleting(true);
         a.finish_delete(std::slice::from_ref(&gone), 0, &[(kept.clone(), "access denied".into())]);
@@ -2629,18 +2602,18 @@ Test GPU", status_str(&a, true))));
     #[test]
     fn a_modal_takes_all_input_and_enter_escape_tab_and_clicks_answer_it() {
         let (mut a, centre) = asking();
-        let (scroll, marks) = (a.scroll, a.basket.len());
+        let (scroll, marks) = (a.slot.scroll, a.slot.basket.len());
         // Everything but its own buttons is swallowed, including the keys that would unmark or scroll the list.
         for i in [Input::Wheel(3, 5.0, 100.0), Input::Edit(Edit::Delete), Input::Key(Key::Down), Input::Find] {
             assert_eq!(a.handle(i), Effect::None);
         }
-        assert!(a.modal().is_some() && a.scroll == scroll && a.basket.len() == marks);
+        assert!(a.modal().is_some() && a.slot.scroll == scroll && a.slot.basket.len() == marks);
         // A click on the scrim cancels (the marks stay); one inside the panel, off its buttons, does nothing.
         let p = a.modal().map(|m| m.geometry(a.layout.w, a.layout.h).panel).unwrap();
         a.handle(Input::Click(p.x + 2.0, p.y + 2.0));
         assert!(a.modal().is_some());
         assert_eq!(a.handle(Input::Click(5.0, 5.0)), Effect::None);
-        assert!(a.modal().is_none() && a.basket.len() == marks);
+        assert!(a.modal().is_none() && a.slot.basket.len() == marks);
         a.ask_delete();
         // ... but not the "Close anyway?" question.
         a.handle(Input::Escape);
@@ -2651,7 +2624,7 @@ Test GPU", status_str(&a, true))));
         a.ask_delete();
         // Escape cancels; the marks stay.
         assert_eq!(a.handle(Input::Escape), Effect::None);
-        assert!(a.modal().is_none() && a.basket.len() == marks);
+        assert!(a.modal().is_none() && a.slot.basket.len() == marks);
         // Enter presses the default: Recycle.
         a.ask_delete();
         let Effect::Delete { permanent, paths, .. } = a.handle(Input::Enter) else { panic!("Enter on the default button") };
@@ -2662,7 +2635,7 @@ Test GPU", status_str(&a, true))));
         assert_eq!(a.handle(Input::Enter), Effect::None);
         assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Permanent(_))));
         assert_eq!(a.handle(Input::Enter), Effect::None, "the default of the second question is Cancel");
-        assert!(a.modal().is_none() && a.basket.len() == marks);
+        assert!(a.modal().is_none() && a.slot.basket.len() == marks);
         // A click on a button answers it: permanently, then Yes.
         a.ask_delete();
         let at = centre(&a, Pick::Permanent);
@@ -2673,7 +2646,7 @@ Test GPU", status_str(&a, true))));
         a.ask_delete();
         let at = centre(&a, Pick::Unmark);
         a.handle(Input::Click(at.0, at.1));
-        assert!(a.basket.is_empty() && a.modal().is_none());
+        assert!(a.slot.basket.is_empty() && a.modal().is_none());
     }
 
     #[test]
@@ -2704,7 +2677,7 @@ Test GPU", status_str(&a, true))));
     fn a_deleted_folder_takes_its_childs_mark_and_a_stale_mark_is_pruned_at_commit() {
         let mut a = scanned();
         let (file, dir, child) = picks(&a);
-        let t = a.tree.as_ref().unwrap();
+        let t = a.slot.tree.as_ref().unwrap();
         let (fp, dp) = (t.path(file), t.path(dir));
         a.toggle_mark(child);
         a.toggle_mark(dir);
@@ -2718,7 +2691,7 @@ Test GPU", status_str(&a, true))));
         b.toggle_mark(file);
         b.toggle_mark(dir);
         let fid = file;
-        assert!(b.tree.as_mut().unwrap().remove(fid));
+        assert!(b.slot.tree.as_mut().unwrap().remove(fid));
         let req = b.commit_request().unwrap();
         assert_eq!(req.paths.len(), 1);
         assert_eq!(b.basket().len(), 1, "the mark that no longer resolves is dropped, not kept to come back later");
@@ -2728,7 +2701,7 @@ Test GPU", status_str(&a, true))));
     fn a_mark_from_the_menu_is_found_again_by_path_and_a_vanished_path_marks_nothing() {
         let mut a = scanned();
         let (file, ..) = picks(&a);
-        let p = a.tree.as_ref().unwrap().path(file);
+        let p = a.slot.tree.as_ref().unwrap().path(file);
         a.toggle_mark_path(&p);
         assert!(a.basket().contains(&p));
         a.toggle_mark_path("nowhere\\at all");
@@ -2739,8 +2712,8 @@ Test GPU", status_str(&a, true))));
     #[test]
     fn del_with_a_tree_but_nothing_selected_marks_nothing() {
         let mut a = scanned();
-        a.model = Some(RowModel::new(a.tree.as_ref().unwrap()));
-        assert!(a.model.as_ref().unwrap().selected().is_none());
+        a.slot.model = Some(RowModel::new(a.slot.tree.as_ref().unwrap()));
+        assert!(a.slot.model.as_ref().unwrap().selected().is_none());
         a.handle(Input::Edit(Edit::Delete));
         assert!(a.basket().is_empty());
     }
@@ -2753,7 +2726,7 @@ Test GPU", status_str(&a, true))));
         a.update_map(1.0);
         assert!(a.basket_label().is_some());
         let n: Vec<u16> = "renamed".encode_utf16().collect();
-        a.tree.as_mut().unwrap().rename(file, &n);
+        a.slot.tree.as_mut().unwrap().rename(file, &n);
         a.update_map(1.0);
         assert!(a.basket_label().is_none(), "the mark no longer names anything, so no chip");
         assert!(!a.basket_active());
@@ -2780,7 +2753,7 @@ Test GPU", status_str(&a, true))));
         assert!(a.deleting());
         assert!(!a.begin_delete(), "one at a time");
         a.set_deleting(false);
-        a.refreshing = true;
+        a.slot.refreshing = true;
         assert!(!a.begin_delete());
         assert!(status_str(&a, true).starts_with("cannot delete while the drive is being scanned"));
     }

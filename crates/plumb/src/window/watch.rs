@@ -198,7 +198,7 @@ impl Win {
 
     /// Applies queued changes for at most `APPLY_BUDGET`; leftovers continue on the next message.
     pub(super) fn apply_queued(&mut self) {
-        let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) else { return };
+        let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.slot.tree) else { return };
         let n = w.apply(tree, Instant::now() + APPLY_BUDGET);
         w.dirty |= n > 0;
         if w.queued() {
@@ -233,7 +233,7 @@ impl Win {
                 w.pacer.done(Instant::now(), t0.elapsed());
                 w.dirty = false;
             }
-            if self.app.tree.as_ref().is_some_and(needs_compaction) {
+            if self.app.slot.tree.as_ref().is_some_and(needs_compaction) {
                 self.auto_rescan();
             }
         }
@@ -249,7 +249,7 @@ impl Win {
 
     /// The source ended: bring the tree up to date, then rescan or say why updates stopped.
     pub(super) fn watch_ended(&mut self, e: Ended) {
-        if let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) {
+        if let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.slot.tree) {
             w.apply(tree, Instant::now() + Duration::from_millis(50));
         }
         self.app.refresh_rows();

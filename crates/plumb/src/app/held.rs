@@ -40,7 +40,7 @@ impl App {
     pub fn held_sync(&mut self) -> bool {
         let want = (self.kind() == ViewKind::Processes)
             .then(|| {
-                let (tree, id) = (self.tree.as_ref()?, self.model.as_ref()?.selected()?);
+                let (tree, id) = (self.slot.tree.as_ref()?, self.slot.model.as_ref()?.selected()?);
                 tree.aux.get(id.idx()).map(|a| a[2] as u32).filter(|&p| p != 0)
             })
             .flatten();
@@ -62,7 +62,7 @@ impl App {
 
     /// The handle count of the process the pane is about, from the latest snapshot.
     pub(super) fn held_handles(&self) -> Option<u32> {
-        self.proc_info.get(&self.held.pid?).map(|i| i.handles)
+        self.slot.proc_info.get(&self.held.pid?).map(|i| i.handles)
     }
 
     /// Whether the pane shows a list that was read (a refresh has something to replace).
@@ -109,7 +109,7 @@ impl App {
     /// The pane's title line and the file lines in view (`HELD_ROWS` from the scroll offset; the title gives the range).
     pub(super) fn held_text(&self) -> Option<(String, &[String])> {
         let pid = self.held.pid?;
-        let name = self.tree.as_ref().zip(self.model.as_ref().and_then(|m| m.selected())).map_or_else(String::new, |(t, id)| t.name_string(id).to_string());
+        let name = self.slot.tree.as_ref().zip(self.slot.model.as_ref().and_then(|m| m.selected())).map_or_else(String::new, |(t, id)| t.name_string(id).to_string());
         let head = |what: String| format!("Files held by {name} (PID {pid}): {what}");
         Some(match &self.held.state {
             HeldState::Idle | HeldState::Waiting | HeldState::Loading => (head("reading\u{2026}".into()), &[]),
