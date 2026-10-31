@@ -112,7 +112,7 @@ impl Kind {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tile {
-    /// For `Rest`, the folder it belongs to.
+    /// For `Rest` and `Own`, the folder they belong to.
     pub node: NodeId,
     pub rect: Rect,
     /// Nesting level: the root's children are 0.
@@ -120,7 +120,7 @@ pub struct Tile {
     pub class: Class,
     pub kind: Kind,
     pub bytes: u64,
-    /// Files in the subtree for a folder, 1 for a file, merged items for `Rest`.
+    /// Files in the subtree for a folder, 1 for a file, merged items for `Rest`, 1 for `Own`.
     pub count: u32,
     /// The file's last-write day (`Kind::File` only).
     pub mtime: Option<NonZeroU32>,
