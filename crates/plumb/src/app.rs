@@ -1768,7 +1768,7 @@ mod tests {
         a.switch_slot(&mut away);
         assert!(a.slot.tree.is_some() && a.slot.refreshing && a.cancelable());
         assert_eq!(a.slot.model.as_ref().and_then(|m| m.selected()), sel);
-        assert!(matches!(other.scan(), Scan::Running { view: 1, .. }) && !other.has_tree());
+        assert!(matches!(other.scan, Scan::Running { view: 1, .. }) && !other.has_tree());
     }
 
     #[test]

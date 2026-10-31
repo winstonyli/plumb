@@ -11,7 +11,6 @@ fn ids(m: &RowModel) -> Vec<u32> {
     m.rows().iter().map(|r| r.id.0).collect()
 }
 
-
 fn hits(t: &Tree, text: &str) -> (crate::filter::Matcher, Hits) {
     let m = Query { text: text.into(), regex: false }.compile().unwrap().unwrap();
     let h = Names::of(t).scan(&m, &AtomicU64::new(1), 1).unwrap();

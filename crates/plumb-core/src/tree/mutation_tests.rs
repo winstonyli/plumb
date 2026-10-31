@@ -3,7 +3,6 @@ use super::*;
 use crate::synth::u;
 use std::collections::BTreeMap;
 
-
 fn kids(t: &Tree, id: u32) -> Vec<u32> {
     t.children(NodeId(id)).map(|c| c.0).collect()
 }

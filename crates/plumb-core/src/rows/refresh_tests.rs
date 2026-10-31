@@ -7,7 +7,6 @@ fn ids(m: &RowModel) -> Vec<u32> {
     m.rows().iter().map(|r| r.id.0).collect()
 }
 
-
 /// Expands every directory that has children, until nothing more expands.
 fn expand_all(m: &mut RowModel, t: &Tree) {
     while let Some(id) = m.rows().iter().map(|r| r.id).find(|&id| m.is_expandable(t, id) && !m.is_expanded(id)) {

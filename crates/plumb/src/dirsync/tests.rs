@@ -5,7 +5,6 @@ use plumb_scan::listing::Entry;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-
 fn file(name: &str, alloc: u64) -> Entry {
     Entry { name: u(name), alloc, is_dir: false, reparse: false, id: 0, mtime: None }
 }

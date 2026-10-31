@@ -3,7 +3,6 @@ use plumb_core::synth::u;
 use plumb_core::TreeBuilder;
 use std::collections::BTreeMap;
 
-
 fn st(record: u64, parent: u64, name: &str, size: u64, is_dir: bool) -> FileState {
     FileState { record, sequence: 1, parent, name: u(name), size, is_dir, reparse: false, links: 1, mtime: None }
 }

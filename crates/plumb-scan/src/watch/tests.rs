@@ -3,7 +3,6 @@ use plumb_core::synth::u;
 use std::fs;
 use std::path::PathBuf;
 
-
 struct Temp(PathBuf);
 impl Temp {
     fn new(tag: &str) -> Temp {
