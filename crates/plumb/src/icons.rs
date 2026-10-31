@@ -27,7 +27,7 @@ pub struct Image {
 
 /// The shell icon for a file with extension `key` (or a folder, open or closed), small (16 px) or large (32 px).
 pub fn load(key: &str, dir: bool, open: bool, large: bool) -> Option<Image> {
-    let path: Vec<u16> = format!("x.{key}").encode_utf16().chain([0]).collect();
+    let path = plumb_core::wide(&format!("x.{key}"));
     let attrs = if dir { FILE_ATTRIBUTE_DIRECTORY } else { FILE_ATTRIBUTE_NORMAL };
     let mut flags = SHGFI_ICON | SHGFI_USEFILEATTRIBUTES | if large { SHGFI_LARGEICON } else { SHGFI_SMALLICON };
     if open {

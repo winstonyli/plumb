@@ -2,6 +2,7 @@
 
 use std::fmt::{self, Display, Formatter};
 
+use plumb_core::age::{DAY_TICKS, UNIX_EPOCH_DAYS};
 use plumb_core::{NodeId, Tree};
 
 /// A value shown as text, formatted straight into whatever it is written to: a `format!` argument, a `write!` into a
@@ -170,7 +171,7 @@ fn write_count(f: &mut Formatter<'_>, mut n: u64) -> fmt::Result {
 }
 
 fn write_date(f: &mut Formatter<'_>, day: u32) -> fmt::Result {
-    let z = i64::from(day) - 134_774 + 719_468; // days since 0000-03-01
+    let z = i64::from(day) - i64::from(UNIX_EPOCH_DAYS) + 719_468; // days since 0000-03-01
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
     let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
@@ -194,7 +195,7 @@ pub fn local_day(filetime: u64) -> u32 {
     let utc = FILETIME { dwLowDateTime: filetime as u32, dwHighDateTime: (filetime >> 32) as u32 };
     let mut local = FILETIME::default();
     let ft = if unsafe { FileTimeToLocalFileTime(&utc, &mut local) }.is_ok() { (u64::from(local.dwHighDateTime) << 32) | u64::from(local.dwLowDateTime) } else { filetime };
-    (ft / 864_000_000_000) as u32
+    (ft / DAY_TICKS) as u32
 }
 
 /// The first `max` paths, one a line, then "and N more".
@@ -220,9 +221,9 @@ mod tests {
 
     #[test]
     fn the_local_day_is_the_utc_day_moved_by_the_zone_and_the_same_for_two_instants_in_one_local_day() {
-        let day = 864_000_000_000u64;
-        let t = 134_774 * day + 12 * 36_000_000_000; // noon UTC on 1970-01-01
-        let d = i64::from(local_day(t)) - 134_774;
+        let day = DAY_TICKS;
+        let t = u64::from(UNIX_EPOCH_DAYS) * day + 12 * 36_000_000_000; // noon UTC on 1970-01-01
+        let d = i64::from(local_day(t)) - i64::from(UNIX_EPOCH_DAYS);
         assert!((-1..=1).contains(&d), "within a day of UTC, got {d}");
         // two instants an hour apart land on the same local day unless a local midnight lies between them
         let (a, b) = (local_day(t), local_day(t + 36_000_000_000));

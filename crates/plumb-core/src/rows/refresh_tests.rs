@@ -1,4 +1,5 @@
 use super::*;
+use crate::synth::u;
 use crate::synth::{flat_tree, kary_builder};
 use crate::tree::tests::sample;
 
@@ -6,9 +7,6 @@ fn ids(m: &RowModel) -> Vec<u32> {
     m.rows().iter().map(|r| r.id.0).collect()
 }
 
-fn u(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
-}
 
 /// Expands every directory that has children, until nothing more expands.
 fn expand_all(m: &mut RowModel, t: &Tree) {

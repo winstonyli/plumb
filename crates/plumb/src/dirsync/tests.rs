@@ -1,12 +1,10 @@
 use super::*;
+use plumb_core::synth::u;
 use plumb_core::TreeBuilder;
 use plumb_scan::listing::Entry;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-fn u(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
-}
 
 fn file(name: &str, alloc: u64) -> Entry {
     Entry { name: u(name), alloc, is_dir: false, reparse: false, id: 0, mtime: None }

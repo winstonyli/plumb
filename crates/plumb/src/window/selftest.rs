@@ -531,7 +531,7 @@ pub fn selftest_tooltip() -> Result<String> {
             w.dark = dark;
             w.apply_title_theme();
             // A literal text for the tool, a size, and the control's client area printed into a bitmap.
-            let msg: Vec<u16> = "Clear the filter".encode_utf16().chain([0]).collect();
+            let msg = plumb_core::wide("Clear the filter");
             // A tracked tool shows the tip where we say, far off every monitor, so it paints but is never seen.
             let tool = TTTOOLINFOW {
                 cbSize: std::mem::offset_of!(TTTOOLINFOW, lParam) as u32,

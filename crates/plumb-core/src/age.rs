@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 /// 100 ns FILETIME ticks in a day.
 pub const DAY_TICKS: u64 = 864_000_000_000;
 /// Days from 1601-01-01 to 1970-01-01.
-const UNIX_EPOCH_DAYS: u32 = 134_774;
+pub const UNIX_EPOCH_DAYS: u32 = 134_774;
 /// Age (days) at which the fade is complete.
 pub const AGE_FULL_DAYS: f32 = 3650.0;
 /// How far toward the background the oldest tile is mixed (0 = not at all, 1 = vanishes).

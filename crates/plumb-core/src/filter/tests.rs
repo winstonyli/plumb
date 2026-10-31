@@ -1,11 +1,9 @@
 use super::*;
+use crate::synth::u;
 use crate::node::NodeFlags;
 use crate::tree::tests::sample;
 
 // sample(): 0=C:, 1=big, 2=f1, 3=f2, 4=mid, 5=g, 6=small
-fn u(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
-}
 
 fn matcher(text: &str, regex: bool) -> Matcher {
     Query { text: text.into(), regex }.compile().unwrap().unwrap()

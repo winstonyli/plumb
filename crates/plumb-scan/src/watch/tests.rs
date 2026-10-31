@@ -1,10 +1,8 @@
 use super::*;
+use plumb_core::synth::u;
 use std::fs;
 use std::path::PathBuf;
 
-fn u(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
-}
 
 struct Temp(PathBuf);
 impl Temp {

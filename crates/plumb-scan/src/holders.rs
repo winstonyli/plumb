@@ -33,7 +33,7 @@ pub fn holders(path: &str) -> Vec<Holder> {
         return Vec::new();
     }
     let _session = Session(handle);
-    let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
+    let wide = plumb_core::wide(path);
     if unsafe { RmRegisterResources(handle, Some(&[PCWSTR(wide.as_ptr())]), None, None) } != ERROR_SUCCESS {
         return Vec::new();
     }

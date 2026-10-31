@@ -304,7 +304,7 @@ fn unix_secs() -> u64 {
 
 /// Now as a FILETIME (100 ns since 1601-01-01, UTC).
 fn now_filetime() -> u64 {
-    (unix_secs() + 11_644_473_600) * 10_000_000
+    (unix_secs() + u64::from(plumb_core::age::UNIX_EPOCH_DAYS) * 86_400) * 10_000_000
 }
 
 /// What the app holds for one view, kept while another view is on screen. The filter box text
@@ -2754,8 +2754,8 @@ Test GPU", status_str(&a, true))));
         let mut tree = plumb_core::synth::flat_tree(3);
         let t = treemap::Tile { node: NodeId(1), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::File, bytes: 2048, count: 1, mtime: None };
         assert!(!tile_str(&tree, &t, 154_000).contains("modified"));
-        tree.set_mtime(NodeId(1), std::num::NonZeroU32::new(134_774 + 19_791));
-        let tip = tile_str(&tree, &t, 134_774 + 19_791 + 766);
+        tree.set_mtime(NodeId(1), std::num::NonZeroU32::new(plumb_core::age::UNIX_EPOCH_DAYS + 19_791));
+        let tip = tile_str(&tree, &t, plumb_core::age::UNIX_EPOCH_DAYS + 19_791 + 766);
         assert!(tip.ends_with(", modified 2024-03-09, 2.1 y ago)"), "{tip}");
     }
 

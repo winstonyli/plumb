@@ -1,4 +1,5 @@
 use super::*;
+use crate::synth::u;
 use crate::filter::{Hits, Names, Query};
 use crate::synth::kary_builder;
 use crate::tree::tests::sample;
@@ -10,9 +11,6 @@ fn ids(m: &RowModel) -> Vec<u32> {
     m.rows().iter().map(|r| r.id.0).collect()
 }
 
-fn u(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
-}
 
 fn hits(t: &Tree, text: &str) -> (crate::filter::Matcher, Hits) {
     let m = Query { text: text.into(), regex: false }.compile().unwrap().unwrap();

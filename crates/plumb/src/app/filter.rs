@@ -294,6 +294,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plumb_core::synth::u;
     use crate::app::{ViewInfo, Input};
     use crate::layout::{Layout, HEADER_H, PICKER_H, ROW_H};
     use plumb_core::{NodeFlags, Tree, TreeBuilder};
@@ -330,9 +331,6 @@ mod tests {
         PICKER_H + HEADER_H + i as f32 * ROW_H + 1.0
     }
 
-    fn u(s: &str) -> Vec<u16> {
-        s.encode_utf16().collect()
-    }
 
     /// Focuses the box (as Ctrl+F does) and types `s`; returns the last effect.
     fn type_text(a: &mut App, s: &str) -> Effect {

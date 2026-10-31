@@ -13,7 +13,7 @@ use crate::preview::Preview;
 use crate::live::{needs_compaction, Live, Pacer, RescanPolicy, REPAINT};
 use plumb_core::filter::Hits;
 use plumb_core::rows::Key;
-use plumb_core::{NodeId, Tree, TreeBuilder};
+use plumb_core::{wide, NodeId, Tree, TreeBuilder};
 use plumb_scan::preview::channel as preview_channel;
 use plumb_scan::journal::{Delta, Event, JournalConfig, JournalInfo, JournalReader, JournalSource, Stop};
 use plumb_scan::listing::Listing;
@@ -1262,10 +1262,6 @@ pub fn summary(used: Used, files: u64, elapsed: Duration, corrupt: Option<u64>, 
     s
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain([0]).collect()
-}
-
 fn copy_to_clipboard(hwnd: HWND, text: &str) {
     let u = wide(text);
     unsafe {
@@ -1351,7 +1347,7 @@ fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: boo
                 let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Unmark\tDel"));
             }
             MarkState::Refused(why) => {
-                let text: Vec<u16> = format!("Cannot mark: {why}").encode_utf16().chain([0]).collect();
+                let text = wide(&format!("Cannot mark: {why}"));
                 let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_MARK, PCWSTR(text.as_ptr()));
             }
         }

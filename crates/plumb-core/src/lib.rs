@@ -17,3 +17,8 @@ pub mod tree;
 pub use node::{NodeFlags, NodeId};
 pub use rect::Rect;
 pub use tree::{Tree, TreeBuilder, TreeError};
+
+/// `s` as NUL-terminated UTF-16, the form Win32 wide-string arguments take.
+pub fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain([0]).collect()
+}

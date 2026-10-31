@@ -1,10 +1,8 @@
 use super::tests::sample;
 use super::*;
+use crate::synth::u;
 use std::collections::BTreeMap;
 
-fn u(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
-}
 
 fn kids(t: &Tree, id: u32) -> Vec<u32> {
     t.children(NodeId(id)).map(|c| c.0).collect()

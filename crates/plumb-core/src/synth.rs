@@ -295,6 +295,11 @@ pub fn flat_tree(children: u32) -> Tree {
     b.finish().unwrap()
 }
 
+/// `s` as UTF-16 without a terminator: how names are stored in a tree.
+pub fn u(s: &str) -> Vec<u16> {
+    s.encode_utf16().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,3 +335,4 @@ mod tests {
         assert_eq!(&r[1022..1024], &r[0x30..0x32]);
     }
 }
+

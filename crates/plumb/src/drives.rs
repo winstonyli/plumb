@@ -19,7 +19,7 @@ pub fn list() -> Vec<ViewInfo> {
 
 /// The drive at `root` if it is a kind the picker offers and reports a size.
 fn probe(root: String) -> Option<ViewInfo> {
-    let wide: Vec<u16> = root.encode_utf16().chain([0]).collect();
+    let wide = plumb_core::wide(&root);
     let wide = PCWSTR(wide.as_ptr());
     let kind = unsafe { GetDriveTypeW(wide) };
     if ![DRIVE_FIXED, DRIVE_REMOVABLE, DRIVE_REMOTE].contains(&kind) {

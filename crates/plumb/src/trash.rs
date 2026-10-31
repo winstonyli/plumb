@@ -97,7 +97,7 @@ fn perform(paths: &[&str], permanent: bool, owner: isize, results: &Results) -> 
         let sink: IFileOperationProgressSink = Sink(results.clone()).into();
         let _cookie = op.Advise(&sink)?;
         for p in paths {
-            let wide: Vec<u16> = p.encode_utf16().chain([0]).collect();
+            let wide = plumb_core::wide(p);
             // An item the shell cannot name is left out: it gets no result and is judged below.
             let item: Result<IShellItem> = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None);
             if let Ok(item) = item {

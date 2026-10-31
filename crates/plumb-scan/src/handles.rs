@@ -216,7 +216,7 @@ mod tests {
         std::fs::write(&path, b"x").unwrap();
         let _held = std::fs::File::open(&path).unwrap();
         // A synchronous pipe server with ConnectNamedPipe pending on another thread: the classic hang for name queries.
-        let name: Vec<u16> = format!(r"\\.\pipe\plumb-spike-{}", std::process::id()).encode_utf16().chain([0]).collect();
+        let name = plumb_core::wide(&format!(r"\\.\pipe\plumb-spike-{}", std::process::id()));
         let pipe = unsafe { CreateNamedPipeW(windows::core::PCWSTR(name.as_ptr()), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, None) };
         assert!(!pipe.is_invalid());
         let raw = pipe.0 as isize;
