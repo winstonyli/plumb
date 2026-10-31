@@ -43,12 +43,12 @@ pub fn selftest() -> Result<String> {
         let root = dir.to_string_lossy().into_owned();
         w.spawn_scan(0, root.clone(), false);
         w.open(other, root); // keeps view 0's scan going and scans `other`
-        w.progress.cancel();
-        w.rx = None; // so `other` never finishes by itself: only view 0 does
-        w.preview = Some(Preview::new(preview_channel(4).1));
+        w.run.progress.cancel();
+        w.run.rx = None; // so `other` never finishes by itself: only view 0 does
+        w.run.preview = Some(Preview::new(preview_channel(4).1));
     });
     pump_until("the kept view's scan", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.app.has_tree()))?;
-    if with(|w| w.preview.take().is_some()) != Some(true) {
+    if with(|w| w.run.preview.take().is_some()) != Some(true) {
         return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a kept view's scan ending dropped the preview of the view on screen"));
     }
     with(|w| w.open(0, dir.to_string_lossy().into_owned())); // back to view 0 and its finished tree
@@ -63,9 +63,9 @@ pub fn selftest() -> Result<String> {
     })
     .unwrap_or(0);
     let away = |w: &mut Win| w.parked.first().and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).map_or(0, |t| t.len());
-    pump_until("the kept scan's tree to grow", 30, &|w| away(w) > other + 1000 || w.parked.first().and_then(|d| d.as_ref()).is_none_or(|d| d.rx.is_none()))?;
+    pump_until("the kept scan's tree to grow", 30, &|w| away(w) > other + 1000 || w.parked.first().and_then(|d| d.as_ref()).is_none_or(|d| d.run.rx.is_none()))?;
     with(|w| w.open(0, big.clone()));
-    let back = with(|w| w.app.slot.tree.is_some() && w.app.slot.model.is_some() && (w.preview.is_some() || matches!(w.app.slot.scan, crate::app::Scan::Idle)));
+    let back = with(|w| w.app.slot.tree.is_some() && w.app.slot.model.is_some() && (w.run.preview.is_some() || matches!(w.app.slot.scan, crate::app::Scan::Idle)));
     if back != Some(true) {
         return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "coming back to a view that is still scanning showed no tree"));
     }
@@ -77,9 +77,9 @@ pub fn selftest() -> Result<String> {
         w.spawn_scan(0, dir.to_string_lossy().into_owned(), false);
         w.open(w.app.views.len() - 1, dir.to_string_lossy().into_owned());
     });
-    pump_until("the parked scan to finish", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.rx.is_none() && d.app.has_tree()))?;
+    pump_until("the parked scan to finish", 30, &|w| w.parked.first().and_then(|d| d.as_ref()).is_some_and(|d| d.run.rx.is_none() && d.app.has_tree()))?;
     with(|w| w.open(0, dir.to_string_lossy().into_owned()));
-    let done = with(|w| w.app.slot.tree.is_some() && w.app.slot.model.is_some() && w.preview.is_none() && matches!(w.app.slot.scan, crate::app::Scan::Idle));
+    let done = with(|w| w.app.slot.tree.is_some() && w.app.slot.model.is_some() && w.run.preview.is_none() && matches!(w.app.slot.scan, crate::app::Scan::Idle));
     if done != Some(true) {
         return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a scan that finished while parked came back without a finished tree"));
     }
@@ -157,7 +157,7 @@ pub fn selftest_live() -> Result<String> {
         let i = with(|w| w.app.views.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
         let i = i.ok_or_else(|| fail(format!("view {letter}: is not in the view list")))?;
         with(|w| w.spawn_scan(i, format!("{letter}:\\"), false));
-        wait("the scan and the journal reader", 180, &|w| w.watch.is_some())?;
+        wait("the scan and the journal reader", 180, &|w| w.run.watch.is_some())?;
         std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
         std::fs::write(dir.join("f.bin"), vec![1u8; 1 << 20]).map_err(|e| fail(e.to_string()))?;
         wait("the new file", 20, &|w| size_at(w, "f.bin") == Some(1 << 20))?;
@@ -232,7 +232,7 @@ pub fn selftest_watch() -> Result<String> {
         let i = with(|w| w.app.views.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
         let i = i.ok_or_else(|| fail(format!("view {letter}: is not in the view list")))?;
         with(|w| w.spawn_scan(i, dir.to_string_lossy().into_owned(), false));
-        wait("the scan and the directory watch", 60, &|w| w.watch.is_some())?;
+        wait("the scan and the directory watch", 60, &|w| w.run.watch.is_some())?;
         std::fs::write(dir.join("f.bin"), vec![1u8; 1 << 20]).map_err(io)?;
         wait("the new file", 20, &|w| size_at(w, "f.bin") == Some(1 << 20))?;
         wait("the live marker", 20, &|w| matches!(&w.app.slot.live, LiveStatus::On { last: Some(_) }))?;
@@ -255,14 +255,14 @@ pub fn selftest_watch() -> Result<String> {
         with(|w| w.spawn_scan(i, big.clone(), false));
         wait("the view scan to get going", 60, &running)?;
         with(|w| w.cancel_scan());
-        let cancelled = with(|w| matches!(w.app.slot.scan, crate::app::Scan::Cancelled) && w.app.slot.tree.is_none() && w.rx.is_none());
+        let cancelled = with(|w| matches!(w.app.slot.scan, crate::app::Scan::Cancelled) && w.app.slot.tree.is_none() && w.run.rx.is_none());
         if cancelled != Some(true) {
             return Err(fail("cancelling did not leave a cancelled, empty state".into()));
         }
         with(|w| w.spawn_scan(i, big, false));
         wait("the view scan to get going again", 60, &running)?;
         with(|w| w.spawn_scan(i, dir.to_string_lossy().into_owned(), false));
-        wait("the replacement scan", 60, &|w| w.watch.is_some() && size_at(w, "g.bin") == Some(3 << 20))?;
+        wait("the replacement scan", 60, &|w| w.run.watch.is_some() && size_at(w, "g.bin") == Some(3 << 20))?;
         // A second view (made up; its root is another temp directory). Leaving the first keeps its
         // tree and watch: a change made while it is away shows when it comes back, with no rescan.
         let j = with(|w| {
@@ -274,7 +274,7 @@ pub fn selftest_watch() -> Result<String> {
         std::fs::write(dir2.join("x.bin"), vec![1u8; 8192]).map_err(io)?;
         let root2 = || dir2.to_string_lossy().into_owned();
         with(|w| w.open(j, root2()));
-        wait("the second view's scan", 60, &|w| w.watch.is_some() && size_at(w, "x.bin") == Some(8192))?;
+        wait("the second view's scan", 60, &|w| w.run.watch.is_some() && size_at(w, "x.bin") == Some(8192))?;
         if with(|w| w.app.marks.get(i) == Some(&Mark::Kept)) != Some(true) {
             return Err(fail("the view that is away is not marked as kept".into()));
         }
@@ -282,7 +282,7 @@ pub fn selftest_watch() -> Result<String> {
         let away = |w: &mut Win, rel: &str| w.parked.get(i).and_then(|d| d.as_ref()).and_then(|d| d.app.tree()).and_then(|t| size_in(t, rel));
         wait("the change to reach the view that is away", 20, &|w| away(w, "h.bin") == Some(2 << 20))?;
         with(|w| w.open(i, dir.to_string_lossy().into_owned()));
-        let back = with(|w| w.rx.is_none() && w.watch.is_some() && size_at(w, "h.bin") == Some(2 << 20));
+        let back = with(|w| w.run.rx.is_none() && w.run.watch.is_some() && size_at(w, "h.bin") == Some(2 << 20));
         if back != Some(true) {
             return Err(fail("coming back to a view did not show its kept, current tree".into()));
         }
@@ -291,16 +291,16 @@ pub fn selftest_watch() -> Result<String> {
         wait("the view scan to get going once more", 60, &running)?;
         with(|w| w.open(j, root2()));
         let kept = with(|w| {
-            w.watch.is_some()
+            w.run.watch.is_some()
                 && size_at(w, "x.bin") == Some(8192)
-                && w.parked.get(i).and_then(|d| d.as_ref()).is_some_and(|d| d.rx.is_some())
+                && w.parked.get(i).and_then(|d| d.as_ref()).is_some_and(|d| d.run.rx.is_some())
                 && w.app.marks.get(i) == Some(&Mark::Scanning)
         });
         if kept != Some(true) {
             return Err(fail("the scan did not keep running while another view was shown".into()));
         }
         with(|w| w.open(i, big2.clone()));
-        let resumed = with(|w| w.rx.is_some() && matches!(w.app.slot.scan, crate::app::Scan::Running { .. }));
+        let resumed = with(|w| w.run.rx.is_some() && matches!(w.app.slot.scan, crate::app::Scan::Running { .. }));
         if resumed != Some(true) {
             return Err(fail("the running scan was not on screen after switching back".into()));
         }
@@ -391,7 +391,7 @@ pub fn selftest_delete() -> Result<String> {
         let i = with(|w| w.app.views.iter().position(|d| d.title() == format!("{letter}:"))).flatten();
         let i = i.ok_or_else(|| fail(format!("view {letter}: is not in the view list")))?;
         with(|w| w.spawn_scan(i, shown.clone(), false));
-        pump_until("the scan and the directory watch", 60, &|w| w.watch.is_some())?;
+        pump_until("the scan and the directory watch", 60, &|w| w.run.watch.is_some())?;
         pump_until("the scanned tree to hold the files", 5, &|w| in_tree(w, REC))?;
 
         // Cancel: nothing is touched, the marks stay.
@@ -645,21 +645,21 @@ pub fn selftest_processes() -> Result<String> {
         })
         .unwrap_or(0);
         wait("the other view's scan", 30, &|w| w.app.slot.tree.is_some() && w.app.active == Some(z) && matches!(w.app.slot.scan, crate::app::Scan::Idle))?;
-        let parked_polling = with(|w| w.parked[pi].as_ref().and_then(|d| d.procs.as_ref()).map(procs::ProcState::polling)).flatten();
+        let parked_polling = with(|w| w.parked[pi].as_ref().and_then(|d| d.run.procs.as_ref()).map(procs::ProcState::polling)).flatten();
         if parked_polling != Some(false) || with(|w| w.procs_polling()) != Some(false) {
             return Err(fail(format!("polling while away: {parked_polling:?}")));
         }
         with(|w| w.open(pi, String::new()));
-        let before = with(|w| w.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
-        wait("polling again", 10, &|w| w.procs_polling() && w.procs.as_ref().is_some_and(|p| p.updates() > before))?;
+        let before = with(|w| w.run.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
+        wait("polling again", 10, &|w| w.procs_polling() && w.run.procs.as_ref().is_some_and(|p| p.updates() > before))?;
         // Minimised, the list is not followed; restored, it is again.
         unsafe { SendMessageW(hwnd, WM_SIZE, Some(WPARAM(SIZE_MINIMIZED as usize)), Some(LPARAM(0))) };
         if with(|w| w.procs_polling()) != Some(false) {
             return Err(fail("still polling while minimised".into()));
         }
         unsafe { SendMessageW(hwnd, WM_SIZE, Some(WPARAM(SIZE_RESTORED as usize)), Some(LPARAM(0))) };
-        let before = with(|w| w.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
-        wait("polling after restore", 10, &|w| w.procs_polling() && w.procs.as_ref().is_some_and(|p| p.updates() > before))?;
+        let before = with(|w| w.run.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
+        wait("polling after restore", 10, &|w| w.procs_polling() && w.run.procs.as_ref().is_some_and(|p| p.updates() > before))?;
         // The pane lists a file this process holds open once its row has rested selected.
         let held = std::fs::File::open(dir.join("f.bin")).map_err(|e| fail(e.to_string()))?;
         // Enough more than the pane has lines for the wheel test below.

@@ -124,7 +124,7 @@ impl Win {
                 let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
             }
         });
-        self.watch = Some(Watch {
+        self.run.watch = Some(Watch {
             src: Source::Journal { reader, live: Live::new(records), queue: VecDeque::new() },
             pacer: Pacer::new(Instant::now()),
             dirty: false,
@@ -137,7 +137,7 @@ impl Win {
     /// while the scan ran and wakes the window to apply it.
     pub(super) fn install_dir_watch(&mut self, watcher: Watcher) {
         watcher.release();
-        self.watch = Some(Watch {
+        self.run.watch = Some(Watch {
             src: Source::Dir { watcher, queue: VecDeque::new() },
             pacer: Pacer::new(Instant::now()),
             dirty: false,
@@ -151,7 +151,7 @@ impl Win {
     /// (`journal`). A watch that cannot start leaves the tree static.
     pub(super) fn start_dir_pending(&mut self, root: &str, journal: bool) {
         self.drop_pending();
-        self.dir_failed = None;
+        self.run.dir_failed = None;
         if journal {
             return;
         }
@@ -162,20 +162,20 @@ impl Win {
                 let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
             }
         }) {
-            Ok(w) => self.dir_pending = Some(w),
-            Err(m) => self.dir_failed = Some(m),
+            Ok(w) => self.run.dir_pending = Some(w),
+            Err(m) => self.run.dir_failed = Some(m),
         }
     }
 
     pub(super) fn drop_pending(&mut self) {
-        if let Some(w) = self.dir_pending.take() {
+        if let Some(w) = self.run.dir_pending.take() {
             std::thread::spawn(move || w.stop());
         }
     }
 
     /// Stops following changes. The source may be mid-wait, so it is joined off the UI thread.
     pub(super) fn drop_watch(&mut self) {
-        if let Some(w) = self.watch.take() {
+        if let Some(w) = self.run.watch.take() {
             std::thread::spawn(move || w.stop());
             self.sync_timers();
         }
@@ -187,7 +187,7 @@ impl Win {
         for d in 0..self.parked.len().max(self.app.active.map_or(0, |a| a + 1)) {
             // The watches of views off screen keep their trees current too.
             self.in_slot(d, |w| {
-                let ended = w.watch.as_mut().and_then(Watch::drain);
+                let ended = w.run.watch.as_mut().and_then(Watch::drain);
                 w.apply_live();
                 if let Some(e) = ended {
                     w.watch_ended(e);
@@ -198,7 +198,7 @@ impl Win {
 
     /// Applies queued changes for at most `APPLY_BUDGET`; leftovers continue on the next message.
     pub(super) fn apply_queued(&mut self) {
-        let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.slot.tree) else { return };
+        let (Some(w), Some(tree)) = (&mut self.run.watch, &mut self.app.slot.tree) else { return };
         let n = w.apply(tree, Instant::now() + APPLY_BUDGET);
         w.dirty |= n > 0;
         if w.queued() {
@@ -210,7 +210,7 @@ impl Win {
     /// keeps its changes marked until it is shown again.
     pub(super) fn apply_live(&mut self) {
         self.apply_queued();
-        if let Some(w) = &mut self.watch
+        if let Some(w) = &mut self.run.watch
             && !w.armed
             && (w.dirty || w.backlog())
             && !self.borrowed
@@ -223,13 +223,13 @@ impl Win {
     /// `TIMER_LIVE`: at most every `REPAINT`, refreshes the rows once if the tree changed.
     pub(super) fn live_tick(&mut self) {
         self.apply_live();
-        let due = self.watch.as_ref().is_some_and(|w| w.dirty && w.pacer.due(Instant::now()));
+        let due = self.run.watch.as_ref().is_some_and(|w| w.dirty && w.pacer.due(Instant::now()));
         if due {
             let t0 = Instant::now();
             self.app.refresh_rows();
             self.app.live_changed(local_time());
             self.invalidate();
-            if let Some(w) = &mut self.watch {
+            if let Some(w) = &mut self.run.watch {
                 w.pacer.done(Instant::now(), t0.elapsed());
                 w.dirty = false;
             }
@@ -237,7 +237,7 @@ impl Win {
                 self.auto_rescan();
             }
         }
-        if let Some(w) = &mut self.watch
+        if let Some(w) = &mut self.run.watch
             && w.armed
             && !w.dirty
             && !w.backlog()
@@ -249,7 +249,7 @@ impl Win {
 
     /// The source ended: bring the tree up to date, then rescan or say why updates stopped.
     pub(super) fn watch_ended(&mut self, e: Ended) {
-        if let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.slot.tree) {
+        if let (Some(w), Some(tree)) = (&mut self.run.watch, &mut self.app.slot.tree) {
             w.apply(tree, Instant::now() + Duration::from_millis(50));
         }
         self.app.refresh_rows();
@@ -264,7 +264,7 @@ impl Win {
 
     /// Starts a background rescan if the policy allows (or one is already running).
     pub(super) fn auto_rescan(&mut self) -> bool {
-        if self.rx.is_some() {
+        if self.run.rx.is_some() {
             return true;
         }
         let Some(i) = self.app.active else { return false };

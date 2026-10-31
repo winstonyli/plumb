@@ -99,21 +99,31 @@ const PREVIEW_TICK_MS: u32 = 15;
 const PREVIEW_QUEUE: usize = 200_000;
 /// Longest a batch of journal deltas may hold the UI thread.
 const APPLY_BUDGET: Duration = Duration::from_millis(5);
-/// Everything the window keeps per view besides what the app holds (`Slot`). The fields of the
-/// view on screen live directly in `Win`; the others wait in `Win::parked` as one of these.
+/// The scan, preview, watches and poller of one view. The view on screen's live in `Win::run`; the others wait
+/// in a `View`.
 #[derive(Default)]
-struct View {
-    app: Slot,
+struct Run {
     progress: Arc<Progress>,
     rx: Option<Receiver<ScanResult>>,
     /// What the scan has found so far; kept views have none (a partial tree follows only the view on screen).
     preview: Option<Preview>,
+    /// The scan in flight is a rescan: the old tree stays on screen until it finishes.
     background: bool,
     watch: Option<Watch>,
+    /// A directory watch started with the scan and held until the tree is installed.
     dir_pending: Option<Watcher>,
+    /// Why the directory watch for the scan in flight could not start.
     dir_failed: Option<String>,
     /// The Processes view's poller and reconciler.
     procs: Option<procs::ProcState>,
+}
+
+/// Everything the window keeps per view besides what the app holds (`Slot`), kept in `Win::parked` while another
+/// view is on screen.
+#[derive(Default)]
+struct View {
+    app: Slot,
+    run: Run,
     /// Order of last use, for eviction.
     used: u64,
 }
@@ -121,21 +131,21 @@ struct View {
 impl View {
     /// Ends the view's scan and watches. The watches may be mid-wait, so they stop off the UI thread.
     fn discard(mut self) {
-        if let Some(p) = &mut self.procs {
+        if let Some(p) = &mut self.run.procs {
             p.stop();
         }
-        self.progress.cancel();
-        if let Some(p) = &mut self.procs {
+        self.run.progress.cancel();
+        if let Some(p) = &mut self.run.procs {
             p.stop();
         }
-        if self.watch.is_none() && self.dir_pending.is_none() {
+        if self.run.watch.is_none() && self.run.dir_pending.is_none() {
             return;
         }
         std::thread::spawn(move || {
-            if let Some(w) = self.watch {
+            if let Some(w) = self.run.watch {
                 w.stop();
             }
-            if let Some(w) = self.dir_pending {
+            if let Some(w) = self.run.dir_pending {
                 w.stop();
             }
         });
@@ -157,17 +167,8 @@ struct Win {
     /// DIPs of the client area's top that overhang the screen (a maximized window's frame); 0 otherwise.
     inset: f32,
     dark: bool,
-    progress: Arc<Progress>,
-    rx: Option<Receiver<ScanResult>>,
-    /// The scan in flight is a rescan: the old tree stays on screen until it finishes.
-    background: bool,
-    watch: Option<Watch>,
-    /// A directory watch started with the scan and held until the tree is installed.
-    dir_pending: Option<Watcher>,
-    /// Why the directory watch for the scan in flight could not start.
-    dir_failed: Option<String>,
-    /// The Processes view's poller and reconciler, while it is the one on screen.
-    procs: Option<procs::ProcState>,
+    /// The scan, preview, watches and poller of the view on screen.
+    run: Run,
     policy: RescanPolicy,
     /// When the user last clicked, scrolled or pressed a key.
     last_input: Instant,
@@ -180,8 +181,6 @@ struct Win {
     high_surrogate: Option<u16>,
     /// The left button went down in the filter box and is still held: moving extends the selection.
     filter_drag: bool,
-    /// The partial tree of the foreground scan in progress.
-    preview: Option<Preview>,
     preview_pacer: Pacer,
     /// The preview tree changed since the rows were last refreshed.
     preview_dirty: bool,
@@ -329,10 +328,10 @@ impl Win {
         app.accent = system_accent();
         let (filter_tx, filter_rx) = channel();
         let win = Self {
-            hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, progress: Arc::default(), rx: None,
-            background: false, watch: None, dir_pending: None, dir_failed: None, procs: None, policy: RescanPolicy::default(), last_input: Instant::now(),
+            hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, run: Run::default(),
+            policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
-            preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
+            preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
             parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
@@ -491,9 +490,9 @@ impl Win {
     /// that kept running), else a new scan of `root`. The view on screen is kept, not cancelled.
     /// Choosing the view already on screen scans it afresh.
     fn open(&mut self, view: usize, root: String) {
-        if self.app.active == Some(view) && self.procs.is_some() {
+        if self.app.active == Some(view) && self.run.procs.is_some() {
             // The Processes view has nothing to rescan: look again now.
-            if let Some(p) = &self.procs {
+            if let Some(p) = &self.run.procs {
                 p.kick();
             }
             return;
@@ -515,15 +514,7 @@ impl Win {
     }
 
     fn swap_window_fields(&mut self, d: &mut View) {
-        use std::mem::swap;
-        swap(&mut self.progress, &mut d.progress);
-        swap(&mut self.rx, &mut d.rx);
-        swap(&mut self.preview, &mut d.preview);
-        swap(&mut self.background, &mut d.background);
-        swap(&mut self.watch, &mut d.watch);
-        swap(&mut self.dir_pending, &mut d.dir_pending);
-        swap(&mut self.dir_failed, &mut d.dir_failed);
-        swap(&mut self.procs, &mut d.procs);
+        std::mem::swap(&mut self.run, &mut d.run);
     }
 
     /// Takes the view on screen away, keeping its tree, scan and watch unless there is nothing
@@ -532,10 +523,10 @@ impl Win {
         let Some(old) = self.app.active.take() else { return };
         let mut d = View::default();
         self.swap_view(&mut d);
-        if let Some(p) = &mut d.procs {
+        if let Some(p) = &mut d.run.procs {
             p.stop(); // the list is not followed while away
         }
-        if d.app.has_tree() || d.rx.is_some() {
+        if d.app.has_tree() || d.run.rx.is_some() {
             self.clock += 1;
             d.used = self.clock;
             self.parked.resize_with(self.parked.len().max(old + 1), || None);
@@ -552,10 +543,10 @@ impl Win {
         let Some(mut d) = self.parked.get_mut(view).and_then(Option::take) else { return false };
         self.swap_view(&mut d);
         self.app.active = Some(view);
-        if let Some(p) = &mut self.procs {
+        if let Some(p) = &mut self.run.procs {
             p.start(self.hwnd, view, WM_PROCS);
         }
-        if self.preview.is_some() {
+        if self.run.preview.is_some() {
             // The scan kept building its tree while the view was away: make the rows for it as it is now.
             self.app.preview_installed();
             self.preview_pacer = Pacer::new(Instant::now());
@@ -574,7 +565,7 @@ impl Win {
     /// `KEPT_VIEWS` trees are held with the one on screen.
     fn evict(&mut self) {
         while self.parked.iter().flatten().filter(|d| d.app.has_tree()).count() >= KEPT_VIEWS {
-            let lru = self.parked.iter().enumerate().filter_map(|(i, d)| d.as_ref().filter(|d| d.rx.is_none()).map(|d| (d.used, i))).min();
+            let lru = self.parked.iter().enumerate().filter_map(|(i, d)| d.as_ref().filter(|d| d.run.rx.is_none()).map(|d| (d.used, i))).min();
             let Some((_, i)) = lru else { return };
             if let Some(mut d) = self.parked[i].take() {
                 self.app.stash_basket(i, &mut d.app); // its marks outlive its tree
@@ -630,7 +621,7 @@ impl Win {
     fn sync_marks(&mut self) {
         let marks = (0..self.app.views.len())
             .map(|i| match self.parked.get(i).and_then(Option::as_ref) {
-                Some(d) if d.rx.is_some() => Mark::Scanning,
+                Some(d) if d.run.rx.is_some() => Mark::Scanning,
                 Some(d) if d.app.has_tree() => Mark::Kept,
                 _ => Mark::None,
             })
@@ -644,9 +635,9 @@ impl Win {
             return;
         }
         let want = [
-            (TIMER_PROGRESS, self.rx.is_some() && !self.background, 100),
-            (TIMER_PREVIEW, self.preview.is_some() || self.parked.iter().flatten().any(|d| d.preview.is_some()), PREVIEW_TICK_MS),
-            (TIMER_LIVE, self.watch.as_ref().is_some_and(|w| w.armed), REPAINT.as_millis() as u32),
+            (TIMER_PROGRESS, self.run.rx.is_some() && !self.run.background, 100),
+            (TIMER_PREVIEW, self.run.preview.is_some() || self.parked.iter().flatten().any(|d| d.run.preview.is_some()), PREVIEW_TICK_MS),
+            (TIMER_LIVE, self.run.watch.as_ref().is_some_and(|w| w.armed), REPAINT.as_millis() as u32),
         ];
         for (i, (id, on, ms)) in want.into_iter().enumerate() {
             if self.timers[i] != on {
@@ -662,8 +653,8 @@ impl Win {
 
     /// Ends every scan and watch, for exit.
     fn shutdown(&mut self) {
-        self.progress.cancel();
-        if let Some(p) = &mut self.procs {
+        self.run.progress.cancel();
+        if let Some(p) = &mut self.run.procs {
             p.stop();
         }
         for d in self.parked.drain(..).flatten() {
@@ -673,9 +664,9 @@ impl Win {
 
     /// Rescans in the background, keeping the old tree on screen until the new one is ready.
     fn start_rescan(&mut self, view: usize) {
-        if let Some(p) = &self.procs {
+        if let Some(p) = &self.run.procs {
             p.kick();
-        } else if self.rx.is_none() {
+        } else if self.run.rx.is_none() {
             let root = self.app.views[view].root.clone();
             self.spawn_scan(view, root, true);
         }
@@ -684,15 +675,15 @@ impl Win {
     /// Stops the scan in flight. Its thread winds down on its own and its result is dropped with
     /// the old channel. A first scan leaves no tree; a background rescan keeps the old one.
     fn cancel_scan(&mut self) {
-        if self.rx.take().is_none() {
+        if self.run.rx.take().is_none() {
             return;
         }
-        self.progress.cancel();
-        if let Some(p) = &mut self.procs {
+        self.run.progress.cancel();
+        if let Some(p) = &mut self.run.procs {
             p.stop();
         }
-        self.preview = None;
-        self.background = false;
+        self.run.preview = None;
+        self.run.background = false;
         self.drop_pending();
         self.app.cancel_scan();
         self.sync_timers();
@@ -703,23 +694,23 @@ impl Win {
         if self.app.views[view].kind == ViewKind::Processes {
             return self.start_procs(view);
         }
-        if self.rx.is_some() {
+        if self.run.rx.is_some() {
             // The view on screen is scanned afresh mid-scan: the old scan is abandoned, not waited for.
-            self.progress.cancel();
+            self.run.progress.cancel();
         }
-        self.background = background;
+        self.run.background = background;
         if background {
             self.app.slot.refreshing = true;
         } else {
             self.drop_watch();
             self.app.begin_scan(view);
         }
-        self.progress = if background {
-            self.preview = None;
+        self.run.progress = if background {
+            self.run.preview = None;
             Arc::default()
         } else {
             let (tx, rx) = preview_channel(PREVIEW_QUEUE);
-            self.preview = Some(Preview::new(rx));
+            self.run.preview = Some(Preview::new(rx));
             self.preview_pacer = Pacer::new(Instant::now());
             self.preview_dirty = false;
             Arc::new(Progress::with_preview(tx))
@@ -728,9 +719,9 @@ impl Win {
         // is off (a fresh one) or cannot be opened is watched by directory instead.
         let journal = open_journal(&root);
         self.start_dir_pending(&root, journal.is_some());
-        let progress = self.progress.clone();
+        let progress = self.run.progress.clone();
         let (tx, rx) = channel();
-        self.rx = Some(rx);
+        self.run.rx = Some(rx);
         let hwnd = self.hwnd.0 as isize;
         std::thread::spawn(move || {
             let t0 = Instant::now();
@@ -757,7 +748,7 @@ impl Win {
         self.app.begin_scan(view);
         let mut st = procs::ProcState::default();
         st.start(self.hwnd, view, WM_PROCS);
-        self.procs = Some(st);
+        self.run.procs = Some(st);
         self.sync_timers();
         self.invalidate();
     }
@@ -765,13 +756,13 @@ impl Win {
     /// The process list is followed only while the window can be seen: a minimised window stops the poller and
     /// restoring it starts a new one (whose first snapshot has no rates).
     fn follow_processes(&mut self, on: bool) {
-        let (Some(p), Some(view)) = (&mut self.procs, self.app.active) else { return };
+        let (Some(p), Some(view)) = (&mut self.run.procs, self.app.active) else { return };
         if on { p.start(self.hwnd, view, WM_PROCS) } else { p.stop() }
     }
 
     /// `WM_PROCS`: a snapshot of the processes.
     fn procs_update(&mut self, snap: procs::Snapshot) {
-        let Some(st) = &mut self.procs else { return };
+        let Some(st) = &mut self.run.procs else { return };
         if st.update(&mut self.app, snap) {
             self.app.fit_chips(&|s| self.painter.text_width(&self.gfx, Role::Title, s));
         }
@@ -792,7 +783,7 @@ impl Win {
 
     /// Whether the Processes view on screen is following the list.
     pub fn procs_polling(&self) -> bool {
-        self.procs.as_ref().is_some_and(procs::ProcState::polling)
+        self.run.procs.as_ref().is_some_and(procs::ProcState::polling)
     }
 
     /// (Re)starts the debounce: the scan begins 100 ms after the last keystroke.
@@ -824,7 +815,7 @@ impl Win {
     }
 
     fn poll_progress(&mut self) {
-        let (d, f, b) = self.progress.snapshot();
+        let (d, f, b) = self.run.progress.snapshot();
         self.app.progress(d, f, b);
         self.invalidate();
     }
@@ -835,11 +826,11 @@ impl Win {
         let deadline = Instant::now() + APPLY_BUDGET;
         // Scans of kept views build their trees too, so a view comes back with what was found.
         for d in self.parked.iter_mut().flatten() {
-            if let Some(p) = &mut d.preview {
+            if let Some(p) = &mut d.run.preview {
                 p.apply(d.app.tree_mut(), deadline);
             }
         }
-        let Some(p) = &mut self.preview else { return };
+        let Some(p) = &mut self.run.preview else { return };
         let a = p.apply(&mut self.app.slot.tree, deadline);
         if a.reset || a.created {
             self.app.preview_installed(); // builds the model from whatever tree there is now
@@ -857,11 +848,11 @@ impl Win {
     }
 
     fn scan_done(&mut self) {
-        let Some(rx) = &self.rx else { return };
+        let Some(rx) = &self.run.rx else { return };
         let Ok(msg) = rx.try_recv() else { return };
-        self.rx = None;
-        self.preview = None; // anything still queued is discarded; the exact tree is here
-        let background = std::mem::take(&mut self.background);
+        self.run.rx = None;
+        self.run.preview = None; // anything still queued is discarded; the exact tree is here
+        let background = std::mem::take(&mut self.run.background);
         match msg {
             Ok(sc) => {
                 let files = sc.tree.subtree_files[NodeId(0)] as u64;
@@ -883,9 +874,9 @@ impl Win {
                 if let (Some((vol, info)), Some(mft)) = (sc.journal, sc.report.mft) {
                     self.drop_pending();
                     self.start_watch(vol, info, mft.records);
-                } else if let Some(w) = self.dir_pending.take() {
+                } else if let Some(w) = self.run.dir_pending.take() {
                     self.install_dir_watch(w);
-                } else if let Some(m) = self.dir_failed.take() {
+                } else if let Some(m) = self.run.dir_failed.take() {
                     self.app.set_live(LiveStatus::Stale(format!("live updates are off: {m}")));
                 }
             }
@@ -976,7 +967,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         }
         Effect::Metric(m) => {
             with(|w| {
-                if let Some(p) = &mut w.procs {
+                if let Some(p) = &mut w.run.procs {
                     p.set_metric(&mut w.app, m);
                 }
                 w.invalidate();
