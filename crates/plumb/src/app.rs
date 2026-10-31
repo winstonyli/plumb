@@ -16,6 +16,7 @@ use plumb_scan::handles::{HandleError, HandleList};
 use plumb_core::treemap::{self, Class, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Write as _;
 
 pub use filter::FilterJob;
 
@@ -40,10 +41,10 @@ impl ViewKind {
     }
 
     /// The text of a size-column value: bytes for a disk; a process's memory, CPU share or I/O rate by `metric`.
-    pub fn size_text(self, metric: Metric, v: u64) -> String {
+    pub fn size_text(self, metric: Metric, v: u64) -> fmt::Show<'static> {
         match (self, metric) {
-            (ViewKind::Processes, Metric::Cpu) => format!("{:.1}%", v as f64 / 10.0),
-            (ViewKind::Processes, Metric::Io) => format!("{}/s", fmt::size(v)),
+            (ViewKind::Processes, Metric::Cpu) => fmt::tenths(v),
+            (ViewKind::Processes, Metric::Io) => fmt::rate(v),
             _ => fmt::size(v),
         }
     }
@@ -69,12 +70,12 @@ impl ViewKind {
     }
 
     /// The text of the last two columns for `id`; the second is `None` when the node has nothing to show there.
-    pub fn last_two(self, tree: &Tree, id: NodeId) -> (String, Option<String>) {
+    pub fn last_two(self, tree: &Tree, id: NodeId) -> (fmt::Show<'static>, Option<fmt::Show<'static>>) {
         match self {
             ViewKind::Disk => (fmt::count(tree.subtree_files[id] as u64), tree.mtime[id].map(|d| fmt::date(d.get()))),
             ViewKind::Processes => {
                 let [cpu, io, _] = tree.aux.get(id.idx()).copied().unwrap_or_default();
-                (format!("{:.1}%", cpu as f64 / 10.0), Some(format!("{}/s", fmt::size(io))))
+                (fmt::tenths(cpu), Some(fmt::rate(io)))
             }
         }
     }
@@ -268,15 +269,28 @@ pub enum TipKey {
     Tile(NodeId, Kind),
 }
 
-fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
-    match t.kind {
-        Kind::Rest => format!("{}, {}", fmt::noun(u64::from(t.count), "smaller item", "smaller items"), fmt::size(t.bytes)),
-        Kind::Own => format!("{} itself  ({})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes)),
+/// What a button's tooltip says, short of writing it: the pointer moving over a button only needs its rectangle.
+#[derive(Clone, Copy)]
+enum ButtonTip {
+    Text(&'static str),
+    /// A view chip: its free space.
+    Chip(usize),
+    /// The map metric button: what the metric counts.
+    Metric,
+}
+
+fn tile_tip(tree: &Tree, t: &Tile, now: u32, out: &mut String) {
+    let _ = match t.kind {
+        Kind::Rest => write!(out, "{}, {}", fmt::noun(u64::from(t.count), "smaller item", "smaller items"), fmt::size(t.bytes)),
+        Kind::Own => write!(out, "{} itself  ({})", fmt::node_path(tree, t.node), fmt::size(t.bytes)),
         _ => {
-            let when = tree.mtime[t.node].map_or_else(String::new, |d| format!(", modified {}, {}", fmt::date(d.get()), fmt::age(now, d.get())));
-            format!("{}  ({}{when})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes))
+            let _ = write!(out, "{}  ({}", fmt::node_path(tree, t.node), fmt::size(t.bytes));
+            if let Some(d) = tree.mtime[t.node] {
+                let _ = write!(out, ", modified {}, {}", fmt::date(d.get()), fmt::age(now, d.get()));
+            }
+            out.write_char(')')
         }
-    }
+    };
 }
 
 /// Today as a day count since 1601-01-01.
@@ -696,90 +710,105 @@ impl App {
 
     /// The button at (x, y), if there is one there, with its tooltip: an icon button carries no label, and a
     /// view chip's label shows only the free size, to fit. These are what light up under the pointer.
-    fn button_at(&self, x: f32, y: f32) -> Option<(Rect, String)> {
+    fn button_at(&self, x: f32, y: f32) -> Option<(Rect, ButtonTip)> {
         let l = &self.layout;
         if self.can_elevate && l.admin_button().contains(x, y) {
-            return Some((l.admin_button(), "Run as administrator".into()));
+            return Some((l.admin_button(), ButtonTip::Text("Run as administrator")));
         }
         match l.hit(x, y, self.views.len()) {
-            Hit::Chip(i) => {
-                let d = self.views.get(i)?;
-                Some((l.chip(i), format!("{} {} free of {}", d.title(), fmt::size(d.free), fmt::size(d.total))))
-            }
-            Hit::Rescan => Some((l.rescan_button(), "Rescan".into())),
-            Hit::Cancel => Some((l.cancel_button(), "Cancel scan".into())),
-            Hit::Basket => Some((l.basket_chip(), "Review and delete the marked items".into())),
-            Hit::FilterRegex => Some((l.filter_regex(), "Regular expression".into())),
-            Hit::FilterClear => Some((l.filter_clear(), "Clear the filter".into())),
-            Hit::MapButton => Some((l.map_button(), "Show or hide the map  (Ctrl+M)".into())),
-            Hit::MetricButton => Some((l.metric_button(), format!("The map and the first column weigh processes by {}: {}; click for the next", metric_label(self.proc_metric), metric_help(self.proc_metric)))),
+            Hit::Chip(i) => self.views.get(i).map(|_| (l.chip(i), ButtonTip::Chip(i))),
+            Hit::Rescan => Some((l.rescan_button(), ButtonTip::Text("Rescan"))),
+            Hit::Cancel => Some((l.cancel_button(), ButtonTip::Text("Cancel scan"))),
+            Hit::Basket => Some((l.basket_chip(), ButtonTip::Text("Review and delete the marked items"))),
+            Hit::FilterRegex => Some((l.filter_regex(), ButtonTip::Text("Regular expression"))),
+            Hit::FilterClear => Some((l.filter_clear(), ButtonTip::Text("Clear the filter"))),
+            Hit::MapButton => Some((l.map_button(), ButtonTip::Text("Show or hide the map  (Ctrl+M)"))),
+            Hit::MetricButton => Some((l.metric_button(), ButtonTip::Metric)),
             _ => None,
+        }
+    }
+
+    fn write_button_tip(&self, tip: ButtonTip, out: &mut String) {
+        match tip {
+            ButtonTip::Text(s) => out.push_str(s),
+            ButtonTip::Chip(i) => {
+                if let Some(d) = self.views.get(i) {
+                    let _ = write!(out, "{} {} free of {}", d.title(), fmt::size(d.free), fmt::size(d.total));
+                }
+            }
+            ButtonTip::Metric => {
+                let _ = write!(out, "The map and the first column weigh processes by {}: {}; click for the next", metric_label(self.proc_metric), metric_help(self.proc_metric));
+            }
         }
     }
 
     /// The tooltip under (x, y): what it is about, and its text. The text may change while the target stays
     /// (a scan keeps adding to the totals), so the window compares targets to decide when to hide the tip.
-    pub fn tip_target(&self, x: f32, y: f32) -> Option<(TipKey, String)> {
-        if let Some((r, text)) = self.button_at(x, y) {
-            return Some((TipKey::Area(r), text));
+    pub fn tip_target(&self, x: f32, y: f32, out: &mut String) -> Option<TipKey> {
+        out.clear();
+        if let Some((r, tip)) = self.button_at(x, y) {
+            self.write_button_tip(tip, out);
+            return Some(TipKey::Area(r));
         }
         let bar = self.layout.status();
         if bar.contains(x, y) {
-            return Some((TipKey::Area(bar), format!("{}
-{}", self.status(), self.adapter)));
+            self.write_status(true, true, true, out);
+            let _ = write!(out, "\n{}", self.adapter);
+            return Some(TipKey::Area(bar));
         }
         let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.views.len()), Hit::Map))?)?;
         let tree = self.tree.as_ref()?;
-        let text = if self.kind() == ViewKind::Processes { self.process_tip(tree, t) } else { tile_tip(tree, t, self.map_now) };
-        Some((TipKey::Tile(t.node, t.kind), text))
+        if self.kind() == ViewKind::Processes { self.process_tip(tree, t, out) } else { tile_tip(tree, t, self.map_now, out) }
+        Some(TipKey::Tile(t.node, t.kind))
     }
 
     /// A map tile of the Processes view: name and pid, the numbers, the executable and when it started.
-    fn process_tip(&self, tree: &Tree, t: &Tile) -> String {
+    fn process_tip(&self, tree: &Tree, t: &Tile, out: &mut String) {
+        let (metric, size) = (metric_noun(self.proc_metric), self.kind().size_text(self.proc_metric, t.bytes));
         if t.kind == Kind::Rest {
             // A parent whose own size is under the cutoff is merged here too, with no Own tile of its own.
             let own = tree.size[t.node] > 0 && !self.map_tiles.iter().any(|o| o.kind == Kind::Own && o.node == t.node);
             let n = u64::from(t.count) - u64::from(own);
-            let mut what = Vec::new();
             if n > 0 {
-                what.push(fmt::noun(n, "smaller process", "smaller processes"));
+                let _ = write!(out, "{}", fmt::noun(n, "smaller process", "smaller processes"));
+            }
+            if n > 0 && own {
+                out.push_str(" and ");
             }
             if own {
-                what.push(format!("its own {}", metric_noun(self.proc_metric)));
+                let _ = write!(out, "its own {metric}");
             }
-            return format!("{}, {}", what.join(" and "), self.kind().size_text(self.proc_metric, t.bytes));
+            let _ = write!(out, ", {size}");
+            return;
         }
         let [cpu, io, pid] = tree.aux.get(t.node.idx()).copied().unwrap_or_default();
+        let name = fmt::node_name(tree, t.node);
         if t.kind == Kind::Own {
-            return format!(
-                "{}  (PID {pid})\n{} {} in the process itself",
-                tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_noun(self.proc_metric)
-            );
+            let _ = write!(out, "{name}  (PID {pid})\n{size} {metric} in the process itself");
+            return;
         }
         let scope = if tree.flags[t.node].contains(NodeFlags::DIR) { "this and its children" } else { "this process" };
-        let mut tip = format!(
-            "{}  (PID {pid})\n{} {} in {scope}; own CPU {:.1}%, I/O {}/s",
-            tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_noun(self.proc_metric), cpu as f64 / 10.0, fmt::size(io)
-        );
+        let _ = write!(out, "{name}  (PID {pid})\n{size} {metric} in {scope}; own CPU {}, I/O {}", fmt::tenths(cpu), fmt::rate(io));
         if let Some(info) = self.proc_info.get(&(pid as u32)) {
             if let Some(path) = &info.path {
-                tip.push('\n');
-                tip.push_str(path);
+                out.push('\n');
+                out.push_str(path);
             }
             if info.created > 0 {
                 let (day, now) = (fmt::local_day(info.created), fmt::local_day(now_filetime()));
-                tip.push_str(&format!("\nstarted {}, {}", fmt::date(day), fmt::age(now, day)));
+                let _ = write!(out, "\nstarted {}, {}", fmt::date(day), fmt::age(now, day));
             }
         }
-        tip
     }
 
     /// The Processes status line: how many processes, and what the map's metric adds up to over all of them (so the
     /// total says what it counts, and only Private bytes can honestly be set beside the machine's RAM).
-    fn process_status(&self) -> Option<String> {
-        let tree = self.tree.as_ref()?;
-        let total = tree.subtree_size[*tree.roots.first()?];
-        Some(format!("{}, {} {}", fmt::noun(self.proc_info.len() as u64, "process", "processes"), self.kind().size_text(self.proc_metric, total), metric_noun(self.proc_metric)))
+    fn write_process_status(&self, out: &mut String) -> bool {
+        let Some(tree) = self.tree.as_ref() else { return false };
+        let Some(&root) = tree.roots.first() else { return false };
+        let total = tree.subtree_size[root];
+        let _ = write!(out, "{}, {} {}", fmt::noun(self.proc_info.len() as u64, "process", "processes"), self.kind().size_text(self.proc_metric, total), metric_noun(self.proc_metric));
+        true
     }
 
     /// The Processes view took a new snapshot: the facts about each process and the chip's memory.
@@ -805,7 +834,7 @@ impl App {
             return Some((String::new(), path, self.mark_state(id), false));
         }
         let file = !tree.flags[id].contains(NodeFlags::DIR);
-        Some((tree.path(id), fmt::display_path(&tree.path(id)), self.mark_state(id), file))
+        Some((tree.path(id), fmt::node_path(tree, id).to_string(), self.mark_state(id), file))
     }
 
     /// Notes which process is selected, for the "Files held" pane. True when it changed to one that should be
@@ -899,11 +928,10 @@ impl App {
         })
     }
 
-    pub fn tip_at(&self, x: f32, y: f32) -> Option<String> {
-        if self.modal().is_some() {
-            return None;
-        }
-        self.tip_target(x, y).map(|t| t.1)
+    /// The tooltip text under (x, y), written to `out`; false (with `out` empty) for none.
+    pub fn tip_at(&self, x: f32, y: f32, out: &mut String) -> bool {
+        out.clear();
+        self.modal().is_none() && self.tip_target(x, y, out).is_some()
     }
 
     /// The modal on screen, if any.
@@ -1493,75 +1521,133 @@ impl App {
 
     /// What the list says when there is no tree: a heading, then (after a newline) a hint or the reason.
     fn message(&self) -> String {
+        let mut s = String::new();
+        self.write_message(&mut s);
+        s
+    }
+
+    fn write_message(&self, out: &mut String) {
         match &self.scan {
-            Scan::Idle => "No drive selected\nSelect a drive above to scan it.".into(),
-            Scan::Running { view, .. } if self.views[*view].kind == ViewKind::Processes => "Reading processes\u{2026}".into(),
-            Scan::Running { view, dirs, files, bytes } => format!(
-                "Scanning {}  {}, {}, {}",
-                self.views[*view].title(), fmt::noun(*dirs, "folder", "folders"), fmt::noun(*files, "file", "files"), fmt::size(*bytes)
-            ),
-            Scan::Failed(m) => format!("Scan failed\n{m}"),
-            Scan::Cancelled => "Scan cancelled\nSelect a drive above to scan it again.".into(),
+            Scan::Idle => out.push_str("No drive selected\nSelect a drive above to scan it."),
+            Scan::Running { view, .. } if self.views[*view].kind == ViewKind::Processes => out.push_str("Reading processes\u{2026}"),
+            Scan::Running { view, dirs, files, bytes } => {
+                let _ = write!(
+                    out,
+                    "Scanning {}  {}, {}, {}",
+                    self.views[*view].title(), fmt::noun(*dirs, "folder", "folders"), fmt::noun(*files, "file", "files"), fmt::size(*bytes)
+                );
+            }
+            Scan::Failed(m) => {
+                let _ = write!(out, "Scan failed\n{m}");
+            }
+            Scan::Cancelled => out.push_str("Scan cancelled\nSelect a drive above to scan it again."),
         }
     }
 
     /// The selected row's size and (for a folder) item count, led by its full path when `full`; first in the status line.
     fn selection(&self, full: bool) -> Option<String> {
-        let (tree, id) = (self.tree.as_ref()?, self.model.as_ref()?.selected()?);
+        let mut s = String::new();
+        self.write_selection(full, &mut s).then_some(s)
+    }
+
+    /// Writes [`App::selection`]; false (writing nothing) when no row is selected.
+    fn write_selection(&self, full: bool, out: &mut String) -> bool {
+        let (Some(tree), Some(id)) = (self.tree.as_ref(), self.model.as_ref().and_then(|m| m.selected())) else { return false };
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]);
-            return Some(format!("{}  (PID {pid})  {}", tree.name_string(id), self.kind().size_text(self.proc_metric, tree.subtree_size[id])));
+            let _ = write!(out, "{}  (PID {pid})  {}", fmt::node_name(tree, id), self.kind().size_text(self.proc_metric, tree.subtree_size[id]));
+            return true;
         }
-        let path = fmt::display_path(&tree.path(id));
-        let items = if tree.flags[id].contains(NodeFlags::DIR) { format!(", {}", fmt::noun(tree.subtree_files[id] as u64, "item", "items")) } else { String::new() };
-        let size = format!("{}{items}", fmt::size(tree.subtree_size[id]));
-        Some(if full { format!("{path}  ({size})") } else { size })
-    }
-
-    /// The whole status line (the status bar's tooltip carries it): the compact line has no path and no time of the last change.
-    fn status(&self) -> String {
-        self.status_line(true)
-    }
-
-    fn status_line(&self, full: bool) -> String {
-        self.status_parts(full, true, true)
+        if full {
+            let _ = write!(out, "{}  (", fmt::node_path(tree, id));
+        }
+        let _ = write!(out, "{}", fmt::size(tree.subtree_size[id]));
+        if tree.flags[id].contains(NodeFlags::DIR) {
+            let _ = write!(out, ", {}", fmt::noun(tree.subtree_files[id] as u64, "item", "items"));
+        }
+        if full {
+            out.push(')');
+        }
+        true
     }
 
     /// The status line without the selection and the notice: the status bar's second row, the selection having a row of its
     /// own and the notice being drawn first, in its own colour.
     fn state_line(&self) -> String {
-        self.status_parts(false, false, false)
+        let mut s = String::new();
+        self.write_status(false, false, false, &mut s);
+        s
     }
 
-    fn status_parts(&self, full: bool, with_selection: bool, with_notice: bool) -> String {
-        let head = match &self.scan {
-            Scan::Running { .. } => {
-                let paused = if self.preview_paused { "   (preview paused)" } else { "" };
-                format!("{}{paused}", self.message())
+    /// Writes the whole status line (the status bar's tooltip carries it) to `out`, which it appends to: the compact line
+    /// (`full` false) has no path and no time of the last change.
+    fn write_status(&self, full: bool, with_selection: bool, with_notice: bool, out: &mut String) {
+        let start = out.len();
+        let sep = |out: &mut String| {
+            if out.len() > start {
+                out.push_str("   |   ");
             }
-            Scan::Failed(_) | Scan::Cancelled => self.message(),
-            _ if self.kind() == ViewKind::Processes => self.process_status().unwrap_or_else(|| self.message()),
-            _ if self.summary.is_empty() => self.message(),
-            _ => self.summary.clone(),
         };
-        let mut parts: Vec<String> = self.selection(full).filter(|_| with_selection).into_iter().chain([head]).collect();
         if with_notice && !self.notice.is_empty() {
-            parts.insert(0, self.notice.clone());
+            sep(out);
+            out.push_str(&self.notice);
             if full && !self.notice_detail.is_empty() {
-                parts.insert(1, self.notice_detail.join("; "));
+                sep(out);
+                for (i, d) in self.notice_detail.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str("; ");
+                    }
+                    out.push_str(d);
+                }
             }
+        }
+        if with_selection {
+            let mark = out.len();
+            sep(out);
+            if !self.write_selection(full, out) {
+                out.truncate(mark);
+            }
+        }
+        sep(out);
+        match &self.scan {
+            Scan::Running { .. } => {
+                self.write_message(out);
+                if self.preview_paused {
+                    out.push_str("   (preview paused)");
+                }
+            }
+            Scan::Failed(_) | Scan::Cancelled => self.write_message(out),
+            _ if self.kind() == ViewKind::Processes => {
+                if !self.write_process_status(out) {
+                    self.write_message(out);
+                }
+            }
+            _ if self.summary.is_empty() => self.write_message(out),
+            _ => out.push_str(&self.summary),
         }
         match &self.live {
             LiveStatus::Off => {}
-            LiveStatus::On { last: None } => parts.push("live".into()),
-            LiveStatus::On { last: Some(t) } if full => parts.push(format!("live, last change {t}")),
-            LiveStatus::On { last: Some(_) } => parts.push("live".into()),
-            LiveStatus::Stale(_) => parts.push("live updates stopped".into()),
+            LiveStatus::On { last: None } | LiveStatus::On { last: Some(_) } if !full => {
+                sep(out);
+                out.push_str("live");
+            }
+            LiveStatus::On { last: None } => {
+                sep(out);
+                out.push_str("live");
+            }
+            LiveStatus::On { last: Some(t) } => {
+                sep(out);
+                let _ = write!(out, "live, last change {t}");
+            }
+            LiveStatus::Stale(_) => {
+                sep(out);
+                out.push_str("live updates stopped");
+            }
         }
         if self.refreshing {
-            parts.push("refreshing\u{2026}".into());
+            sep(out);
+            out.push_str("refreshing\u{2026}");
         }
-        parts.join("   |   ")
     }
 
     fn banner(&self) -> Option<String> {
@@ -1628,6 +1714,35 @@ impl App {
 mod tests {
     use super::*;
 
+    /// The text-returning forms of the tooltip and status builders, which write into a buffer.
+    fn tip_str(a: &App, x: f32, y: f32) -> Option<String> {
+        let mut s = String::new();
+        a.tip_at(x, y, &mut s).then_some(s)
+    }
+
+    fn target_str(a: &App, x: f32, y: f32) -> Option<(TipKey, String)> {
+        let mut s = String::new();
+        a.tip_target(x, y, &mut s).map(|k| (k, s))
+    }
+
+    fn tile_str(tree: &Tree, t: &Tile, now: u32) -> String {
+        let mut s = String::new();
+        tile_tip(tree, t, now, &mut s);
+        s
+    }
+
+    fn proc_tip_str(a: &App, tree: &Tree, t: &Tile) -> String {
+        let mut s = String::new();
+        a.process_tip(tree, t, &mut s);
+        s
+    }
+
+    fn status_str(a: &App, full: bool) -> String {
+        let mut s = String::new();
+        a.write_status(full, true, true, &mut s);
+        s
+    }
+
     #[test]
     fn a_disk_view_keeps_its_titles_sorts_and_last_two_columns() {
         assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Size", "% of parent", "Items", "Modified"]);
@@ -1689,7 +1804,7 @@ mod tests {
         assert_eq!(ViewKind::Processes.titles(Metric::Private)[1], "Private");
         assert_eq!(ViewKind::Processes.size_text(Metric::Private, 2048), fmt::size(2048));
         assert_eq!(ViewKind::Processes.size_text(Metric::Cpu, 123), "12.3%");
-        assert_eq!(ViewKind::Processes.size_text(Metric::Io, 2048), format!("{}/s", fmt::size(2048)));
+        assert_eq!(ViewKind::Processes.size_text(Metric::Io, 2048), fmt::rate(2048));
         assert_eq!(ViewKind::Disk.size_text(Metric::Cpu, 2048), fmt::size(2048), "a disk ignores the metric");
     }
 
@@ -1916,7 +2031,7 @@ mod tests {
         let (a, id) = process_app(); // a leaf: no children
         let tree = a.tree.as_ref().unwrap();
         let own = Tile { node: id, rect: plumb_core::Rect::default(), depth: 0, class: Class::Other, kind: Kind::Frame, bytes: 4096, count: 1, mtime: None };
-        let tip = a.process_tip(tree, &own);
+        let tip = proc_tip_str(&a, tree, &own);
         assert!(tip.contains("memory in this process; own CPU"), "{tip}");
         assert!(!tip.contains("children"), "a process with none does not mention them: {tip}");
         for (m, noun) in [(Metric::Memory, "memory"), (Metric::Private, "private"), (Metric::Cpu, "CPU"), (Metric::Io, "I/O")] {
@@ -1929,7 +2044,7 @@ mod tests {
         let (mut a, id) = process_app(); // ping.exe: 4096 own bytes under the root
         let rest = |count| Tile { node: id, rect: plumb_core::Rect::default(), depth: 0, class: Class::Other, kind: Kind::Rest, bytes: 4096, count, mtime: None };
         let tree = a.tree.take().unwrap();
-        let tip = |a: &App, t: &Tile| a.process_tip(&tree, t);
+        let tip = |a: &App, t: &Tile| proc_tip_str(a, &tree, t);
         assert_eq!(tip(&a, &rest(1)), format!("its own memory, {}", fmt::size(4096)), "only its own size merged");
         assert_eq!(tip(&a, &rest(3)), format!("2 smaller processes and its own memory, {}", fmt::size(4096)));
         a.map_tiles = vec![Tile { kind: Kind::Own, count: 1, ..rest(1) }]; // the own tile is drawn: the merged items are processes
@@ -1947,7 +2062,7 @@ mod tests {
     fn the_process_status_line_totals_what_the_metric_counts() {
         let (mut a, _) = process_app();
         a.set_procs(2, HashMap::from([(77u32, ProcInfo::default())]), (16 << 30, 3 << 30));
-        assert!(a.status().ends_with(&format!("1 process, {} memory", fmt::size(4096))), "{}", a.status());
+        assert!(status_str(&a, true).ends_with(&format!("1 process, {} memory", fmt::size(4096))), "{}", status_str(&a, true));
         assert_eq!(a.views[2].free, 3 << 30, "the chip follows the machine's free memory");
     }
 
@@ -1971,9 +2086,9 @@ mod tests {
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let mut t = b.finish().unwrap();
-        assert_eq!(ViewKind::Processes.last_two(&t, r), ("0.0%".into(), Some(format!("{}/s", fmt::size(0)))), "no aux yet");
+        assert_eq!(ViewKind::Processes.last_two(&t, r), (fmt::tenths(0), Some(fmt::rate(0))), "no aux yet");
         t.set_aux(r, [255, 2048, 99]);
-        assert_eq!(ViewKind::Processes.last_two(&t, r), ("25.5%".into(), Some(format!("{}/s", fmt::size(2048)))));
+        assert_eq!(ViewKind::Processes.last_two(&t, r), (fmt::tenths(255), Some(fmt::rate(2048))));
     }
     use crate::layout::{CHIP_GAP, CHIP_W, HEADER_H, PICKER_H, ROW_H};
     use plumb_core::synth::kary_builder;
@@ -2015,7 +2130,7 @@ mod tests {
 
     /// The status line minus the selection details that lead it.
     fn status_tail(a: &App) -> String {
-        let s = a.status();
+        let s = status_str(a, true);
         match a.selection(true) {
             Some(sel) => s.strip_prefix(&sel).map_or(s.clone(), |t| t.strip_prefix("   |   ").unwrap_or(t).to_string()),
             None => s,
@@ -2237,12 +2352,12 @@ mod tests {
         let mut a = app();
         a.can_elevate = true;
         let (admin, regex) = (a.layout.admin_button(), a.layout.filter_regex());
-        assert_eq!(a.tip_at(admin.x + 5.0, admin.y + 5.0).as_deref(), Some("Run as administrator"));
-        assert_eq!(a.tip_at(regex.x + 5.0, regex.y + 5.0).as_deref(), Some("Regular expression"));
-        assert_eq!(a.tip_at(a.layout.chip(0).x + 5.0, 10.0).as_deref(), Some("C: 250 B free of 1000 B"), "a chip gives its free space in full");
-        assert_eq!(a.tip_at(a.layout.header().x + 5.0, a.layout.header().y + 5.0), None);
+        assert_eq!(tip_str(&a, admin.x + 5.0, admin.y + 5.0).as_deref(), Some("Run as administrator"));
+        assert_eq!(tip_str(&a, regex.x + 5.0, regex.y + 5.0).as_deref(), Some("Regular expression"));
+        assert_eq!(tip_str(&a, a.layout.chip(0).x + 5.0, 10.0).as_deref(), Some("C: 250 B free of 1000 B"), "a chip gives its free space in full");
+        assert_eq!(tip_str(&a, a.layout.header().x + 5.0, a.layout.header().y + 5.0), None);
         a.can_elevate = false;
-        assert_eq!(a.tip_at(admin.x + 5.0, admin.y + 5.0), None, "a hidden button has none");
+        assert_eq!(tip_str(&a, admin.x + 5.0, admin.y + 5.0), None, "a hidden button has none");
     }
 
     #[test]
@@ -2418,11 +2533,11 @@ mod tests {
         let tree = a.tree.as_ref().unwrap();
         let want = format!(
             "{}  ({}, {} items)   |   done",
-            fmt::display_path(&tree.path(id)),
+            fmt::node_path(tree, id),
             fmt::size(tree.subtree_size[id]),
             fmt::count(tree.subtree_files[id] as u64)
         );
-        assert_eq!(a.status(), want);
+        assert_eq!(status_str(&a, true), want);
     }
 
     #[test]
@@ -2436,7 +2551,7 @@ mod tests {
         assert_eq!(status_tail(&a), "done   |   live, last change 12:03:41   |   refreshing\u{2026}");
         a.set_live(LiveStatus::Stale("x".into()));
         a.live_changed("12:04:00".into());
-        assert!(a.status().contains("live updates stopped") && !a.status().contains("12:04"));
+        assert!(status_str(&a, true).contains("live updates stopped") && !status_str(&a, true).contains("12:04"));
     }
 
     #[test]
@@ -2448,12 +2563,12 @@ mod tests {
         a.live_changed("12:03:41".into());
         let tree = a.tree.as_ref().unwrap();
         let size = format!("{}, {} items", fmt::size(tree.subtree_size[id]), fmt::count(tree.subtree_files[id] as u64));
-        assert_eq!(a.status_line(false), format!("{size}   |   done   |   live"), "no path, no time of the last change");
-        assert!(a.status().contains("12:03:41") && a.status().contains(&fmt::display_path(&tree.path(id))));
+        assert_eq!(status_str(&a, false), format!("{size}   |   done   |   live"), "no path, no time of the last change");
+        assert!(status_str(&a, true).contains("12:03:41") && status_str(&a, true).contains(&fmt::node_path(tree, id).to_string()));
         a.adapter = "Test GPU".into();
         let bar = a.layout.status();
-        assert_eq!(a.tip_at(bar.x + 40.0, bar.y + 5.0), Some(format!("{}
-Test GPU", a.status())));
+        assert_eq!(tip_str(&a, bar.x + 40.0, bar.y + 5.0), Some(format!("{}
+Test GPU", status_str(&a, true))));
     }
 
     #[test]
@@ -2461,13 +2576,13 @@ Test GPU", a.status())));
         let mut a = scanned();
         let bar = a.layout.status();
         let (x, y) = (bar.x + 40.0, bar.y + 5.0);
-        let (key, before) = a.tip_target(x, y).unwrap();
+        let (key, before) = target_str(&a, x, y).unwrap();
         a.notice = "something happened".into();
-        let (same, after) = a.tip_target(x, y).unwrap();
+        let (same, after) = target_str(&a, x, y).unwrap();
         assert_eq!(key, same, "the status bar is the same target");
         assert_ne!(before, after, "whose text moved on");
         a.can_elevate = true;
-        let other = a.tip_target(a.layout.admin_button().x + 5.0, a.layout.admin_button().y + 5.0).map(|t| t.0);
+        let other = target_str(&a, a.layout.admin_button().x + 5.0, a.layout.admin_button().y + 5.0).map(|t| t.0);
         assert!(other.is_some() && other != Some(key), "another target is another key");
     }
 
@@ -2569,32 +2684,49 @@ Test GPU", a.status())));
     }
 
     #[test]
+    fn hovering_builds_every_kind_of_tip_without_allocating_once_the_buffer_has_grown() {
+        let mut a = with_map();
+        let t = a.map_tiles().iter().copied().find(|t| t.kind == Kind::File).unwrap();
+        let (bar, admin) = (a.layout.status(), a.layout.admin_button());
+        a.can_elevate = true;
+        let mut buf = String::new();
+        let spots = [centre(&t), (bar.x + 40.0, bar.y + 5.0), (admin.x + 5.0, admin.y + 5.0), (a.layout.chip(0).x + 5.0, 10.0)];
+        for (x, y) in spots {
+            assert!(a.tip_at(x, y, &mut buf), "a tip at {x},{y}"); // grows the buffer
+            let want = buf.clone();
+            let (found, n) = crate::alloc_count::allocations(|| a.tip_at(x, y, &mut buf));
+            assert!(found && buf == want, "{buf}");
+            assert_eq!(n, 0, "allocations for the tip {buf:?}");
+        }
+    }
+
+    #[test]
     fn hovering_a_tile_gives_a_tip_and_leaving_the_map_clears_it() {
         let mut a = with_map();
         let t = a.map_tiles().iter().copied().find(|t| t.kind == Kind::File).unwrap();
         let (x, y) = centre(&t);
         a.handle(Input::Hover(x, y));
         assert!(a.map_hover.is_some());
-        let tip = a.tip_at(x, y).unwrap();
+        let tip = tip_str(&a, x, y).unwrap();
         assert!(tip.contains(&a.tree.as_ref().unwrap().name_string(t.node)), "{tip}");
         a.handle(Input::Hover(5.0, 5.0));
-        assert_eq!((a.map_hover, a.tip_at(5.0, 5.0)), (None, None));
+        assert_eq!((a.map_hover, tip_str(&a, 5.0, 5.0)), (None, None));
     }
 
     #[test]
     fn a_rest_tile_says_how_many_items_it_holds() {
         let tree = plumb_core::synth::flat_tree(3);
         let t = treemap::Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::Rest, bytes: 2048, count: 7, mtime: None };
-        assert!(tile_tip(&tree, &t, 150_000).starts_with("7 smaller items, "));
+        assert!(tile_str(&tree, &t, 150_000).starts_with("7 smaller items, "));
         let f = treemap::Tile { node: NodeId(1), kind: Kind::File, count: 1, ..t };
-        assert!(tile_tip(&tree, &f, 150_000).contains(&tree.name_string(NodeId(1))));
+        assert!(tile_str(&tree, &f, 150_000).contains(&tree.name_string(NodeId(1))));
     }
 
     #[test]
     fn an_own_tile_tip_names_the_folder_itself() {
         let tree = plumb_core::synth::flat_tree(3);
         let t = treemap::Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::Own, bytes: 2048, count: 1, mtime: None };
-        let tip = tile_tip(&tree, &t, 150_000);
+        let tip = tile_str(&tree, &t, 150_000);
         assert!(tip.contains(&tree.name_string(NodeId(0))) && tip.contains("itself"), "{tip}");
     }
 
@@ -2616,7 +2748,7 @@ Test GPU", a.status())));
         assert_eq!(a.select_from_map(i), Some(parent), "a click on the own tile selects the process");
         let sel = a.map_selected_tile().expect("the process is outlined");
         assert_eq!(a.map_tiles()[sel].kind, Kind::Frame, "by its frame, not by the own tile");
-        let tip = a.process_tip(a.tree.as_ref().unwrap(), &a.map_tiles()[i]);
+        let tip = proc_tip_str(&a, a.tree.as_ref().unwrap(), &a.map_tiles()[i]);
         assert!(tip.contains("parent.exe") && tip.contains("itself"), "{tip}");
     }
 
@@ -2624,9 +2756,9 @@ Test GPU", a.status())));
     fn a_tile_tip_says_when_the_file_was_last_written() {
         let mut tree = plumb_core::synth::flat_tree(3);
         let t = treemap::Tile { node: NodeId(1), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::File, bytes: 2048, count: 1, mtime: None };
-        assert!(!tile_tip(&tree, &t, 154_000).contains("modified"));
+        assert!(!tile_str(&tree, &t, 154_000).contains("modified"));
         tree.set_mtime(NodeId(1), std::num::NonZeroU32::new(134_774 + 19_791));
-        let tip = tile_tip(&tree, &t, 134_774 + 19_791 + 766);
+        let tip = tile_str(&tree, &t, 134_774 + 19_791 + 766);
         assert!(tip.ends_with(", modified 2024-03-09, 2.1 y ago)"), "{tip}");
     }
 
@@ -2744,9 +2876,9 @@ Test GPU", a.status())));
         assert_eq!(a.mark_state(root), MarkState::Refused("a drive root cannot be deleted"));
         a.toggle_mark(root);
         assert!(a.basket().is_empty());
-        assert!(a.status_line(true).starts_with("cannot mark: a drive root cannot be deleted"), "{}", a.status_line(true));
+        assert!(status_str(&a, true).starts_with("cannot mark: a drive root cannot be deleted"), "{}", status_str(&a, true));
         a.handle(Input::Click(5.0, a.layout.header().y + 5.0)); // any click clears the notice
-        assert!(!a.status_line(true).starts_with("cannot mark"));
+        assert!(!status_str(&a, true).starts_with("cannot mark"));
         let (file, ..) = picks(&a);
         a.refreshing = true;
         assert_eq!(a.mark_state(file), MarkState::Refused("the drive is being scanned"));
@@ -2822,7 +2954,7 @@ Test GPU", a.status())));
         assert!(a.tree.as_mut().unwrap().remove(file));
         assert!(a.commit_request().is_none());
         assert!(a.basket().is_empty());
-        assert!(a.status_line(true).starts_with("the marked items are already gone"), "{}", a.status_line(true));
+        assert!(status_str(&a, true).starts_with("the marked items are already gone"), "{}", status_str(&a, true));
     }
 
     #[test]
@@ -2849,7 +2981,7 @@ Test GPU", a.status())));
         a.set_deleting(true);
         a.finish_delete(std::slice::from_ref(&gone), 0, &[(kept.clone(), "access denied".into())]);
         assert!(a.basket().contains(&kept) && !a.basket().contains(&gone));
-        assert!(a.status_line(true).starts_with("1 of 2 not deleted: access denied; still marked"), "{}", a.status_line(true));
+        assert!(status_str(&a, true).starts_with("1 of 2 not deleted: access denied; still marked"), "{}", status_str(&a, true));
         assert!(a.commit_request().is_some(), "the delete is over, so a new commit may start");
     }
 
@@ -2994,7 +3126,7 @@ Test GPU", a.status())));
         assert!(a.basket().contains(&p));
         a.toggle_mark_path("nowhere\\at all");
         assert_eq!(a.basket().len(), 1);
-        assert!(a.status_line(true).starts_with("that item is gone"));
+        assert!(status_str(&a, true).starts_with("that item is gone"));
     }
 
     #[test]
@@ -3026,12 +3158,12 @@ Test GPU", a.status())));
         a.set_deleting(true);
         let gone: Vec<String> = vec!["X-a".into(), "X-b".into()];
         a.finish_delete(&gone, 1, &[("X-c".into(), "in use".into()), ("X-d".into(), "denied".into())]);
-        let short = a.status_line(false);
+        let short = status_str(&a, false);
         assert!(short.starts_with("2 of 4 not deleted: in use; still marked"), "{short}");
-        assert!(a.status_line(true).contains("X-d: denied"), "{}", a.status_line(true));
+        assert!(status_str(&a, true).contains("X-d: denied"), "{}", status_str(&a, true));
         let mut b = scanned();
         b.finish_delete(&gone, 1, &[]);
-        assert!(b.status_line(false).starts_with("deleted 1 item, 1 already gone"), "{}", b.status_line(false));
+        assert!(status_str(&b, false).starts_with("deleted 1 item, 1 already gone"), "{}", status_str(&b, false));
     }
 
     #[test]
@@ -3043,6 +3175,6 @@ Test GPU", a.status())));
         a.set_deleting(false);
         a.refreshing = true;
         assert!(!a.begin_delete());
-        assert!(a.status_line(true).starts_with("cannot delete while the drive is being scanned"));
+        assert!(status_str(&a, true).starts_with("cannot delete while the drive is being scanned"));
     }
 }

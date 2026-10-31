@@ -485,9 +485,10 @@ pub fn selftest_delete() -> Result<String> {
         // The reason reached the status bar (its tooltip carries the whole line), not an empty one.
         let tip = with(|w| {
             let bar = w.app.layout.status();
-            w.app.tip_at(bar.x + 40.0, bar.y + 5.0)
+            let mut tip = String::new();
+            w.app.tip_at(bar.x + 40.0, bar.y + 5.0, &mut tip);
+            tip
         })
-        .flatten()
         .unwrap_or_default();
         if !tip.contains("not deleted: in use by plumb.exe (") {
             return Err(fail(format!("the failure's reason does not name this process on the status line: {tip:?}")));

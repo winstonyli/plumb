@@ -318,8 +318,10 @@ struct Win {
     /// The tooltip control, the icon button it last described, and the text it reads from (`tip_text`).
     tooltip: HWND,
     tip: Option<TipKey>,
-    /// The text the tooltip last read, to tell when a visible tip needs refreshing.
+    /// The text the tooltip last read, to tell when a visible tip needs refreshing; `tip_scratch` is where the text under the
+    /// pointer is built on each move to compare with it. Both, and `tip_buf`, are reused, so hovering allocates nothing.
     tip_last: String,
+    tip_scratch: String,
     tip_buf: Vec<u16>,
 }
 
@@ -454,7 +456,7 @@ impl Win {
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
             preview: None, preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
             parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false,
-            tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_buf: Vec::new(),
+            tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
         win.apply_title_theme();
         Ok(win)
@@ -503,12 +505,14 @@ impl Win {
     /// The tooltip text under the pointer, as the wide string the control reads; empty for none.
     fn tip_text(&mut self) -> *const u16 {
         let mut p = POINT::default();
-        let tip = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(self.hwnd, &mut p).as_bool() }
-            .then(|| self.app.tip_at(p.x as f32 * 96.0 / self.dpi, p.y as f32 * 96.0 / self.dpi - self.inset))
-            .flatten();
-        let tip = tip.unwrap_or_default();
-        self.tip_buf = tip.encode_utf16().chain([0]).collect();
-        self.tip_last = tip;
+        let found = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(self.hwnd, &mut p).as_bool() }
+            && self.app.tip_at(p.x as f32 * 96.0 / self.dpi, p.y as f32 * 96.0 / self.dpi - self.inset, &mut self.tip_last);
+        if !found {
+            self.tip_last.clear();
+        }
+        self.tip_buf.clear();
+        self.tip_buf.extend(self.tip_last.encode_utf16());
+        self.tip_buf.push(0);
         self.tip_buf.as_ptr()
     }
 
@@ -1688,12 +1692,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     }
                     // Moving onto another target (or off one) hides the old tip so the next rest asks again; the same
                     // target whose text changed (a scan adds to its totals) is refreshed in place, not hidden.
-                    let tip = w.app.tip_target(x, y);
-                    let key = tip.as_ref().map(|t| t.0);
+                    let key = w.app.tip_target(x, y, &mut w.tip_scratch);
                     if key != w.tip {
                         w.tip = key;
                         unsafe { SendMessageW(w.tooltip, TTM_POP, None, None) };
-                    } else if tip.is_some_and(|t| t.1 != w.tip_last) {
+                    } else if key.is_some() && w.tip_scratch != w.tip_last {
                         w.refresh_tip();
                     }
                     let msg = MSG { hwnd, message: WM_MOUSEMOVE, wParam: wp, lParam: lp, ..Default::default() };

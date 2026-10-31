@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod alloc_count;
 pub mod app;
 pub mod dirsync;
 pub mod filter_ui;

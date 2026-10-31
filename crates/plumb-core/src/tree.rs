@@ -58,6 +58,14 @@ impl Tree {
         String::from_utf16_lossy(self.name(id))
     }
 
+    /// Writes the name of `id` (invalid UTF-16 as U+FFFD, like [`Tree::name_string`]) without a `String` of its own.
+    pub fn write_name(&self, id: NodeId, out: &mut impl std::fmt::Write) -> std::fmt::Result {
+        for c in char::decode_utf16(self.name(id).iter().copied()) {
+            out.write_char(c.unwrap_or(char::REPLACEMENT_CHARACTER))?;
+        }
+        Ok(())
+    }
+
     /// Live children of `id`, in list order.
     pub fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         std::iter::successors(Some(self.first_child[id]).filter(|c| !c.is_none()), |&c| {
@@ -72,14 +80,19 @@ impl Tree {
 
     /// Full path, built by walking parent links (no per-node path storage).
     pub fn path(&self, id: NodeId) -> String {
-        let mut parts = Vec::new();
-        let mut cur = id;
-        while !cur.is_none() {
-            parts.push(self.name_string(cur));
-            cur = self.parent[cur];
+        let mut s = String::new();
+        let _ = self.write_path(id, &mut s);
+        s
+    }
+
+    /// Writes the path [`Tree::path`] gives, without building it first.
+    pub fn write_path(&self, id: NodeId, out: &mut impl std::fmt::Write) -> std::fmt::Result {
+        let parent = self.parent[id];
+        if !parent.is_none() {
+            self.write_path(parent, out)?;
+            out.write_char('\\')?;
         }
-        parts.reverse();
-        parts.join("\\")
+        self.write_name(id, out)
     }
 
     /// The node at `path` ("C:\dir\file", as [`Tree::path`] gives it), matching names exactly.

@@ -312,6 +312,9 @@ pub struct Painter {
     /// The map's tiles, drawn once per (generation, size, scale, palette) and blitted every frame.
     map_cache: RefCell<Option<MapCache>>,
     map_builds: Cell<usize>,
+    /// Reused across frames so text costs no allocation: where a formatted cell is built, and the UTF-16 a draw or a measure reads.
+    text: RefCell<String>,
+    wide: RefCell<Vec<u16>>,
 }
 
 struct MapCache {
@@ -363,6 +366,8 @@ impl Painter {
             icons: RefCell::default(),
             map_cache: RefCell::default(),
             map_builds: Cell::new(0),
+            text: RefCell::default(),
+            wide: RefCell::default(),
         })
     }
 
@@ -376,7 +381,9 @@ impl Painter {
 
     /// The width in DIPs of `s` set on one line as `role`.
     pub fn text_width(&self, gfx: &Gfx, role: Role, s: &str) -> f32 {
-        let u: Vec<u16> = s.encode_utf16().collect();
+        let mut u = self.wide.borrow_mut();
+        u.clear();
+        u.extend(s.encode_utf16());
         unsafe {
             let Ok(layout) = gfx.dw.CreateTextLayout(&u, &self.face(role).left, 10_000.0, 100.0) else { return 0.0 };
             let mut m = DWRITE_TEXT_METRICS::default();
@@ -501,24 +508,57 @@ impl Pen<'_> {
     }
 
     /// `s` shortened to fit `w` by replacing the middle with an ellipsis: a path keeps its drive and its name.
-    fn fit_middle(&self, s: &str, w: f32) -> String {
+    fn fit_middle<'s>(&self, s: &'s str, w: f32) -> std::borrow::Cow<'s, str> {
         if self.text_width(s) <= w {
-            return s.to_string();
+            return std::borrow::Cow::Borrowed(s);
         }
-        let c: Vec<char> = s.chars().collect();
-        let build = |k: usize| format!("{}\u{2026}{}", c[..k.div_ceil(2)].iter().collect::<String>(), c[c.len() - k / 2..].iter().collect::<String>());
+        let n = s.chars().count();
+        // The first ceil(k/2) characters, an ellipsis, and the last k/2.
+        let build = |k: usize, out: &mut String| {
+            let head = s.char_indices().nth(k.div_ceil(2)).map_or(s.len(), |(i, _)| i);
+            let tail = s.char_indices().nth(n - k / 2).map_or(s.len(), |(i, _)| i);
+            out.clear();
+            out.push_str(&s[..head]);
+            out.push('\u{2026}');
+            out.push_str(&s[tail..]);
+        };
         // The most characters that still fit: widths grow with the count, so bisect.
-        let (mut lo, mut hi) = (0, c.len());
+        let (mut lo, mut hi) = (0, n);
+        let mut probe = String::new();
         while lo < hi {
             let mid = (lo + hi).div_ceil(2);
-            if self.text_width(&build(mid)) <= w { lo = mid } else { hi = mid - 1 }
+            build(mid, &mut probe);
+            if self.text_width(&probe) <= w { lo = mid } else { hi = mid - 1 }
         }
-        build(lo)
+        build(lo, &mut probe);
+        std::borrow::Cow::Owned(probe)
     }
 
     /// Body text.
     fn text(&self, s: &str, r: Rect, c: D2D1_COLOR_F, right: bool) {
         self.text_as(Role::Body, s, r, c, right);
+    }
+
+    /// Body text formatted straight into the painter's reused buffer: `self.text_fmt(format_args!(..), ..)`.
+    fn text_fmt(&self, args: std::fmt::Arguments<'_>, r: Rect, c: D2D1_COLOR_F, right: bool) {
+        self.text_as_fmt(Role::Body, args, r, c, right);
+    }
+
+    fn text_as_fmt(&self, role: Role, args: std::fmt::Arguments<'_>, r: Rect, c: D2D1_COLOR_F, right: bool) {
+        use std::fmt::Write as _;
+        let mut buf = self.painter.text.borrow_mut();
+        buf.clear();
+        let _ = buf.write_fmt(args);
+        self.text_as(role, &buf, r, c, right);
+    }
+
+    /// The width of formatted text, built in the same buffer.
+    fn text_width_fmt(&self, role: Role, args: std::fmt::Arguments<'_>) -> f32 {
+        use std::fmt::Write as _;
+        let mut buf = self.painter.text.borrow_mut();
+        buf.clear();
+        let _ = buf.write_fmt(args);
+        self.painter.text_width(self.gfx, role, &buf)
     }
 
     fn text_as(&self, role: Role, s: &str, r: Rect, c: D2D1_COLOR_F, right: bool) {
@@ -527,7 +567,9 @@ impl Pen<'_> {
     }
 
     fn draw_text(&self, s: &str, f: &IDWriteTextFormat, r: Rect, c: D2D1_COLOR_F) {
-        let u: Vec<u16> = s.encode_utf16().collect();
+        let mut u = self.painter.wide.borrow_mut();
+        u.clear();
+        u.extend(s.encode_utf16());
         unsafe {
             self.brush.SetColor(&c);
             self.gfx.d2d.DrawText(&u, f, &rc(r), &self.brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
@@ -590,9 +632,9 @@ impl Pen<'_> {
             }
             if composing {
                 let tail = f.text.get(f.caret..).unwrap_or("");
-                self.text(&format!("{head}{}{tail}", f.preedit), inner, t.fg, false);
+                self.text_fmt(format_args!("{head}{}{tail}", f.preedit), inner, t.fg, false);
                 let x0 = self.text_width(head).min(inner.w);
-                let x1 = self.text_width(&format!("{head}{}", f.preedit)).min(inner.w);
+                let x1 = self.text_width_fmt(Role::Body, format_args!("{head}{}", f.preedit)).min(inner.w);
                 self.fill(Rect { x: inner.x + x0, y: b.y + b.h - 6.0, w: x1 - x0, h: 1.0 }, t.fg);
             } else {
                 self.text(f.text, inner, t.fg, false);
@@ -604,7 +646,7 @@ impl Pen<'_> {
             }
         }
         if f.focus && f.sel.is_none() {
-            let x = inner.x + self.text_width(&format!("{head}{}", f.preedit));
+            let x = inner.x + self.text_width_fmt(Role::Body, format_args!("{head}{}", f.preedit));
             if x <= inner.x + inner.w {
                 self.fill(Rect { x, y: b.y + 5.0, w: 1.0, h: b.h - 10.0 }, t.fg);
             }
@@ -649,8 +691,8 @@ impl Pen<'_> {
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
             // During a scan the sums are what has been found so far: "at least", said once here.
             let atleast = if partial && (c == 1 || (c == 3 && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
-            let (label, color) = (format!("{atleast}{name}{arrow}"), if arrow.is_empty() { t.dim } else { t.fg });
-            self.text_as(Role::Title, &label, Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4));
+            let color = if arrow.is_empty() { t.dim } else { t.fg };
+            self.text_as_fmt(Role::Title, format_args!("{atleast}{name}{arrow}"), Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4));
             if c > 0 {
                 // The grip for resizing: a hairline at the column's left edge.
                 self.fill(Rect { x, y: h.y + 5.0, w: 1.0, h: h.h - 10.0 }, D2D1_COLOR_F { a: 0.5, ..t.dim });
@@ -794,19 +836,19 @@ impl Pen<'_> {
     fn legend(&self, s: &Scene, r: Rect, max: f32) -> f32 {
         let Some(m) = &s.map else { return 0.0 };
         let total: u64 = m.classes.iter().map(|&(_, b)| b).sum();
-        let entries: Vec<(Class, String, f32)> = m
+        // A class under 1% reads "<1%": the label is the name, a space, `lt`, `pct` and a percent sign.
+        let entries: Vec<(Class, &str, u64, f32)> = m
             .classes
             .iter()
             .map(|&(c, b)| {
                 let share = b * 100 / total.max(1);
-                let name = s.kind.class_label(c);
-                let label = if share == 0 { format!("{name} <1%") } else { format!("{name} {share}%") };
-                let w = self.painter.text_width(self.gfx, Role::Caption, &label);
-                (c, label, w)
+                let (lt, pct) = if share == 0 { ("<", 1) } else { ("", share) };
+                let w = self.text_width_fmt(Role::Caption, format_args!("{} {lt}{pct}%", s.kind.class_label(c)));
+                (c, lt, pct, w)
             })
             .collect();
         let (mut used, mut n) = (0.0, 0);
-        for &(_, _, w) in &entries {
+        for &(_, _, _, w) in &entries {
             if used + 14.0 + w > max {
                 break;
             }
@@ -829,10 +871,9 @@ impl Pen<'_> {
             0.0
         };
         let mut x = r.x + r.w - shift - used;
-        for (c, label, w) in &entries[..n] {
-            let w = *w;
+        for &(c, lt, pct, w) in &entries[..n] {
             self.fill(Rect { x, y: r.y + (r.h - 10.0) / 2.0, w: 10.0, h: 10.0 }, s.theme.class[c.index()]);
-            self.text_as(Role::Caption, label, Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
+            self.text_as_fmt(Role::Caption, format_args!("{} {lt}{pct}%", s.kind.class_label(c)), Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
             x += 14.0 + w + 12.0;
         }
         used + shift
@@ -1024,6 +1065,7 @@ impl Pen<'_> {
     fn rows(&self, s: &Scene, v: &View) {
         let t = &s.theme;
         let l = &s.layout;
+        let mut name = String::new(); // each row's name, reused
         for (i, row) in v.model.visible_window(v.scroll, l.rows_visible()).iter().enumerate() {
             let r = l.row(i);
             let id = row.id;
@@ -1033,7 +1075,12 @@ impl Pen<'_> {
             } else if v.hover == Some(i) {
                 self.fill(r, t.hover);
             }
-            let marked = !v.basket.is_empty() && v.basket.covers(&v.tree.path(id));
+            let marked = !v.basket.is_empty() && {
+                let mut path = self.painter.text.borrow_mut();
+                path.clear();
+                let _ = v.tree.write_path(id, &mut *path);
+                v.basket.covers(&path)
+            };
             if marked {
                 self.fill(r, D2D1_COLOR_F { a: 0.35, ..t.danger }); // as the map tints a marked tile
             }
@@ -1044,7 +1091,8 @@ impl Pen<'_> {
             let fg = if row.dim { t.dim } else { t.fg };
             let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
-            let mut name = v.tree.name_string(id).to_string();
+            name.clear();
+            let _ = v.tree.write_name(id, &mut name);
             let found: Vec<_> = v.found.map(|m| m.find(&name).collect()).unwrap_or_default();
             if v.tree.flags[id].contains(NodeFlags::DENIED) {
                 name.push_str("  (access denied)");
@@ -1069,7 +1117,7 @@ impl Pen<'_> {
             }
             self.text(&name, cell, fg, false);
             let (sx, sw) = l.column(1);
-            self.text(&s.kind.size_text(s.metric, v.tree.subtree_size[id]), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
+            self.text_fmt(format_args!("{}", s.kind.size_text(s.metric, v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
             let (px, pw) = l.column(2);
             let (bx, bw) = (px + 4.0, pw - 8.0);
             self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
@@ -1082,13 +1130,13 @@ impl Pen<'_> {
                     self.fade(Rect { x: bx + bw * frac, y: r.y + 3.0, w: bw * (high - frac), h: r.h - 6.0 }, t.bound);
                 }
             }
-            self.text(&format!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
+            self.text_fmt(format_args!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (third, fourth) = s.kind.last_two(v.tree, id);
             let (ix, iw) = l.column(3);
-            self.text(&third, Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
+            self.text_fmt(format_args!("{third}"), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
             if let Some(text) = fourth {
                 let (mx, mw) = l.column(4);
-                self.text(&text, Rect { x: mx, y: r.y, w: mw - 8.0, h: r.h }, side, true);
+                self.text_fmt(format_args!("{text}"), Rect { x: mx, y: r.y, w: mw - 8.0, h: r.h }, side, true);
             }
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {

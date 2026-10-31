@@ -64,7 +64,7 @@ const GAP: f32 = 8.0;
 const HEADING_H: f32 = 28.0;
 const MIN_W: f32 = 460.0;
 
-fn items(n: usize) -> String {
+fn items(n: usize) -> fmt::Show<'static> {
     fmt::noun(n as u64, "item", "items")
 }
 
