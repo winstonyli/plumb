@@ -1,6 +1,9 @@
 //! Window-independent application state: what is selected, scrolled and scanning, and how
 //! input changes it. No Win32 types, so the whole interaction model tests anywhere.
+mod marks;
 mod filter;
+mod held;
+mod map;
 
 use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
@@ -18,6 +21,9 @@ use plumb_core::{NodeFlags, NodeId, Tree};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 
+use marks::BasketView;
+use held::{Held, HELD_REFRESH_SNAPSHOTS};
+pub use marks::{CommitRequest, MarkState};
 pub use filter::FilterJob;
 
 /// What a chip opens. The row table is the same for every kind (Name plus four columns); the kind supplies the
@@ -109,38 +115,6 @@ pub fn metric_help(m: Metric) -> &'static str {
         Metric::Cpu => "share of one core",
         Metric::Io => "bytes transferred per second",
     }
-}
-
-/// Where the "Files held" list for the selected process stands.
-#[derive(Default)]
-enum HeldState {
-    #[default]
-    Idle,
-    /// Selected; waiting for the selection to settle before asking.
-    Waiting,
-    Loading,
-    Ready(Result<HandleList, HandleError>),
-}
-
-/// Snapshots (one a second while the view is on screen) between two refreshes of the Files held list.
-const HELD_REFRESH_SNAPSHOTS: u32 = 10;
-
-#[derive(Default)]
-struct Held {
-    pid: Option<u32>,
-    /// Bumped whenever the process of interest changes, so a late answer for another one is recognised.
-    epoch: u64,
-    state: HeldState,
-    /// The first file line shown.
-    scroll: usize,
-    /// The handle count when the list was last asked for.
-    handles: u32,
-    /// Snapshots since the list was last asked for.
-    age: u32,
-    /// A fresh look is wanted and not yet started.
-    stale: bool,
-    /// A fresh look is in flight (the old list stays on screen meanwhile).
-    refreshing: bool,
 }
 
 /// What the Processes view knows about a process besides what its tree holds.
@@ -323,33 +297,6 @@ pub struct Parked {
     basket: Basket,
     proc_info: HashMap<u32, ProcInfo>,
     proc_metric: Metric,
-}
-
-/// What the context menu and `Del` can do with a node.
-#[derive(Debug, PartialEq)]
-pub enum MarkState {
-    Mark,
-    Unmark,
-    Refused(&'static str),
-}
-
-/// What a commit would delete: the topmost marked paths of one view and what they hold.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CommitRequest {
-    pub view: usize,
-    pub paths: Vec<String>,
-    pub bytes: u64,
-}
-
-/// The basket counted against the tree: derived, so rebuilt when the marks, the tree or the tiles change.
-#[derive(Default)]
-struct BasketView {
-    key: Option<(u64, (usize, usize, u64), u64)>,
-    items: usize,
-    /// Allocated bytes under the marked nodes; an upper bound, since a hard-linked file's other names free nothing.
-    bytes: u64,
-    /// Indices into `map_tiles` to tint: tiles at or under a marked node.
-    tiles: Vec<usize>,
 }
 
 impl Parked {
@@ -838,97 +785,6 @@ impl App {
         Some((tree.path(id), fmt::node_path(tree, id).to_string(), self.mark_state(id), file))
     }
 
-    /// Notes which process is selected, for the "Files held" pane. True when it changed to one that should be
-    /// asked about once the selection settles (the window starts its timer).
-    pub fn held_sync(&mut self) -> bool {
-        let want = (self.kind() == ViewKind::Processes)
-            .then(|| {
-                let (tree, id) = (self.tree.as_ref()?, self.model.as_ref()?.selected()?);
-                tree.aux.get(id.idx()).map(|a| a[2] as u32).filter(|&p| p != 0)
-            })
-            .flatten();
-        if want == self.held.pid {
-            return false;
-        }
-        self.held = Held { pid: want, epoch: self.held.epoch + 1, state: if want.is_some() { HeldState::Waiting } else { HeldState::Idle }, ..Held::default() };
-        want.is_some()
-    }
-
-    /// The settle timer fired: the (generation, pid) to look up, once, if the selection is still waiting.
-    pub fn held_request(&mut self) -> Option<(u64, u32)> {
-        let pid = self.held.pid.filter(|_| matches!(self.held.state, HeldState::Waiting))?;
-        self.held.state = HeldState::Loading;
-        self.held.handles = self.held_handles().unwrap_or(0);
-        self.held.age = 0;
-        Some((self.held.epoch, pid))
-    }
-
-    /// The handle count of the process the pane is about, from the latest snapshot.
-    fn held_handles(&self) -> Option<u32> {
-        self.proc_info.get(&self.held.pid?).map(|i| i.handles)
-    }
-
-    /// Whether the pane shows a list that was read (a refresh has something to replace).
-    fn held_readable(&self) -> bool {
-        matches!(self.held.state, HeldState::Ready(Ok(_)))
-    }
-
-    /// Wants a fresh look at the files held (the selected row was clicked again). Does nothing when there is no
-    /// readable list to replace.
-    pub fn held_mark_stale(&mut self) {
-        if self.held_readable() && !self.held.refreshing {
-            self.held.stale = true;
-        }
-    }
-
-    /// The (epoch, pid) to look up again, once, if a refresh is due; the old list stays until `held_done`.
-    pub fn held_take_refresh(&mut self) -> Option<(u64, u32)> {
-        let pid = self.held.pid.filter(|_| self.held.stale && !self.held.refreshing && self.held_readable())?;
-        self.held.stale = false;
-        self.held.refreshing = true;
-        self.held.handles = self.held_handles().unwrap_or(self.held.handles);
-        self.held.age = 0;
-        Some((self.held.epoch, pid))
-    }
-
-    /// The lookup finished; an answer for a process no longer selected is dropped.
-    pub fn held_done(&mut self, epoch: u64, result: Result<HandleList, HandleError>) {
-        if epoch == self.held.epoch && (matches!(self.held.state, HeldState::Loading) || self.held.refreshing) {
-            self.held.refreshing = false;
-            self.held.state = HeldState::Ready(result);
-            self.held_scroll(0); // keeps the offset, clamped to the new list
-        }
-    }
-
-    /// Scrolls the file lines by `rows`, within the list.
-    fn held_scroll(&mut self, rows: i32) {
-        let n = match &self.held.state {
-            HeldState::Ready(Ok(list)) => list.files.len(),
-            _ => 0,
-        };
-        self.held.scroll = (self.held.scroll as i64 + rows as i64).clamp(0, n.saturating_sub(crate::layout::HELD_ROWS) as i64) as usize;
-    }
-
-    /// The pane's title line and the file lines in view (`HELD_ROWS` from the scroll offset; the title gives the range).
-    fn held_text(&self) -> Option<(String, &[String])> {
-        let pid = self.held.pid?;
-        let name = self.tree.as_ref().zip(self.model.as_ref().and_then(|m| m.selected())).map_or_else(String::new, |(t, id)| t.name_string(id).to_string());
-        let head = |what: String| format!("Files held by {name} (PID {pid}): {what}");
-        Some(match &self.held.state {
-            HeldState::Idle | HeldState::Waiting | HeldState::Loading => (head("reading\u{2026}".into()), &[]),
-            HeldState::Ready(Err(HandleError::Denied)) => (head("run as administrator to see the files of this process".into()), &[]),
-            HeldState::Ready(Err(HandleError::Query(_))) => (head("the system handle list could not be read".into()), &[]),
-            HeldState::Ready(Ok(list)) => {
-                let n = list.files.len();
-                let skipped = if list.skipped > 0 { format!(", {} not readable", list.skipped) } else { String::new() };
-                let first = self.held.scroll.min(n.saturating_sub(crate::layout::HELD_ROWS));
-                let lines = &list.files[first..n.min(first + crate::layout::HELD_ROWS)];
-                let range = if n > crate::layout::HELD_ROWS { format!(" ({}\u{2013}{})", first + 1, first + lines.len()) } else { String::new() };
-                (head(format!("{}{range}{skipped}", fmt::noun(n as u64, "file", "files"))), lines)
-            }
-        })
-    }
-
     /// The tooltip text under (x, y), written to `out`; false (with `out` empty) for none.
     pub fn tip_at(&self, x: f32, y: f32, out: &mut String) -> bool {
         out.clear();
@@ -1175,252 +1031,6 @@ impl App {
         self.map_seen = sel;
         self.map_root = self.tree.as_ref().and_then(|t| treemap::root_for(t, sel));
         self.map_dirty = true;
-    }
-
-    /// The tree was replaced, so every remembered id is meaningless.
-    fn map_reset(&mut self) {
-        self.map_seen = None;
-        self.map_root = None;
-        self.map_dirty = true;
-        self.map_hover = None;
-    }
-
-    /// Selects the node of map tile `i` (not `Rest`, which has none; `Own` selects its folder) and brings its row into view; the map root stays.
-    fn select_from_map(&mut self, i: usize) -> Option<NodeId> {
-        let t = *self.map_tiles.get(i)?;
-        if t.kind == Kind::Rest {
-            return None;
-        }
-        let (tree, m) = (self.tree.as_ref()?, self.model.as_mut()?);
-        m.reveal(tree, t.node);
-        self.map_seen = Some(t.node);
-        let s = m.scroll_to_selected(self.scroll, self.layout.rows_visible());
-        self.set_scroll(s);
-        Some(t.node)
-    }
-
-    /// Whether `map_root` still names a live node of the current tree.
-    fn live_map_root(&self) -> Option<NodeId> {
-        let t = self.tree.as_ref()?;
-        let sel = self.model.as_ref().and_then(|m| m.selected());
-        self.map_root.filter(|&r| r.idx() < t.len() && !t.flags[r].contains(NodeFlags::DEAD)).or_else(|| treemap::root_for(t, sel))
-    }
-
-    /// Rebuilds the tiles if the tree, the root, the pane's rectangle or the scale changed since they were built.
-    /// `px` is the size of one physical pixel in DIPs (`96 / dpi`). Call before painting.
-    pub fn update_map(&mut self, px: f32) {
-        self.update_tiles(px);
-        self.refresh_basket();
-    }
-
-    fn update_tiles(&mut self, px: f32) {
-        self.follow_selection();
-        let (rect, root) = (self.layout.map(), self.live_map_root());
-        let (Some(tree), Some(rect), Some(root)) = (&self.tree, rect, root) else {
-            self.map_tiles.clear();
-            self.map_key = None;
-            self.map_classes.clear();
-            self.map_hover = None;
-            return;
-        };
-        let key = (root, [rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits(), px.to_bits()]);
-        if !self.map_dirty && self.map_key == Some(key) {
-            return;
-        }
-        self.map_tiles = if self.kind() == ViewKind::Processes {
-            let by_location = |id: NodeId| {
-                let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]) as u32;
-                location_class(self.proc_info.get(&pid).and_then(|i| i.path.as_deref()), &self.system_root)
-            };
-            treemap::layout_by(tree, root, rect, px, &by_location)
-        } else {
-            treemap::layout(tree, root, rect, px)
-        };
-        self.map_classes = treemap::class_bytes(&self.map_tiles);
-        self.map_now = today();
-        (self.map_key, self.map_dirty, self.map_hover) = (Some(key), false, None);
-        self.map_gen += 1;
-    }
-
-    pub fn basket(&self) -> &Basket {
-        &self.basket
-    }
-
-    pub fn basket_active(&self) -> bool {
-        self.basket_view.items > 0
-    }
-
-    /// "3 marked, up to 12.4 GB" for the status bar chip.
-    pub fn basket_label(&self) -> Option<String> {
-        self.basket_active().then(|| format!("{} marked, up to {}", self.basket_view.items, fmt::size(self.basket_view.bytes)))
-    }
-
-    /// Keeps the marks of `view`, whose state is being let go, for its next scan.
-    pub fn stash_basket(&mut self, view: usize, from: &mut Parked) {
-        if !from.basket.is_empty() {
-            self.stash.insert(view, std::mem::take(&mut from.basket));
-        }
-    }
-
-    pub fn clear_basket(&mut self) {
-        self.basket.clear();
-        self.basket_rev += 1;
-    }
-
-    pub fn mark_state(&self, id: NodeId) -> MarkState {
-        let Some(tree) = &self.tree else { return MarkState::Refused("no drive is shown") };
-        if self.kind() == ViewKind::Processes {
-            return MarkState::Refused("processes cannot be deleted");
-        }
-        if self.basket.contains(&tree.path(id)) {
-            return MarkState::Unmark;
-        }
-        if self.cancelable() {
-            return MarkState::Refused("the drive is being scanned");
-        }
-        basket::refusal(tree, id, &self.system_root).map_or(MarkState::Mark, MarkState::Refused)
-    }
-
-    /// Marks or unmarks `id`; a refusal goes to the status line.
-    pub fn toggle_mark(&mut self, id: NodeId) {
-        if let MarkState::Refused(why) = self.mark_state(id) {
-            self.notice = format!("cannot mark: {why}");
-            return;
-        }
-        let Some(path) = self.tree.as_ref().map(|t| t.path(id)) else { return };
-        self.basket.toggle(&path);
-        self.basket_rev += 1;
-    }
-
-    /// Marks or unmarks the node at `path`, found afresh: the tree may have changed since the caller chose it.
-    pub fn toggle_mark_path(&mut self, path: &str) {
-        match self.tree.as_ref().and_then(|t| t.find(path)) {
-            Some(id) => self.toggle_mark(id),
-            None => self.notice = "that item is gone".into(),
-        }
-    }
-
-    fn toggle_mark_selected(&mut self) {
-        if let Some(id) = self.model.as_ref().and_then(|m| m.selected()) {
-            self.toggle_mark(id);
-        }
-    }
-
-    /// Rebuilds what the chip and the tiles show when the marks, the tree or the tiles changed.
-    fn refresh_basket(&mut self) {
-        let Some(tree) = &self.tree else {
-            self.basket_view = BasketView::default();
-            return;
-        };
-        if self.basket.is_empty() {
-            if self.basket_view.key.is_some() {
-                self.basket_view = BasketView::default();
-            }
-            return;
-        }
-        let fingerprint = (tree.len(), tree.dead(), tree.rev());
-        let key = (self.basket_rev, fingerprint, self.map_gen);
-        if self.basket_view.key == Some(key) {
-            return;
-        }
-        let ids = self.basket.covered(tree);
-        let set: HashSet<NodeId> = ids.iter().copied().collect();
-        let under = |mut n: NodeId| {
-            while !n.is_none() {
-                if set.contains(&n) {
-                    return true;
-                }
-                n = tree.parent[n];
-            }
-            false
-        };
-        let tiles = self.map_tiles.iter().enumerate().filter(|(_, t)| under(t.node)).map(|(i, _)| i).collect();
-        self.basket_view = BasketView { key: Some(key), items: ids.len(), bytes: ids.iter().map(|&i| tree.subtree_size[i]).sum(), tiles };
-    }
-
-    pub fn deleting(&self) -> bool {
-        self.deleting
-    }
-
-    /// Starts a delete if none runs and no scan does; otherwise says why not on the status line.
-    pub fn begin_delete(&mut self) -> bool {
-        if self.deleting {
-            self.notice = "a delete is already running".into();
-            return false;
-        }
-        if self.cancelable() {
-            self.notice = "cannot delete while the drive is being scanned".into();
-            return false;
-        }
-        self.deleting = true;
-        true
-    }
-
-    pub fn set_deleting(&mut self, on: bool) {
-        self.deleting = on;
-    }
-
-    /// What a commit would delete right now, or `None` (with the reason on the status line).
-    pub fn commit_request(&mut self) -> Option<CommitRequest> {
-        if self.deleting {
-            self.notice = "a delete is already running".into();
-            return None;
-        }
-        if self.cancelable() {
-            self.notice = "cannot delete while the drive is being scanned".into();
-            return None;
-        }
-        let (view, tree) = (self.active?, self.tree.as_ref()?);
-        self.basket.prune(tree);
-        self.basket_rev += 1;
-        // A mark that cannot be deleted now (a rename gave it an unsafe name) is dropped and reported with the result.
-        let (ids, refused): (Vec<NodeId>, Vec<NodeId>) = self.basket.covered(tree).into_iter().partition(|&i| basket::refusal(tree, i, &self.system_root).is_none());
-        self.skipped = refused.iter().map(|&i| (tree.path(i), basket::refusal(tree, i, &self.system_root).unwrap_or(""))).collect();
-        let skipped: Vec<String> = self.skipped.iter().map(|(p, _)| p.clone()).collect();
-        self.basket.remove_under(&skipped);
-        self.basket_rev += 1;
-        if ids.is_empty() {
-            self.clear_basket();
-            self.notice = match self.skipped.first() {
-                Some((_, why)) => format!("{} skipped: {why}", fmt::noun(self.skipped.len() as u64, "marked item", "marked items")),
-                None => "the marked items are already gone".into(),
-            };
-            self.notice_detail = self.skipped.drain(..).map(|(p, why)| format!("{p}: {why}")).collect();
-            return None;
-        }
-        let paths = ids.iter().map(|&i| tree.path(i)).collect();
-        let bytes = ids.iter().map(|&i| tree.subtree_size[i]).sum();
-        Some(CommitRequest { view, paths, bytes })
-    }
-
-    /// A delete ended: `gone` (deleted, `missing` of them already absent) leave the basket, `failed` (path, reason) stay.
-    pub fn finish_delete(&mut self, gone: &[String], missing: usize, failed: &[(String, String)]) {
-        self.deleting = false;
-        self.basket.remove_under(gone);
-        self.basket_rev += 1;
-        let deleted = gone.len() - missing.min(gone.len());
-        let items = fmt::noun(deleted as u64, "item", "items");
-        self.notice_ok = failed.is_empty() && self.skipped.is_empty();
-        self.notice = match failed.first() {
-            None if missing == 0 => format!("deleted {items}"),
-            None => format!("deleted {items}, {missing} already gone"),
-            Some((_, why)) => format!("{} of {} not deleted: {why}; still marked", failed.len(), gone.len() + failed.len()),
-        };
-        self.notice_detail = failed.iter().map(|(p, why)| format!("{p}: {why}")).collect();
-        if let Some((_, why)) = self.skipped.first() {
-            self.notice += &format!("; {} skipped: {why}", self.skipped.len());
-            self.notice_detail.extend(self.skipped.drain(..).map(|(p, why)| format!("{p}: {why}")));
-        }
-    }
-
-    pub fn map_tiles(&self) -> &[Tile] {
-        &self.map_tiles
-    }
-
-    /// The tile of the selected node, if it has one (a node inside a `Rest` tile has none, and `Own` is not the node's tile).
-    pub fn map_selected_tile(&self) -> Option<usize> {
-        let sel = self.model.as_ref()?.selected()?;
-        self.map_tiles.iter().position(|t| t.node == sel && !t.kind.is_pseudo())
     }
 
     fn click(&mut self, x: f32, y: f32) -> Effect {
