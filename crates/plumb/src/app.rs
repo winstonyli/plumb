@@ -346,6 +346,7 @@ pub struct CommitRequest {
 struct BasketView {
     key: Option<(u64, (usize, usize, u64), u64)>,
     items: usize,
+    /// Allocated bytes under the marked nodes; an upper bound, since a hard-linked file's other names free nothing.
     bytes: u64,
     /// Indices into `map_tiles` to tint: tiles at or under a marked node.
     tiles: Vec<usize>,
@@ -1247,10 +1248,6 @@ impl App {
 
     pub fn basket_active(&self) -> bool {
         self.basket_view.items > 0
-    }
-
-    pub fn marked_tiles(&self) -> &[usize] {
-        &self.basket_view.tiles
     }
 
     /// "3 marked, up to 12.4 GB" for the status bar chip.

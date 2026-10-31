@@ -1,4 +1,4 @@
-//! Hidden-window end-to-end checks driven through the real message loop: `--selftest`, `--selftest-watch`, `--selftest-live`.
+//! Hidden-window end-to-end checks driven through the real message loop: `--selftest`, `--selftest-watch`, `--selftest-delete`, `--selftest-processes`, `--selftest-tooltip`, `--selftest-live`.
 use super::*;
 
 /// Pumps window messages until `cond` holds; errors after `secs`.

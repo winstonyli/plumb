@@ -45,10 +45,6 @@ impl Basket {
         self.paths.clear();
     }
 
-    pub fn remove_all(&mut self, gone: &[String]) {
-        self.paths.retain(|p| !gone.contains(p));
-    }
-
     /// Drops the marks that are one of `gone` or lie under one: what a deleted folder takes with it.
     pub fn remove_under(&mut self, gone: &[String]) {
         self.paths.retain(|p| !gone.iter().any(|g| p == g || p.strip_prefix(g.as_str()).is_some_and(|r| r.starts_with('\\'))));
@@ -75,11 +71,6 @@ impl Basket {
                 true
             })
             .collect()
-    }
-
-    /// Allocated bytes under the nodes in [`Basket::covered`]; an upper bound, since a hard-linked file's other names free nothing.
-    pub fn total_bytes(&self, tree: &Tree) -> u64 {
-        self.covered(tree).iter().map(|&id| tree.subtree_size[id]).sum()
     }
 }
 
@@ -148,7 +139,6 @@ mod tests {
         let mut paths: Vec<String> = ids.iter().map(|&i| t.path(i)).collect();
         paths.sort();
         assert_eq!(paths, vec![r"C:\a".to_string(), r"C:\big".to_string()]);
-        assert_eq!(b.total_bytes(&t), 30 + 1000);
     }
 
     #[test]
@@ -161,17 +151,6 @@ mod tests {
         let big = t.find(r"C:\big").unwrap();
         assert!(t.remove(big));
         assert!(b.covered(&t).is_empty(), "a dead node does not resolve");
-        assert_eq!(b.total_bytes(&t), 0);
-    }
-
-    #[test]
-    fn remove_all_unmarks_only_the_named_paths() {
-        let mut b = Basket::default();
-        b.toggle(r"C:\a");
-        b.toggle(r"C:\big");
-        b.remove_all(&[r"C:\a".to_string()]);
-        assert_eq!(b.len(), 1);
-        assert!(b.contains(r"C:\big"));
     }
 
     #[test]
