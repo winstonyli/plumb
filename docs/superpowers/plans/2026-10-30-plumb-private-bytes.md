@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Private bytes metric Implementation Plan
