@@ -99,6 +99,15 @@ pub enum Kind {
     Solid,
     /// The merged small items of one folder.
     Rest,
+    /// A folder's own bytes, as opposed to what is inside it (a process's own memory). `node` is the folder.
+    Own,
+}
+
+impl Kind {
+    /// A tile that is not the whole of a node's subtree: `Rest` and `Own` have no row of their own.
+    pub fn is_pseudo(self) -> bool {
+        matches!(self, Kind::Rest | Kind::Own)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -181,20 +190,21 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    /// Lays out the children of `dir` in `area`.
+    /// Lays out the children of `dir`, and its own bytes, in `area`.
     fn fill(&self, dir: NodeId, area: Box64, depth: u8, out: &mut Vec<Tile>) {
         let t = self.tree;
-        let total = t.subtree_size[dir].saturating_sub(t.size[dir]);
+        let total = t.subtree_size[dir];
         let a = area.area();
         if total == 0 || a.is_nan() || a <= 0.0 {
             return;
         }
-        // One O(k) pass: the children big enough to get MIN_PX2 are kept, the rest are summed.
+        // One O(k) pass: the items big enough to get MIN_PX2 are kept, the rest are summed. The folder's own
+        // bytes are an item like a child; `dir` stands for them, as a folder is never its own child.
         let min_area = MIN_PX2 * self.px * self.px;
         let mut kept: Vec<(NodeId, u64)> = Vec::new();
         let (mut rest_bytes, mut rest_n) = (0u64, 0u32);
-        for c in t.children(dir) {
-            let w = t.subtree_size[c];
+        for c in std::iter::once(dir).chain(t.children(dir)) {
+            let w = if c == dir { t.size[dir] } else { t.subtree_size[c] };
             if w == 0 {
                 continue;
             }
@@ -213,6 +223,8 @@ impl Ctx<'_> {
         for (&(c, w), b) in kept.iter().zip(squarify(&weights, area)) {
             if c.is_none() {
                 out.push(Tile { node: dir, rect: b.rect(), depth, class: Class::Other, kind: Kind::Rest, bytes: w, count: rest_n, mtime: None });
+            } else if c == dir {
+                out.push(Tile { node: dir, rect: b.rect(), depth, class: Class::Other, kind: Kind::Own, bytes: w, count: 1, mtime: None });
             } else {
                 self.emit(c, b, depth, out);
             }

@@ -104,7 +104,7 @@ fn kids(tiles: &[Tile], tree: &Tree, i: usize) -> Vec<usize> {
     (i + 1..tiles.len())
         .filter(|&j| {
             let t = tiles[j];
-            t.depth == f.depth + 1 && if t.kind == Kind::Rest { t.node == f.node } else { tree.parent[t.node] == f.node }
+            t.depth == f.depth + 1 && if t.kind.is_pseudo() { t.node == f.node } else { tree.parent[t.node] == f.node }
         })
         .collect()
 }
@@ -287,4 +287,63 @@ fn a_file_tile_carries_its_last_write_day_and_other_tiles_none() {
     assert_eq!((a.kind, a.mtime), (Kind::File, std::num::NonZeroU32::new(7)));
     assert!(tiles.iter().filter(|t| t.kind != Kind::File).all(|t| t.mtime.is_none()));
     assert!(tiles.iter().filter(|t| t.node != f).all(|t| t.mtime.is_none()), "unset times stay unknown");
+}
+
+#[test]
+fn a_folders_own_bytes_get_an_own_tile_beside_its_children() {
+    let mut b = TreeBuilder::new();
+    let root = dir(&mut b, NodeId::NONE, "root");
+    let p = b.push_str(root, "parent.exe", 600_000, NodeFlags::DIR);
+    let c1 = file(&mut b, p, "a.exe", 200_000);
+    let c2 = file(&mut b, p, "b.exe", 200_000);
+    let tree = b.finish().unwrap();
+    let tiles = layout(&tree, root, Rect { x: 0.0, y: 0.0, w: 200.0, h: 200.0 }, 1.0);
+    assert_eq!((tiles[0].node, tiles[0].kind), (p, Kind::Frame));
+    let f = tiles[0].rect;
+    let kids = kids(&tiles, &tree, 0);
+    assert_eq!(kids.len(), 3);
+    let own = kids.iter().map(|&i| tiles[i]).find(|t| t.kind == Kind::Own).expect("an own tile");
+    assert_eq!((own.node, own.bytes, own.count, own.depth), (p, 600_000, 1, 1));
+    assert!(tiles.iter().any(|t| t.node == c1) && tiles.iter().any(|t| t.node == c2));
+    check_group(&tiles, &kids, Rect { x: f.x + 1.0, y: f.y + 1.0, w: f.w - 2.0, h: f.h - 2.0 });
+}
+
+#[test]
+fn tiny_own_bytes_merge_into_the_rest_tile() {
+    let mut b = TreeBuilder::new();
+    let root = dir(&mut b, NodeId::NONE, "root");
+    let p = b.push_str(root, "parent.exe", 1, NodeFlags::DIR);
+    file(&mut b, p, "big.exe", 1_000_000_000);
+    let tree = b.finish().unwrap();
+    let tiles = layout(&tree, root, Rect { x: 0.0, y: 0.0, w: 200.0, h: 200.0 }, 1.0);
+    assert!(tiles.iter().all(|t| t.kind != Kind::Own));
+    let rest = tiles.iter().find(|t| t.kind == Kind::Rest).expect("a rest tile");
+    assert_eq!((rest.node, rest.count, rest.bytes), (p, 1, 1));
+}
+
+#[test]
+fn a_folder_with_own_bytes_and_no_children_is_one_own_tile() {
+    let mut b = TreeBuilder::new();
+    let root = dir(&mut b, NodeId::NONE, "root");
+    let p = b.push_str(root, "parent.exe", 5_000, NodeFlags::DIR);
+    let tree = b.finish().unwrap();
+    let tiles = layout(&tree, root, Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 }, 1.0);
+    assert_eq!(tiles.len(), 2);
+    assert_eq!((tiles[0].node, tiles[0].kind), (p, Kind::Frame));
+    assert_eq!((tiles[1].node, tiles[1].kind, tiles[1].bytes), (p, Kind::Own, 5_000));
+}
+
+#[test]
+fn a_root_with_own_bytes_gets_an_own_tile_at_depth_zero() {
+    let mut b = TreeBuilder::new();
+    let root = b.push_str(NodeId::NONE, "root", 300, NodeFlags::DIR);
+    let c = file(&mut b, root, "c", 300);
+    let tree = b.finish().unwrap();
+    let r = Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+    let tiles = layout(&tree, root, r, 1.0);
+    assert_eq!(tiles.len(), 2);
+    let own = tiles.iter().find(|t| t.kind == Kind::Own).expect("an own tile");
+    assert_eq!((own.node, own.depth), (root, 0));
+    assert!(tiles.iter().any(|t| t.node == c && t.kind == Kind::File));
+    check_group(&tiles, &[0, 1], r);
 }
