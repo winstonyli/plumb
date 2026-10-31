@@ -2,6 +2,14 @@
 
 All notable changes to plumb. Format follows [Keep a Changelog](https://keepachangelog.com/); all crates share one version and are bumped together at each tag.
 
+## 0.10.1 - 2026-10-31
+
+_0.10.0 was tagged but never published: its release run failed a flaky test. This release has all of its changes, listed under 0.10.0 below._
+
+### Internal
+
+- Make the handle-count test open 200 files and expect 100 more, so tests running in parallel cannot fail it
+
 ## 0.10.0 - 2026-10-31
 
 ### Changed
