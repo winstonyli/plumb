@@ -1,20 +1,21 @@
 //! The files a process has open: its handles, duplicated into this process and asked for a path.
 //!
-//! `NtQuerySystemInformation(SystemExtendedHandleInformation)` lists every handle in the system. For the ones that
-//! belong to the target, `DuplicateHandle` brings a copy over. Asking a copy what it is (`GetFileType`, a path) can
+//! `NtQueryInformationProcess(ProcessHandleInformation)` lists the target's handles with their object types. For the
+//! File ones, `DuplicateHandle` brings a copy over. Asking a copy what it is (`GetFileType`, a path) can
 //! block forever on a synchronous pipe with a read pending, so every question is asked on a worker thread that is
 //! given up on after a timeout; a pathological process cannot leak more than `MAX_HUNG` threads.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError};
-use std::sync::Arc;
+use std::os::windows::io::AsRawHandle;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
 use windows::Win32::Storage::FileSystem::{GetFileType, GetFinalPathNameByHandleW, GETFINALPATHNAMEBYHANDLE_FLAGS, FILE_NAME_NORMALIZED, FILE_TYPE_DISK, VOLUME_NAME_DOS};
-use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE};
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION};
 
 /// Threads given up on before the rest of a process's handles are skipped unread.
 const MAX_HUNG: usize = 8;
-const SYSTEM_EXTENDED_HANDLE_INFORMATION: u32 = 64;
+const PROCESS_HANDLE_INFORMATION: u32 = 51;
 
 #[derive(Debug, Default)]
 pub struct HandleList {
@@ -28,30 +29,40 @@ pub struct HandleList {
 pub enum HandleError {
     /// The process cannot be opened for handle duplication (another user's, protected, or gone).
     Denied,
-    /// The handle table could not be read.
+    /// The process's handle list could not be read.
     Query(i32),
 }
 
-/// `SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX` on x64 (40 bytes).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Entry {
-    object: usize,
-    pid: usize,
-    handle: usize,
-    access: u32,
-    backtrace: u16,
-    type_index: u16,
-    attributes: u32,
-    reserved: u32,
+/// `PROCESS_HANDLE_SNAPSHOT_INFORMATION` (class 51): a count and a reserved word, then one 40-byte entry per handle.
+/// Each entry is five words: the handle value, its handle count, its pointer count, the granted access (low half)
+/// with the object type index (high half), and the attributes with a reserved half.
+const WORDS_PER_ENTRY: usize = 5;
+
+/// The handles `process` owns, as (value, object type index), from its own snapshot; reading the system-wide table
+/// instead cost about 60 ms a lookup, the snapshot of one process under 2 ms.
+fn handle_snapshot(process: HANDLE) -> Result<Vec<(usize, u32)>, HandleError> {
+    let buf = crate::nt::query_process(process, PROCESS_HANDLE_INFORMATION, 256 << 10).map_err(HandleError::Query)?;
+    let count = (buf[0] as usize).min((buf.len() - 2) / WORDS_PER_ENTRY);
+    Ok((0..count).map(|i| (buf[2 + i * WORDS_PER_ENTRY] as usize, (buf[2 + i * WORDS_PER_ENTRY + 3] >> 32) as u32)).collect())
 }
 
-/// Every handle value in the system's table that belongs to `pid`.
-fn handle_values(pid: u32) -> Result<Vec<usize>, HandleError> {
-    let buf = crate::nt::query(SYSTEM_EXTENDED_HANDLE_INFORMATION, 4 << 20).map_err(HandleError::Query)?;
-    let count = buf[0] as usize;
-    let entries = unsafe { std::slice::from_raw_parts(buf.as_ptr().add(2).cast::<Entry>(), count) };
-    Ok(entries.iter().filter(|e| e.pid == pid as usize).map(|e| e.handle).collect())
+/// The object type index of a File on this boot, learned from a file this process opens; `None` when it could not be
+/// learned, and then every handle is asked about.
+fn file_type_index() -> Option<u32> {
+    static INDEX: OnceLock<Option<u32>> = OnceLock::new();
+    *INDEX.get_or_init(|| {
+        let file = std::fs::File::open(std::env::current_exe().ok()?).ok()?;
+        let me = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, std::process::id()) }.ok()?;
+        let found = handle_snapshot(me).ok()?.into_iter().find(|&(v, _)| v == file.as_raw_handle() as usize).map(|(_, t)| t);
+        let _ = unsafe { CloseHandle(me) };
+        found
+    })
+}
+
+/// Every handle value of `process` that may be a file: those of the File object type, or all of them when the type is unknown.
+fn handle_values(process: HANDLE) -> Result<Vec<usize>, HandleError> {
+    let file = file_type_index();
+    Ok(handle_snapshot(process)?.into_iter().filter(|&(_, t)| file.is_none_or(|f| t == f)).map(|(v, _)| v).collect())
 }
 
 enum Msg {
@@ -105,9 +116,9 @@ fn probe(target: &Target, value: usize) -> Found {
 
 /// The files `pid` has open. `per_handle` bounds each question; see the module comment.
 pub fn open_files(pid: u32, per_handle: Duration) -> Result<HandleList, HandleError> {
-    let process = unsafe { OpenProcess(PROCESS_DUP_HANDLE, false, pid) }.map_err(|_| HandleError::Denied)?;
+    let process = unsafe { OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION, false, pid) }.map_err(|_| HandleError::Denied)?;
     let target = Arc::new(Target(process));
-    let values = Arc::new(handle_values(pid)?);
+    let values = Arc::new(handle_values(process)?);
     let next = Arc::new(AtomicUsize::new(0));
     let current = Arc::new(AtomicUsize::new(0)); // the worker generation allowed to take handles
     let (tx, rx) = channel::<Msg>();
@@ -177,6 +188,23 @@ pub fn open_files(pid: u32, per_handle: Duration) -> Result<HandleList, HandleEr
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    fn a_file_this_process_holds_is_listed_and_only_files_are_probed() {
+        let path = std::env::temp_dir().join(format!("plumb-handles-fast-{}.tmp", std::process::id()));
+        std::fs::write(&path, b"x").unwrap();
+        let _held = std::fs::File::open(&path).unwrap();
+        assert!(file_type_index().is_some(), "the File object type is learned on this boot");
+        let me = unsafe { OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION, false, std::process::id()) }.unwrap();
+        let (all, files) = (handle_snapshot(me).unwrap().len(), handle_values(me).unwrap().len());
+        assert!(files < all, "the filter drops handles of other types: {files} of {all}");
+        let _ = unsafe { CloseHandle(me) };
+        let list = open_files(std::process::id(), Duration::from_millis(500)).unwrap();
+        let long = std::fs::canonicalize(&path).unwrap().to_string_lossy().into_owned();
+        let want = long.strip_prefix(r"\\?\").unwrap_or(&long).to_lowercase();
+        assert!(list.files.iter().any(|f| f.to_lowercase() == want), "the held file is listed: {:?}", list.files);
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// The spike: the numbers below are recorded in the views design. `cargo test -p plumb-scan handles -- --ignored --nocapture`.
     #[test]
