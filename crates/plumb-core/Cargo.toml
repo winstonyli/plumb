@@ -2,6 +2,7 @@
 name = "plumb-core"
 version = "0.9.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 bitflags.workspace = true

@@ -39,7 +39,7 @@ jobs:
           $dir = "plumb-$tag-windows-x64"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item target/release/plumb.exe $dir/
-          Copy-Item CHANGELOG.md $dir/
+          Copy-Item CHANGELOG.md,LICENSE-MIT,LICENSE-APACHE $dir/
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
           $hash = (Get-FileHash "$dir.zip" -Algorithm SHA256).Hash.ToLower()
           Set-Content -NoNewline -Encoding ascii "$dir.zip.sha256" "$hash  $dir.zip`n"
