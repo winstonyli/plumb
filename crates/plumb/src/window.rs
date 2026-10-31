@@ -74,8 +74,6 @@ use windows::Win32::UI::Controls::{
 };
 use windows::core::{w, Interface, Result, BOOL, PCWSTR, PWSTR};
 
-/// The tooltip's frame colour (a `COLORREF`), the theme's border; read while the tooltip paints.
-static TIP_FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 const WM_SCAN_DONE: u32 = WM_APP + 1;
 const WM_JOURNAL: u32 = WM_APP + 2;
 const WM_FILTER: u32 = WM_APP + 3;
@@ -101,126 +99,6 @@ const PREVIEW_TICK_MS: u32 = 15;
 const PREVIEW_QUEUE: usize = 200_000;
 /// Longest a batch of journal deltas may hold the UI thread.
 const APPLY_BUDGET: Duration = Duration::from_millis(5);
-const CMD_REVEAL: usize = 1;
-const CMD_COPY: usize = 2;
-const CMD_PROPS: usize = 3;
-const CMD_WHO: usize = 5;
-const CMD_MARK: usize = 4;
-
-struct Scanned {
-    tree: Tree,
-    report: ScanReport,
-    elapsed: Duration,
-    /// The volume and journal position to follow, read before the scan began so changes made
-    /// during it are replayed. Present only for elevated NTFS drives.
-    journal: Option<(Volume, JournalInfo)>,
-    root: String,
-}
-
-type ScanResult = std::result::Result<Scanned, String>;
-
-/// What a live watch follows.
-enum Source {
-    Journal { reader: JournalReader, live: Live, queue: VecDeque<Delta> },
-    Dir { watcher: Watcher, queue: VecDeque<Listing> },
-}
-
-/// Everything live updates need for the view on screen.
-struct Watch {
-    src: Source,
-    pacer: Pacer,
-    /// The tree changed since the rows were last refreshed.
-    dirty: bool,
-    /// `TIMER_LIVE` is running.
-    armed: bool,
-}
-
-/// Why a watch ended; `why` is `None` when it was asked to stop.
-struct Ended {
-    rescan: bool,
-    why: Option<String>,
-}
-
-impl Watch {
-    /// Moves what the source has queued into its queue; `Some` if the source has ended.
-    fn drain(&mut self) -> Option<Ended> {
-        let ended = |rescan: bool, why: &str| Some(Ended { rescan, why: Some(why.to_string()) });
-        match &mut self.src {
-            Source::Journal { reader, queue, .. } => {
-                while let Some(ev) = reader.try_recv() {
-                    match ev {
-                        Event::Deltas(d) => queue.extend(d),
-                        Event::Stopped(Stop::Requested) => return Some(Ended { rescan: false, why: None }),
-                        Event::Stopped(Stop::Wrapped) => {
-                            return ended(true, "the change journal wrapped, so changes were missed");
-                        }
-                        Event::Stopped(Stop::Disabled) => return ended(false, "the change journal is not active"),
-                        Event::Stopped(Stop::Failed(m)) => return ended(false, &m),
-                    }
-                }
-            }
-            Source::Dir { watcher, queue } => {
-                while let Some(ev) = watcher.try_recv() {
-                    match ev {
-                        WatchEvent::Listings(l) => queue.extend(l),
-                        WatchEvent::Stopped(WatchStop::Overflow) => {
-                            return ended(true, "the directory watch overflowed, so changes were missed");
-                        }
-                        WatchEvent::Stopped(WatchStop::TooMany) => {
-                            return ended(true, "too many folders changed at once");
-                        }
-                        WatchEvent::Stopped(WatchStop::Failed(m)) => return ended(false, &m),
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Applies queued changes for the budget; returns how many tree changes were made.
-    fn apply(&mut self, tree: &mut Tree, deadline: Instant) -> usize {
-        match &mut self.src {
-            Source::Journal { live, queue, .. } => live.apply(tree, queue, deadline),
-            Source::Dir { queue, .. } => crate::dirsync::apply(tree, queue, deadline),
-        }
-    }
-
-    fn queued(&self) -> bool {
-        match &self.src {
-            Source::Journal { queue, .. } => !queue.is_empty(),
-            Source::Dir { queue, .. } => !queue.is_empty(),
-        }
-    }
-
-    /// Work left that a timer tick should finish.
-    fn backlog(&self) -> bool {
-        self.queued() || matches!(&self.src, Source::Journal { live, .. } if live.pending())
-    }
-
-    /// Stops the source (blocks briefly: call off the UI thread).
-    fn stop(self) {
-        match self.src {
-            Source::Journal { reader, .. } => reader.stop(),
-            Source::Dir { watcher, .. } => watcher.stop(),
-        }
-    }
-}
-
-fn open_journal(root: &str) -> Option<(Volume, JournalInfo)> {
-    let root = Path::new(root);
-    if !is_elevated() || !is_ntfs(root) {
-        return None;
-    }
-    let vol = Volume::open(root).ok()?; // fails for anything but a whole volume
-    let info = vol.query().ok()?;
-    Some((vol, info))
-}
-
-fn local_time() -> String {
-    let t = unsafe { GetLocalTime() };
-    format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
-}
-
 /// Everything the window keeps per view besides what the app holds (`Parked`). The fields of the
 /// view on screen live directly in `Win`; the others wait in `Win::parked` as one of these.
 #[derive(Default)]
@@ -460,60 +338,6 @@ impl Win {
         };
         win.apply_title_theme();
         Ok(win)
-    }
-
-    /// A tooltip control over the whole window, asking for its text (`WM_NOTIFY`) when the pointer rests.
-    fn make_tooltip(hwnd: HWND) -> HWND {
-        unsafe {
-            let _ = InitCommonControlsEx(&INITCOMMONCONTROLSEX { dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32, dwICC: ICC_WIN95_CLASSES });
-            let tip = CreateWindowExW(
-                WS_EX_TOPMOST, TOOLTIPS_CLASSW, PCWSTR::null(), WS_POPUP | WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
-                0, 0, 0, 0, Some(hwnd), None, None, None,
-            )
-            .unwrap_or_default();
-            let tool = TTTOOLINFOW {
-                // The size without `lParam` and `lpReserved`, which version 5 of comctl32 insists on.
-                cbSize: std::mem::offset_of!(TTTOOLINFOW, lParam) as u32,
-                uFlags: TTF_IDISHWND, // mouse messages are relayed by hand (`WM_MOUSEMOVE`)
-                hwnd,
-                uId: hwnd.0 as usize,
-                lpszText: PWSTR(usize::MAX as *mut u16), // LPSTR_TEXTCALLBACK
-                ..Default::default()
-            };
-            SendMessageW(tip, TTM_ADDTOOLW, None, Some(LPARAM(&tool as *const _ as isize)));
-            // Wraps a long path, and lets the status tooltip's line break through.
-            SendMessageW(tip, TTM_SETMAXTIPWIDTH, None, Some(LPARAM(640)));
-            // Goes away after a few seconds of stillness, as system tooltips do (left alone it stayed up for minutes).
-            SendMessageW(tip, TTM_SETDELAYTIME, Some(WPARAM(TTDT_AUTOPOP as usize)), Some(LPARAM(6000)));
-            tip
-        }
-    }
-
-    /// Has the tooltip control ask for its text again (`tip_text`), keeping it where it is.
-    fn refresh_tip(&self) {
-        let tool = TTTOOLINFOW {
-            cbSize: std::mem::offset_of!(TTTOOLINFOW, lParam) as u32,
-            uFlags: TTF_IDISHWND,
-            hwnd: self.hwnd,
-            uId: self.hwnd.0 as usize,
-            lpszText: PWSTR(usize::MAX as *mut u16), // LPSTR_TEXTCALLBACK
-            ..Default::default()
-        };
-        unsafe { SendMessageW(self.tooltip, TTM_UPDATETIPTEXTW, None, Some(LPARAM(&tool as *const _ as isize))) };
-    }
-
-    /// The tooltip text under the pointer, as the wide string the control reads; empty for none.
-    fn tip_text(&mut self) -> *const u16 {
-        let mut p = POINT::default();
-        let found = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(self.hwnd, &mut p).as_bool() }
-            && self.app.tip_at(p.x as f32 * 96.0 / self.dpi, p.y as f32 * 96.0 / self.dpi - self.inset, &mut self.tip_last);
-        if !found {
-            self.tip_last.clear();
-        }
-        self.tip_buf.clear();
-        self.tip_buf.extend(self.tip_last.encode_utf16());
-        self.tip_buf.push(0);
-        self.tip_buf.as_ptr()
     }
 
     fn apply_title_theme(&self) {
@@ -1082,165 +906,6 @@ impl Win {
         self.invalidate();
     }
 
-    fn start_watch(&mut self, vol: Volume, info: JournalInfo, records: Vec<NodeId>) {
-        let hwnd = self.hwnd.0 as isize;
-        let posted = self.posted.clone();
-        let reader = JournalReader::start(vol, info, JournalConfig::default(), move || {
-            if !posted.swap(true, Ordering::AcqRel) {
-                let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
-            }
-        });
-        self.watch = Some(Watch {
-            src: Source::Journal { reader, live: Live::new(records), queue: VecDeque::new() },
-            pacer: Pacer::new(Instant::now()),
-            dirty: false,
-            armed: false,
-        });
-        self.app.set_live(LiveStatus::On { last: None });
-    }
-
-    /// Makes the directory watch started with the scan the live watch: releases what it collected
-    /// while the scan ran and wakes the window to apply it.
-    fn install_dir_watch(&mut self, watcher: Watcher) {
-        watcher.release();
-        self.watch = Some(Watch {
-            src: Source::Dir { watcher, queue: VecDeque::new() },
-            pacer: Pacer::new(Instant::now()),
-            dirty: false,
-            armed: false,
-        });
-        self.app.set_live(LiveStatus::On { last: None });
-        let _ = unsafe { PostMessageW(Some(self.hwnd), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
-    }
-
-    /// Starts a held directory watch on `root` unless the change journal will follow it
-    /// (`journal`). A watch that cannot start leaves the tree static.
-    fn start_dir_pending(&mut self, root: &str, journal: bool) {
-        self.drop_pending();
-        self.dir_failed = None;
-        if journal {
-            return;
-        }
-        let hwnd = self.hwnd.0 as isize;
-        let posted = self.posted.clone();
-        match Watcher::start(Path::new(root), WatchConfig::default(), move || {
-            if !posted.swap(true, Ordering::AcqRel) {
-                let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
-            }
-        }) {
-            Ok(w) => self.dir_pending = Some(w),
-            Err(m) => self.dir_failed = Some(m),
-        }
-    }
-
-    fn drop_pending(&mut self) {
-        if let Some(w) = self.dir_pending.take() {
-            std::thread::spawn(move || w.stop());
-        }
-    }
-
-    /// Stops following changes. The source may be mid-wait, so it is joined off the UI thread.
-    fn drop_watch(&mut self) {
-        if let Some(w) = self.watch.take() {
-            std::thread::spawn(move || w.stop());
-            self.sync_timers();
-        }
-    }
-
-    /// `WM_JOURNAL`: moves what the source has queued into its queue and applies some of it.
-    fn journal_event(&mut self) {
-        self.posted.store(false, Ordering::Release);
-        for d in 0..self.parked.len().max(self.app.active.map_or(0, |a| a + 1)) {
-            // The watches of views off screen keep their trees current too.
-            self.in_slot(d, |w| {
-                let ended = w.watch.as_mut().and_then(Watch::drain);
-                w.apply_live();
-                if let Some(e) = ended {
-                    w.watch_ended(e);
-                }
-            });
-        }
-    }
-
-    /// Applies queued changes for at most `APPLY_BUDGET`; leftovers continue on the next message.
-    fn apply_queued(&mut self) {
-        let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) else { return };
-        let n = w.apply(tree, Instant::now() + APPLY_BUDGET);
-        w.dirty |= n > 0;
-        if w.queued() {
-            let _ = unsafe { PostMessageW(Some(self.hwnd), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
-        }
-    }
-
-    /// `apply_queued`, and starts the live timer if there is work to refresh. A view off screen
-    /// keeps its changes marked until it is shown again.
-    fn apply_live(&mut self) {
-        self.apply_queued();
-        if let Some(w) = &mut self.watch
-            && !w.armed
-            && (w.dirty || w.backlog())
-            && !self.borrowed
-        {
-            w.armed = true;
-            self.sync_timers();
-        }
-    }
-
-    /// `TIMER_LIVE`: at most every `REPAINT`, refreshes the rows once if the tree changed.
-    fn live_tick(&mut self) {
-        self.apply_live();
-        let due = self.watch.as_ref().is_some_and(|w| w.dirty && w.pacer.due(Instant::now()));
-        if due {
-            let t0 = Instant::now();
-            self.app.refresh_rows();
-            self.app.live_changed(local_time());
-            self.invalidate();
-            if let Some(w) = &mut self.watch {
-                w.pacer.done(Instant::now(), t0.elapsed());
-                w.dirty = false;
-            }
-            if self.app.tree.as_ref().is_some_and(needs_compaction) {
-                self.auto_rescan();
-            }
-        }
-        if let Some(w) = &mut self.watch
-            && w.armed
-            && !w.dirty
-            && !w.backlog()
-        {
-            w.armed = false;
-            self.sync_timers();
-        }
-    }
-
-    /// The source ended: bring the tree up to date, then rescan or say why updates stopped.
-    fn watch_ended(&mut self, e: Ended) {
-        if let (Some(w), Some(tree)) = (&mut self.watch, &mut self.app.tree) {
-            w.apply(tree, Instant::now() + Duration::from_millis(50));
-        }
-        self.app.refresh_rows();
-        self.drop_watch();
-        self.app.set_live(LiveStatus::Off);
-        let Some(why) = e.why else { return };
-        if !(e.rescan && self.auto_rescan()) {
-            self.app.set_live(LiveStatus::Stale(why));
-        }
-        self.invalidate();
-    }
-
-    /// Starts a background rescan if the policy allows (or one is already running).
-    fn auto_rescan(&mut self) -> bool {
-        if self.rx.is_some() {
-            return true;
-        }
-        let Some(i) = self.app.active else { return false };
-        if !self.policy.allow(&self.app.views[i].root, Instant::now(), self.last_input) {
-            return false;
-        }
-        self.start_rescan(i);
-        true
-    }
-
     fn selected_path(&self) -> Option<String> {
         let id = self.app.model.as_ref()?.selected()?;
         self.app.menu_target(id).map(|t| t.1)
@@ -1260,43 +925,6 @@ pub fn summary(used: Used, files: u64, elapsed: Duration, corrupt: Option<u64>, 
         s.push_str(&format!(" ({n})"));
     }
     s
-}
-
-fn copy_to_clipboard(hwnd: HWND, text: &str) {
-    let u = wide(text);
-    unsafe {
-        if OpenClipboard(Some(hwnd)).is_err() {
-            return;
-        }
-        let _ = EmptyClipboard();
-        if let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, u.len() * 2) {
-            let p = GlobalLock(h) as *mut u16;
-            if !p.is_null() {
-                std::ptr::copy_nonoverlapping(u.as_ptr(), p, u.len());
-                let _ = GlobalUnlock(h);
-                let _ = SetClipboardData(13, Some(HANDLE(h.0))); // CF_UNICODETEXT
-            }
-        }
-        let _ = CloseClipboard();
-    }
-}
-
-fn reveal(path: &str) {
-    let args = wide(&format!("/select,\"{path}\""));
-    unsafe { ShellExecuteW(None, w!("open"), w!("explorer.exe"), PCWSTR(args.as_ptr()), PCWSTR::null(), SW_SHOWNORMAL) };
-}
-
-fn properties(path: &str) {
-    let p = wide(path);
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_INVOKEIDLIST,
-        lpVerb: w!("properties"),
-        lpFile: PCWSTR(p.as_ptr()),
-        nShow: SW_SHOW.0,
-        ..Default::default()
-    };
-    let _ = unsafe { ShellExecuteExW(&mut info) };
 }
 
 /// Arguments for the elevated copy: `--scan "C:"` restarts the scan the user was looking at. `title` is a
@@ -1325,60 +953,6 @@ fn relaunch_elevated(view: Option<&str>) -> bool {
         ..Default::default()
     };
     unsafe { ShellExecuteExW(&mut info) }.is_ok()
-}
-
-/// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
-/// because `TrackPopupMenu` runs its own message loop.
-fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: bool, at: (i32, i32)) {
-    unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
-        let _ = AppendMenuW(menu, MF_STRING, CMD_REVEAL, w!("Reveal in Explorer"));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_COPY, w!("Copy path"));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_PROPS, w!("Properties"));
-        if who {
-            let _ = AppendMenuW(menu, MF_STRING, CMD_WHO, w!("Who is using this"));
-        }
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        match &mark {
-            MarkState::Mark => {
-                let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Mark for deletion\tDel"));
-            }
-            MarkState::Unmark => {
-                let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Unmark\tDel"));
-            }
-            MarkState::Refused(why) => {
-                let text = wide(&format!("Cannot mark: {why}"));
-                let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_MARK, PCWSTR(text.as_ptr()));
-            }
-        }
-        let mut pt = POINT { x: at.0, y: at.1 };
-        let _ = ClientToScreen(hwnd, &mut pt);
-        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, Some(0), hwnd, None);
-        let _ = DestroyMenu(menu);
-        match cmd.0 as usize {
-            CMD_REVEAL => reveal(&path),
-            CMD_COPY => copy_to_clipboard(hwnd, &path),
-            CMD_PROPS => properties(&path),
-            CMD_WHO => {
-                // Restart Manager can be slow: ask on a worker, answer by message.
-                let owner = hwnd.0 as isize;
-                std::thread::spawn(move || {
-                    let found = plumb_scan::holders::holders(&path);
-                    let boxed = Box::into_raw(Box::new((path, found)));
-                    if PostMessageW(Some(HWND(owner as *mut _)), WM_HOLDERS, WPARAM(0), LPARAM(boxed as isize)).is_err() {
-                        drop(Box::from_raw(boxed));
-                    }
-                });
-            }
-            CMD_MARK => {
-                with(|w| {
-                    w.app.toggle_mark_path(&raw);
-                    w.invalidate();
-                });
-            }
-            _ => {}
-        }
-    }
 }
 
 fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
@@ -2026,8 +1600,14 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+use menu::{context_menu, copy_to_clipboard};
+use tooltip::TIP_FRAME;
+use watch::{open_journal, ScanResult, Scanned, Watch};
+mod menu;
 mod procs;
 mod selftest;
+mod tooltip;
+mod watch;
 pub use selftest::{selftest, selftest_delete, selftest_live, selftest_processes, selftest_tooltip, selftest_watch};
 
 #[cfg(test)]

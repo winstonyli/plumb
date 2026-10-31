@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # Module moves out of `app.rs` and `window.rs` (cleanup item A9)
@@ -23,7 +23,7 @@ and clippy; the `--selftest*` runs cover `window.rs` and run once at the end.
 | New module | Takes | Lines |
 |---|---|---|
 | `app/held.rs` | `HeldState`, `Held`, `HELD_REFRESH_SNAPSHOTS`, `held_*` methods (`held_sync` .. `held_text`) | 116-147, 843-932 |
-| `app/basket.rs` | `MarkState`, `CommitRequest`, `BasketView`; `basket` .. `finish_delete` (marks, `refresh_basket`, delete commit) | 330-353, 1245-1415 |
+| `app/marks.rs` | `MarkState`, `CommitRequest`, `BasketView`; `basket` .. `finish_delete` (marks, `refresh_basket`, delete commit) | 330-353, 1245-1415 |
 | `app/map.rs` | `map_reset`, `select_from_map`, `live_map_root`, `update_map`, `update_tiles`, `map_tiles`, `map_selected_tile` | 1181-1244, 1416-1425 |
 
 `window.rs`:
@@ -45,3 +45,7 @@ and `click` stay (each is one dispatcher over `Input`; their size is A2/A5's que
 
 Method bodies byte-identical before and after (a `git diff --color-moved=zebra` review per commit), 412 tests,
 clippy clean, then `--selftest`, `--selftest-watch`, `--selftest-delete`, `--selftest-tooltip`, `--selftest-live`.
+
+## Result (2026-10-31)
+
+Done in `a000258` (`app`) and the commit after it (`window`). `app/basket.rs` is `app/marks.rs` because `basket` clashes with the imported `plumb_core::basket`. `app.rs` is 2,781 lines (estimate 2,550), `window.rs` 1,635 (estimate 1,400): the estimates counted the methods but not the doc comments and blank lines the moves also carry less than predicted. Bodies are unchanged (every removed line reappears, checked by a sorted line diff); types and methods the parent still names became `pub(super)`. 412 tests, clippy clean; `--selftest`, `-watch`, `-delete` and `-tooltip` pass. Not run: `--selftest-live`, which needs an elevated process; the code it covers moved byte-for-byte.
