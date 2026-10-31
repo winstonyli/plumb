@@ -696,7 +696,16 @@ pub fn selftest_processes() -> Result<String> {
         if scrolled.as_ref().is_none_or(|(h, l)| h.contains("(1\u{2013}") || Some(l) == top.as_ref().map(|t| &t.1)) {
             return Err(fail(format!("the wheel over the pane did not scroll it: {top:?} then {scrolled:?}")));
         }
+        // The list follows the process: close the ten extra files and the pane re-reads itself once the handle count
+        // has changed and ten snapshots have passed (no click, no new selection).
+        // The title reads "Files held by <name> (PID n): <count> files ..."; take the count.
+        let count_of = |w: &mut Win| -> Option<usize> {
+            let title = w.app.with_scene(false, |s| s.held.map(|(h, _)| h.to_string()))?;
+            title.split(": ").nth(1)?.split(' ').next()?.parse().ok()
+        };
+        let n0 = with(count_of).flatten().ok_or_else(|| fail("the pane has no file count".into()))?;
         drop(extra);
+        wait("the pane noticed the closed files", 35, &|w| count_of(w).is_some_and(|n| n + 10 <= n0))?;
         drop(held);
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
         let worst = with(|w| {
@@ -719,7 +728,7 @@ pub fn selftest_processes() -> Result<String> {
             }
             None => String::new(),
         };
-        Ok(format!("this process {} in memory, a child followed, polling stopped while away or minimised, the Files held pane lists a file we hold and the wheel scrolls it{idle}", fmt::size(ws)))
+        Ok(format!("this process {} in memory, a child followed, polling stopped while away or minimised, the Files held pane lists a file we hold and the wheel scrolls it and it refreshes when the process closes files{idle}", fmt::size(ws)))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);

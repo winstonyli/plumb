@@ -329,6 +329,18 @@ thread_local! {
 
 /// Runs `f` on the window state. Returns `None` if there is no state yet or it is already
 /// borrowed (a message arrived while we were inside a call such as `TrackPopupMenu`).
+/// Looks up the files `pid` holds on a worker thread and posts the answer back as `WM_HELD` (the epoch tells the app
+/// which selection it was for).
+fn spawn_held(hwnd: HWND, epoch: u64, pid: u32) {
+    let owner = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let boxed = Box::into_raw(Box::new((epoch, plumb_scan::handles::open_files(pid, HELD_PER_HANDLE))));
+        if unsafe { PostMessageW(Some(HWND(owner as *mut _)), WM_HELD, WPARAM(0), LPARAM(boxed as isize)) }.is_err() {
+            drop(unsafe { Box::from_raw(boxed) });
+        }
+    });
+}
+
 fn with<R>(f: impl FnOnce(&mut Win) -> R) -> Option<R> {
     STATE.with(|s| s.try_borrow_mut().ok().and_then(|mut s| s.as_mut().map(f)))
 }
@@ -935,13 +947,18 @@ impl Win {
         if st.update(&mut self.app, snap) {
             self.app.fit_chips(&|s| self.painter.text_width(&self.gfx, Role::Title, s));
         }
+        self.held_poll(); // a changed handle count may be due a look (a hidden window never paints)
         self.invalidate();
     }
 
-    /// The Processes view's "Files held" pane follows the selection: look it up once the selection has rested.
+    /// The Processes view's "Files held" pane follows the selection: look it up once the selection has rested, and
+    /// again when the app says the list is stale.
     fn held_poll(&mut self) {
         if self.app.held_sync() {
             unsafe { SetTimer(Some(self.hwnd), TIMER_HELD, HELD_SETTLE_MS, None) };
+        }
+        if let Some((epoch, pid)) = self.app.held_take_refresh() {
+            spawn_held(self.hwnd, epoch, pid);
         }
     }
 
@@ -1814,13 +1831,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_TIMER if wp.0 == TIMER_HELD => {
             let _ = unsafe { KillTimer(Some(hwnd), TIMER_HELD) };
             if let Some(Some((epoch, pid))) = with(|w| w.app.held_request()) {
-                let owner = hwnd.0 as isize;
-                std::thread::spawn(move || {
-                    let boxed = Box::into_raw(Box::new((epoch, plumb_scan::handles::open_files(pid, HELD_PER_HANDLE))));
-                    if unsafe { PostMessageW(Some(HWND(owner as *mut _)), WM_HELD, WPARAM(0), LPARAM(boxed as isize)) }.is_err() {
-                        drop(unsafe { Box::from_raw(boxed) });
-                    }
-                });
+                spawn_held(hwnd, epoch, pid);
             }
             LRESULT(0)
         }
