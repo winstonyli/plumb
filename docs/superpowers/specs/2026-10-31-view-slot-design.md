@@ -39,8 +39,8 @@ A field added to one list and forgotten in another is a silent bug: a view that 
 `filter.ui` (stays a swap-back), the layout flags and cache resets that follow a swap (they are consequences of the
 new view, not state), and the `borrowed` mode (it controls timers, not data).
 
-**Deleted:** `Parked`'s field list (replaced by `Slot`), 13 + 8 `swap(` lines, and the 20 mirrored field declarations
-on `App`/`Win` and `View`.
+**Deleted:** the 21 `swap(` lines (13 + 8) and the 20 field declarations that duplicated `Parked`'s and `View`'s
+(on `App` and `Win`); `Parked` itself becomes `Slot`.
 
 ## Steps
 
