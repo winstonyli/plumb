@@ -242,6 +242,7 @@ pub enum TipKey {
 fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
     match t.kind {
         Kind::Rest => format!("{} smaller items, {}", fmt::count(t.count as u64), fmt::size(t.bytes)),
+        Kind::Own => format!("{} itself  ({})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes)),
         _ => {
             let when = tree.mtime[t.node].map_or_else(String::new, |d| format!(", modified {}, {} ago", fmt::date(d.get()), fmt::age(now, d.get())));
             format!("{}  ({}{when})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes))
@@ -702,6 +703,12 @@ impl App {
             return format!("{} smaller processes, {}", fmt::count(t.count as u64), self.kind().size_text(self.proc_metric, t.bytes));
         }
         let [cpu, io, pid] = tree.aux.get(t.node.idx()).copied().unwrap_or_default();
+        if t.kind == Kind::Own {
+            return format!(
+                "{}  (PID {pid})\n{} {} in the process itself",
+                tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_label(self.proc_metric).to_lowercase()
+            );
+        }
         let mut tip = format!(
             "{}  (PID {pid})\n{} {} in this and its children; own CPU {:.1}%, I/O {}/s",
             tree.name_string(t.node), self.kind().size_text(self.proc_metric, t.bytes), metric_label(self.proc_metric).to_lowercase(), cpu as f64 / 10.0, fmt::size(io)
@@ -1058,7 +1065,7 @@ impl App {
         self.map_hover = None;
     }
 
-    /// Selects the node of map tile `i` (not `Rest`, which has none) and brings its row into view; the map root stays.
+    /// Selects the node of map tile `i` (not `Rest`, which has none; `Own` selects its folder) and brings its row into view; the map root stays.
     fn select_from_map(&mut self, i: usize) -> Option<NodeId> {
         let t = *self.map_tiles.get(i)?;
         if t.kind == Kind::Rest {
@@ -1294,10 +1301,10 @@ impl App {
         &self.map_tiles
     }
 
-    /// The tile of the selected node, if it has one (a node inside a `Rest` tile has none).
+    /// The tile of the selected node, if it has one (a node inside a `Rest` tile has none, and `Own` is not the node's tile).
     pub fn map_selected_tile(&self) -> Option<usize> {
         let sel = self.model.as_ref()?.selected()?;
-        self.map_tiles.iter().position(|t| t.node == sel && t.kind != Kind::Rest)
+        self.map_tiles.iter().position(|t| t.node == sel && !t.kind.is_pseudo())
     }
 
     fn click(&mut self, x: f32, y: f32) -> Effect {
@@ -2338,6 +2345,36 @@ Test GPU", a.status())));
         assert!(tile_tip(&tree, &t, 150_000).starts_with("7 smaller items, "));
         let f = treemap::Tile { node: NodeId(1), kind: Kind::File, count: 1, ..t };
         assert!(tile_tip(&tree, &f, 150_000).contains(&tree.name_string(NodeId(1))));
+    }
+
+    #[test]
+    fn an_own_tile_tip_names_the_folder_itself() {
+        let tree = plumb_core::synth::flat_tree(3);
+        let t = treemap::Tile { node: NodeId(0), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::Own, bytes: 2048, count: 1, mtime: None };
+        let tip = tile_tip(&tree, &t, 150_000);
+        assert!(tip.contains(&tree.name_string(NodeId(0))) && tip.contains("itself"), "{tip}");
+    }
+
+    #[test]
+    fn a_parent_processs_own_memory_has_a_tile_that_selects_it_but_is_not_outlined() {
+        use plumb_core::procs::{Metric, Procs, Sample};
+        let mut a = app();
+        a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
+        a.begin_scan(2);
+        let (mut procs, mut tree) = Procs::new(Metric::Memory);
+        let s = |pid, parent, name: &str, memory| Sample { pid, parent, created: 5, name: name.into(), memory, cpu_100ns: 0, io_bytes: 0 };
+        procs.apply(&mut tree, &[s(77, 1, "parent.exe", 400_000), s(78, 77, "child.exe", 100_000)], 0);
+        let parent = tree.find("Processes\\parent.exe").expect("the parent is under the root");
+        a.finish_scan(tree, "x".into());
+        a.layout.map_on = true;
+        a.update_map(1.0);
+        let i = a.map_tiles().iter().position(|t| t.kind == Kind::Own && t.node == parent).expect("an own tile for the parent");
+        assert_eq!(a.map_tiles()[i].bytes, 400_000);
+        assert_eq!(a.select_from_map(i), Some(parent), "a click on the own tile selects the process");
+        let sel = a.map_selected_tile().expect("the process is outlined");
+        assert_eq!(a.map_tiles()[sel].kind, Kind::Frame, "by its frame, not by the own tile");
+        let tip = a.process_tip(a.tree.as_ref().unwrap(), &a.map_tiles()[i]);
+        assert!(tip.contains("parent.exe") && tip.contains("itself"), "{tip}");
     }
 
     #[test]

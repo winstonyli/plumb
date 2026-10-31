@@ -897,6 +897,11 @@ impl Pen<'_> {
             }
             Kind::Solid => self.fill(r, D2D1_COLOR_F { a: 0.45, ..t.dim }),
             Kind::Rest => self.fill(r, D2D1_COLOR_F { a: 0.22, ..t.dim }),
+            Kind::Own => {
+                // The folder's own bytes: inside its frame, set off from the children's class colours.
+                let inner = if r.w >= 4.0 && r.h >= 4.0 { Rect { x: r.x + 1.0, y: r.y + 1.0, w: r.w - 2.0, h: r.h - 2.0 } } else { r };
+                self.fill(inner, D2D1_COLOR_F { a: 0.35, ..t.dim });
+            }
         }
     }
 
