@@ -13,6 +13,8 @@ pub struct Sample {
     pub created: u64,
     pub name: String,
     pub memory: u64,
+    /// Private bytes (commit), which no other process shares.
+    pub private: u64,
     /// User plus kernel time so far, 100 ns units.
     pub cpu_100ns: u64,
     /// Bytes transferred so far.
@@ -23,7 +25,10 @@ pub struct Sample {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Metric {
     #[default]
+    /// Working set.
     Memory,
+    /// Private bytes: committed memory no other process shares.
+    Private,
     /// Tenths of a percent of one core.
     Cpu,
     /// Bytes per second.
@@ -31,10 +36,11 @@ pub enum Metric {
 }
 
 impl Metric {
-    /// The metric a click on the map's metric button moves to: Memory, CPU, I/O, and round again.
+    /// The metric a click on the map's metric button moves to: Memory, Private, CPU, I/O, and round again.
     pub fn next(self) -> Self {
         match self {
-            Metric::Memory => Metric::Cpu,
+            Metric::Memory => Metric::Private,
+            Metric::Private => Metric::Cpu,
             Metric::Cpu => Metric::Io,
             Metric::Io => Metric::Memory,
         }
@@ -44,6 +50,7 @@ impl Metric {
 struct Known {
     id: NodeId,
     memory: u64,
+    private: u64,
     cpu_tenths: u64,
     io_rate: u64,
     prev: (u64, u64),
@@ -53,6 +60,7 @@ impl Known {
     fn value(&self, m: Metric) -> u64 {
         match m {
             Metric::Memory => self.memory,
+            Metric::Private => self.private,
             Metric::Cpu => self.cpu_tenths,
             Metric::Io => self.io_rate,
         }
@@ -93,7 +101,7 @@ impl Procs {
             if !self.known.contains_key(&(s.pid, s.created)) {
                 let name: Vec<u16> = s.name.encode_utf16().collect();
                 let id = tree.add_child(self.root, &name, 0, NodeFlags::empty());
-                self.known.insert((s.pid, s.created), Known { id, memory: 0, cpu_tenths: 0, io_rate: 0, prev: (s.cpu_100ns, s.io_bytes) });
+                self.known.insert((s.pid, s.created), Known { id, memory: 0, private: 0, cpu_tenths: 0, io_rate: 0, prev: (s.cpu_100ns, s.io_bytes) });
             }
         }
         // 2. Parents: the live process with the parent pid, if it is older than the child (a younger one is a reused
@@ -136,6 +144,7 @@ impl Procs {
                 (k.cpu_tenths, k.io_rate) = (0, 0);
             }
             k.memory = if s.pid == 0 { 0 } else { s.memory };
+            k.private = if s.pid == 0 { 0 } else { s.private };
             tree.set_aux(k.id, [k.cpu_tenths, k.io_rate, u64::from(s.pid)]);
             let v = k.value(self.metric);
             if tree.size[k.id] != v {
@@ -161,10 +170,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_metric_cycles_through_all_three() {
-        let seen = [Metric::Memory, Metric::Memory.next(), Metric::Memory.next().next()];
-        assert!(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2]);
-        assert_eq!(seen[2].next(), Metric::Memory);
+    fn the_metric_cycles_through_all_four() {
+        let mut m = Metric::Memory;
+        let mut seen = vec![m];
+        for _ in 0..3 {
+            m = m.next();
+            seen.push(m);
+        }
+        assert_eq!(seen, [Metric::Memory, Metric::Private, Metric::Cpu, Metric::Io]);
+        assert_eq!(m.next(), Metric::Memory);
+    }
+
+    #[test]
+    fn private_bytes_weigh_each_process_and_roll_up_through_parents() {
+        let mut p = ProcTree::new();
+        p.apply(&[s(10, 1, 1, "a.exe", 100), s(11, 10, 2, "b.exe", 60)], 0);
+        assert_eq!((p.tree.size[node(&p, 10)], p.tree.subtree_size[node(&p, 10)]), (100, 160));
+        p.set_metric(Metric::Private);
+        assert_eq!((p.tree.size[node(&p, 10)], p.tree.subtree_size[node(&p, 10)]), (50, 80), "own private bytes, and the family's");
+        p.set_metric(Metric::Memory);
+        assert_eq!(p.tree.subtree_size[node(&p, 10)], 160);
     }
 
     /// The bookkeeping and its tree together, as the tests drive them.
@@ -190,7 +215,7 @@ mod tests {
     }
 
     fn s(pid: u32, parent: u32, created: u64, name: &str, memory: u64) -> Sample {
-        Sample { pid, parent, created, name: name.into(), memory, cpu_100ns: 0, io_bytes: 0 }
+        Sample { pid, parent, created, name: name.into(), memory, private: memory / 2, cpu_100ns: 0, io_bytes: 0 }
     }
     fn node(p: &ProcTree, pid: u32) -> NodeId {
         (0..p.tree.len() as u32).map(NodeId).find(|&n| !p.tree.flags[n].contains(NodeFlags::DEAD) && p.pid(n) == pid && n != p.root).unwrap()
@@ -205,7 +230,7 @@ mod tests {
     fn system_idle_weighs_nothing_under_any_metric() {
         let idle = |cpu| Sample { cpu_100ns: cpu, io_bytes: cpu, ..s(0, 0, 1, "System Idle Process", 1 << 20) };
         let busy = |cpu| Sample { cpu_100ns: cpu, io_bytes: cpu, ..s(10, 1, 2, "a.exe", 100) };
-        for m in [Metric::Memory, Metric::Cpu, Metric::Io] {
+        for m in [Metric::Memory, Metric::Private, Metric::Cpu, Metric::Io] {
             let mut p = ProcTree::new();
             p.set_metric(m);
             p.apply(&[idle(0), busy(0)], 0);

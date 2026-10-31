@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 ---
 
 # Private bytes metric Implementation Plan
