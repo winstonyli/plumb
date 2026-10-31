@@ -1606,6 +1606,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_run_names_every_field_the_swap_moves() {
+        let mut a = Run::default();
+        let mut b = Run::default();
+        a.background = true;
+        std::mem::swap(&mut a, &mut b);
+        assert!(!a.background && b.background);
+        // Naming every field means a new one fails to compile until this test covers it.
+        let Run { progress: _, rx: _, preview: _, background: _, watch: _, dir_pending: _, dir_failed: _, procs: _ } = &a;
+    }
+
+    #[test]
     fn scan_argument_round_trips() {
         // The command line the elevated copy gets, after the OS strips the quotes.
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();

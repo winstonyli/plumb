@@ -2465,6 +2465,28 @@ Test GPU", status_str(&a, true))));
     }
 
     #[test]
+    fn a_slot_swaps_whole_and_the_query_text_stays() {
+        let mut a = scanned();
+        a.slot.scroll = 7;
+        a.slot.refreshing = true;
+        a.slot.summary = "mine".into();
+        a.slot.filter.ui.text = "query".into();
+        let mut other = Slot { summary: "theirs".into(), ..Slot::default() };
+        a.swap_slot(&mut other);
+        assert!(a.slot.tree.is_none() && a.slot.model.is_none(), "the other view has no tree");
+        assert_eq!((a.slot.refreshing, a.slot.summary.as_str()), (false, "theirs"));
+        assert_eq!(a.slot.filter.ui.text, "query", "the query text belongs to the window, not the view");
+        assert_eq!((other.scroll, other.refreshing, other.summary.as_str()), (7, true, "mine"));
+        assert!(other.filter.ui.text.is_empty());
+        a.swap_slot(&mut other);
+        assert!(a.slot.tree.is_some() && a.slot.model.is_some());
+        assert_eq!((a.slot.refreshing, a.slot.summary.as_str()), (true, "mine"));
+        assert_eq!(a.slot.filter.ui.text, "query");
+        // Naming every field means a new one fails to compile until this test covers it.
+        let Slot { tree: _, model: _, scroll: _, scan: _, summary: _, live: _, refreshing: _, preview_paused: _, filter: _, basket: _, proc_info: _, proc_metric: _ } = &a.slot;
+    }
+
+    #[test]
     fn marks_survive_a_drive_switch_a_rescan_keeps_them_and_a_first_scan_clears_them() {
         let mut a = scanned();
         let (file, ..) = picks(&a);
