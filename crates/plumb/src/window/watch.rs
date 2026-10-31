@@ -116,7 +116,7 @@ pub(super) fn local_time() -> String {
 }
 
 impl Win {
-    pub(super) fn start_watch(&mut self, vol: Volume, info: JournalInfo, records: Vec<NodeId>) {
+    pub(super) fn start_watch(&mut self, vol: Volume, info: JournalInfo, records: crate::live::Records) {
         let hwnd = self.hwnd.0 as isize;
         let posted = self.posted.clone();
         let reader = JournalReader::start(vol, info, JournalConfig::default(), move || {

@@ -28,7 +28,7 @@ fn fixture() -> (Tree, Live) {
     for (r, n) in [(5, root), (30, docs), (31, a), (32, tmp), (33, c)] {
         records[r] = n;
     }
-    (b.finish().unwrap(), Live::new(records))
+    (b.finish().unwrap(), Live::new(records.into()))
 }
 
 fn run(live: &mut Live, tree: &mut Tree, deltas: Vec<Delta>) -> usize {
@@ -132,7 +132,7 @@ fn two_folders_swapping_places_end_up_right_whatever_the_order() {
     for (r, n) in [(5, root), (30, docs), (31, sub)] {
         records[r] = n;
     }
-    let (mut t, mut l) = (b.finish().unwrap(), Live::new(records));
+    let (mut t, mut l) = (b.finish().unwrap(), Live::new(records.into()));
     run(&mut l, &mut t, vec![dir(30, 31, "docs"), dir(31, 5, "sub")]);
     let s = snapshot(&t);
     assert!(s.contains_key("C:\\sub\\docs"), "{:?}", s.keys().collect::<Vec<_>>());
@@ -285,7 +285,7 @@ fn random_batches_in_any_order_match_a_tree_built_from_the_final_state() {
         let root = b.push_str(NodeId::NONE, "C:", 0, NodeFlags::DIR);
         let mut records = vec![NodeId::NONE; 8];
         records[5] = root;
-        let (mut tree, mut live) = (b.finish().unwrap(), Live::new(records));
+        let (mut tree, mut live) = (b.finish().unwrap(), Live::new(records.into()));
 
         for _round in 0..30 {
             let mut touched: Vec<u64> = Vec::new();

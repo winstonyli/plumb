@@ -1,6 +1,7 @@
 //! The UI side of the partial tree: turns the messages a running scan sends into `Tree`
 //! mutations. Approximate on purpose (the exact tree replaces this one when the scan ends).
 use plumb_core::{NodeFlags, NodeId, Tree, TreeBuilder};
+use crate::live::Records;
 use plumb_scan::journal::state::FileState;
 use plumb_scan::preview::{PreviewMsg, PreviewRx};
 use std::collections::HashMap;
@@ -24,7 +25,7 @@ enum Kind {
 #[derive(Default)]
 struct Mft {
     /// Record number -> node.
-    records: Vec<NodeId>,
+    records: Records,
     /// Waiting children, by the record number of the parent they wait for.
     parked: HashMap<u64, Vec<FileState>>,
     parked_count: usize,
@@ -95,8 +96,8 @@ impl Preview {
             PreviewMsg::Begin { root, nodes } => {
                 let mut t = root_tree(&root.encode_utf16().collect::<Vec<_>>());
                 t.reserve(nodes, nodes * NAME_UNITS);
-                let mut records = vec![NodeId::NONE; nodes.max(6)];
-                records[5] = NodeId(0);
+                let mut records = Records::with_len(nodes.max(6));
+                records.set(5, NodeId(0));
                 self.kind = Kind::Mft(Mft { records, ..Mft::default() });
                 *tree = Some(t);
                 out.created = true;
@@ -162,8 +163,7 @@ fn root_tree(name: &[u16]) -> Tree {
 
 impl Mft {
     fn node(&self, record: u64) -> Option<NodeId> {
-        let id = *self.records.get(usize::try_from(record).ok()?)?;
-        (!id.is_none()).then_some(id)
+        self.records.get(record)
     }
 
     fn is_dir_node(&self, t: &Tree, record: u64) -> Option<NodeId> {
@@ -197,10 +197,7 @@ impl Mft {
             flags.set(NodeFlags::REPARSE, s.reparse);
             let id = t.add_child(parent, &s.name, size, flags);
             t.set_mtime(id, s.mtime);
-            if self.records.len() <= record {
-                self.records.resize(record + 1, NodeId::NONE);
-            }
-            self.records[record] = id;
+            self.records.set(record, id);
             added += 1;
             if s.is_dir
                 && let Some(kids) = self.parked.remove(&s.record)

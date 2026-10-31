@@ -873,7 +873,7 @@ impl Win {
                 }
                 if let (Some((vol, info)), Some(mft)) = (sc.journal, sc.report.mft) {
                     self.drop_pending();
-                    self.start_watch(vol, info, mft.records);
+                    self.start_watch(vol, info, mft.records.into());
                 } else if let Some(w) = self.run.dir_pending.take() {
                     self.install_dir_watch(w);
                 } else if let Some(m) = self.run.dir_failed.take() {

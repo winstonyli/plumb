@@ -22,9 +22,39 @@ const RESCAN_GAP: Duration = Duration::from_secs(600);
 /// ... and none this soon after the user last touched the window.
 const INPUT_IDLE: Duration = Duration::from_secs(30);
 
-/// The record-number-to-node table plus upserts waiting for their parent.
+/// Record number -> node, as the scan that built the tree left it. `NONE` marks a record with no node.
+#[derive(Default)]
+pub struct Records(Vec<NodeId>);
+
+impl From<Vec<NodeId>> for Records {
+    fn from(v: Vec<NodeId>) -> Self {
+        Self(v)
+    }
+}
+
+impl Records {
+    /// A table for `n` records, none placed.
+    pub fn with_len(n: usize) -> Self {
+        Self(vec![NodeId::NONE; n])
+    }
+
+    pub fn get(&self, record: u64) -> Option<NodeId> {
+        let id = *self.0.get(usize::try_from(record).ok()?)?;
+        (!id.is_none()).then_some(id)
+    }
+
+    /// Grows the table to hold `record`.
+    pub fn set(&mut self, record: usize, id: NodeId) {
+        if self.0.len() <= record {
+            self.0.resize(record + 1, NodeId::NONE);
+        }
+        self.0[record] = id;
+    }
+}
+
+/// The record table plus upserts waiting for their parent.
 pub struct Live {
-    records: Vec<NodeId>,
+    records: Records,
     /// Upserts whose parent is unknown, and how many settle passes they have waited.
     parked: Vec<(FileState, u8)>,
     orphans: NodeId,
@@ -33,7 +63,7 @@ pub struct Live {
 
 impl Live {
     /// `records` is `MftReport::records` of the scan that built the tree.
-    pub fn new(records: Vec<NodeId>) -> Self {
+    pub fn new(records: Records) -> Self {
         Self { records, parked: Vec::new(), orphans: NodeId::NONE, changes: 0 }
     }
 
@@ -65,8 +95,7 @@ impl Live {
     }
 
     fn node(&self, tree: &Tree, record: u64) -> Option<NodeId> {
-        let id = *self.records.get(usize::try_from(record).ok()?)?;
-        (!id.is_none() && !tree.flags[id].contains(NodeFlags::DEAD)).then_some(id)
+        self.records.get(record).filter(|&id| !tree.flags[id].contains(NodeFlags::DEAD))
     }
 
     fn upsert_or_park(&mut self, tree: &mut Tree, s: FileState) {
@@ -115,12 +144,9 @@ impl Live {
             tree.remove(id);
             self.changes += 1;
         }
-        if self.records.len() <= record {
-            self.records.resize(record + 1, NodeId::NONE);
-        }
         let id = tree.add_child(parent, &s.name, size, flags);
         tree.set_mtime(id, s.mtime);
-        self.records[record] = id;
+        self.records.set(record, id);
         self.changes += 1;
         true
     }
@@ -130,7 +156,7 @@ impl Live {
             if tree.remove(id) {
                 self.changes += 1;
             }
-            self.records[record as usize] = NodeId::NONE;
+            self.records.set(record as usize, NodeId::NONE);
         }
     }
 
