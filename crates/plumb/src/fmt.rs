@@ -62,14 +62,14 @@ pub fn date(day: u32) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// How long before `now` a day was: "today", "5 d", "3 mo", "2.1 y".
+/// How long before `now` a day was, as a phrase: "today", "5 d ago", "3 mo ago", "2.1 y ago".
 pub fn age(now: u32, day: u32) -> String {
     let d = now.saturating_sub(day);
     match d {
         0 => "today".into(),
-        1..=59 => format!("{d} d"),
-        60..=729 => format!("{} mo", (d + 15) / 30),
-        _ => format!("{:.1} y", d as f32 / 365.0),
+        1..=59 => format!("{d} d ago"),
+        60..=729 => format!("{} mo ago", (d + 15) / 30),
+        _ => format!("{:.1} y ago", d as f32 / 365.0),
     }
 }
 
@@ -113,9 +113,9 @@ mod tests {
         assert_eq!(date(134_774 + 19_791), "2024-03-09");
         assert_eq!(date(134_774 + 19_782), "2024-02-29"); // a leap day
         assert_eq!(age(100, 100), "today");
-        assert_eq!(age(105, 100), "5 d");
-        assert_eq!(age(100 + 90, 100), "3 mo");
-        assert_eq!(age(100 + 766, 100), "2.1 y");
+        assert_eq!(age(105, 100), "5 d ago");
+        assert_eq!(age(100 + 90, 100), "3 mo ago");
+        assert_eq!(age(100 + 766, 100), "2.1 y ago");
         assert_eq!(age(100, 200), "today", "a time in the future is today");
     }
 

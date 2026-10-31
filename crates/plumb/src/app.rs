@@ -263,7 +263,7 @@ fn tile_tip(tree: &Tree, t: &Tile, now: u32) -> String {
         Kind::Rest => format!("{} smaller items, {}", fmt::count(t.count as u64), fmt::size(t.bytes)),
         Kind::Own => format!("{} itself  ({})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes)),
         _ => {
-            let when = tree.mtime[t.node].map_or_else(String::new, |d| format!(", modified {}, {} ago", fmt::date(d.get()), fmt::age(now, d.get())));
+            let when = tree.mtime[t.node].map_or_else(String::new, |d| format!(", modified {}, {}", fmt::date(d.get()), fmt::age(now, d.get())));
             format!("{}  ({}{when})", fmt::display_path(&tree.path(t.node)), fmt::size(t.bytes))
         }
     }
@@ -757,7 +757,7 @@ impl App {
             }
             if info.created > 0 {
                 let (day, now) = (fmt::local_day(info.created), fmt::local_day(now_filetime()));
-                tip.push_str(&format!("\nstarted {}, {} ago", fmt::date(day), fmt::age(now, day)));
+                tip.push_str(&format!("\nstarted {}, {}", fmt::date(day), fmt::age(now, day)));
             }
         }
         tip
