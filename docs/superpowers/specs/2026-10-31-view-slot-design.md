@@ -67,3 +67,7 @@ Each step is a mechanical rename with no logic change; the review is `git diff` 
 
 `cargo test --workspace` (412 plus the guard), clippy clean, the four selftests per step, `--selftest-live`
 elevated once after step 2. No timing claim is made, so no timed run.
+
+## Result (2026-10-31)
+
+Done in `e539517` (app side), `bbb2d63` (window side) and `bd30633` (guard tests). The destructuring guard in `a_slot_swaps_whole_and_the_query_text_stays` and `a_run_names_every_field_the_swap_moves` makes a new field fail to compile. Deliberately breaking the `filter.ui` swap-back made the first test fail, as intended. The first draft of that test asserted `scroll` survives a swap into an empty slot; `swap_slot` clamps it (`set_scroll`), so the test checks `refreshing` and `summary` instead. 414 tests, clippy clean, four selftests pass. `--selftest-live` is still to be run elevated by the user.
