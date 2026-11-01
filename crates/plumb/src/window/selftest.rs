@@ -747,3 +747,38 @@ fn process_cpu() -> Duration {
     let t = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32 | u64::from(f.dwLowDateTime)) * 100;
     Duration::from_nanos(t(k) + t(u))
 }
+
+/// The checks above by command-line flag; add a new one here and `main` runs it.
+type Selftest = (&'static str, fn() -> Result<String>);
+
+const SELFTESTS: &[Selftest] = &[
+    ("--selftest", selftest),
+    ("--selftest-watch", selftest_watch),
+    ("--selftest-delete", selftest_delete),
+    ("--selftest-processes", selftest_processes),
+    ("--selftest-tooltip", selftest_tooltip),
+    ("--selftest-live", selftest_live),
+];
+
+/// Runs the check named by one of `args`, if any; its line reads `<flag without --> ok: <summary>`.
+pub fn run_selftest(args: impl IntoIterator<Item = String>) -> Option<Result<String>> {
+    args.into_iter().find_map(|a| {
+        let (flag, run) = SELFTESTS.iter().find(|(f, _)| *f == a)?;
+        Some(run().map(|summary| format!("{} ok: {summary}", &flag[2..])))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_selftest_has_its_own_flag_and_an_unknown_flag_runs_nothing() {
+        let mut names: Vec<_> = SELFTESTS.iter().map(|(f, _)| *f).collect();
+        assert!(names.iter().all(|f| f.starts_with("--selftest")));
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), SELFTESTS.len(), "a flag is listed twice");
+        assert!(run_selftest(["--nothing".to_string(), "plumb.exe".to_string()]).is_none());
+    }
+}

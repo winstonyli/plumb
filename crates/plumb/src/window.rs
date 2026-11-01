@@ -1608,7 +1608,7 @@ mod procs;
 mod selftest;
 mod tooltip;
 mod watch;
-pub use selftest::{selftest, selftest_delete, selftest_live, selftest_processes, selftest_tooltip, selftest_watch};
+pub use selftest::run_selftest;
 
 #[cfg(test)]
 mod tests {
