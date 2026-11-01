@@ -489,23 +489,35 @@ impl App {
         }
     }
 
+    /// A model for `tree` in the given sort, with the root expanded and selected so there is something to see.
+    fn fresh_model(tree: &Tree, key: SortKey, desc: bool) -> RowModel {
+        let mut model = RowModel::new(tree);
+        model.set_sort(tree, key, desc);
+        if let Some(r) = model.rows().first().map(|r| r.id) {
+            model.expand(tree, r);
+            model.select(r);
+        }
+        model
+    }
+
+    /// After an install that ends a scan or a rescan: nothing is running, no preview is paused, live is off.
+    fn settle(&mut self, summary: String) {
+        self.slot.summary = summary;
+        self.slot.scan = Scan::Idle;
+        self.slot.refreshing = false;
+        self.slot.preview_paused = false;
+        self.set_live(LiveStatus::Off);
+    }
+
     /// Installs a finished tree. The root is expanded and selected so there is something to see.
     pub fn finish_scan(&mut self, tree: Tree, summary: String) {
         self.filter_reset();
         self.map_reset();
-        let mut model = RowModel::new(&tree);
-        model.set_sort(&tree, self.kind().sort_key(self.sort.0), self.sort.1);
-        if let Some(r) = model.rows().first().map(|r| r.id) {
-            model.expand(&tree, r);
-            model.select(r);
-        }
+        let model = Self::fresh_model(&tree, self.kind().sort_key(self.sort.0), self.sort.1);
         self.slot.tree = Some(tree);
         self.slot.model = Some(model);
         self.slot.scroll = 0;
-        self.slot.summary = summary;
-        self.slot.scan = Scan::Idle;
-        self.slot.preview_paused = false;
-        self.set_live(LiveStatus::Off);
+        self.settle(summary);
     }
 
     /// The preview applier just created `self.slot.tree` or dropped it (a scanner fell back to
@@ -519,13 +531,7 @@ impl App {
         let key = self.kind().sort_key(self.sort.0);
         let Some(tree) = &mut self.slot.tree else { return };
         tree.take_touched(); // the model is built from the tree as it is now
-        let mut model = RowModel::new(tree);
-        model.set_sort(tree, key, self.sort.1);
-        if let Some(r) = model.rows().first().map(|r| r.id) {
-            model.expand(tree, r);
-            model.select(r);
-        }
-        self.slot.model = Some(model);
+        self.slot.model = Some(Self::fresh_model(tree, key, self.sort.1));
     }
 
     /// Replaces the tree with a rescanned one, keeping the sort, the expanded folders and the
@@ -545,12 +551,8 @@ impl App {
         self.slot.tree = Some(tree);
         self.slot.model = Some(model);
         self.slot.scroll = scroll;
-        self.slot.summary = summary;
-        self.slot.refreshing = false;
-        self.slot.scan = Scan::Idle;
-        self.slot.preview_paused = false;
         self.filter_reset();
-        self.set_live(LiveStatus::Off);
+        self.settle(summary);
     }
 
     /// Brings the rows up to date after the tree changed in place.
@@ -2170,6 +2172,40 @@ Test GPU", status_str(&a, true))));
         a.can_elevate = true;
         let other = target_str(&a, a.layout.admin_button().x + 5.0, a.layout.admin_button().y + 5.0).map(|t| t.0);
         assert!(other.is_some() && other != Some(key), "another target is another key");
+    }
+
+    #[test]
+    fn finishing_a_scan_clears_every_scan_flag() {
+        let mut a = scanned();
+        a.slot.refreshing = true;
+        a.slot.preview_paused = true;
+        a.set_live(LiveStatus::On { last: None });
+        a.finish_scan(kary_builder(10, 3).finish().unwrap(), "done".into());
+        assert!(matches!(a.slot.scan, Scan::Idle) && !a.slot.refreshing && !a.slot.preview_paused);
+        assert!(a.slot.live == LiveStatus::Off && a.slot.summary == "done");
+    }
+
+    #[test]
+    fn installing_a_preview_tree_leaves_the_scan_state_alone() {
+        let mut a = scanned();
+        a.begin_scan(0);
+        a.slot.summary = "kept".into();
+        a.slot.preview_paused = true;
+        a.slot.tree = Some(kary_builder(10, 3).finish().unwrap());
+        a.preview_installed();
+        assert!(matches!(a.slot.scan, Scan::Running { .. }) && a.slot.preview_paused && a.slot.summary == "kept");
+        assert!(a.slot.model.as_ref().and_then(|m| m.selected()).is_some());
+    }
+
+    #[test]
+    fn swapping_in_a_tree_with_nothing_to_keep_settles_like_a_finish() {
+        let mut a = scanned();
+        a.slot.tree = None;
+        a.slot.model = None;
+        a.slot.refreshing = true;
+        a.swap_tree(kary_builder(10, 3).finish().unwrap(), "again".into());
+        assert!(matches!(a.slot.scan, Scan::Idle) && !a.slot.refreshing && a.slot.summary == "again");
+        assert!(a.slot.model.is_some());
     }
 
     #[test]
