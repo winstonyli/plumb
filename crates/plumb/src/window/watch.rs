@@ -1,10 +1,95 @@
 //! Following a scanned tree as it changes: the change journal or the directory watcher, and applying what they report.
 use super::*;
 
-/// What a live watch follows.
-pub(super) enum Source {
-    Journal { reader: JournalReader, live: Live, queue: VecDeque<Delta> },
-    Dir { watcher: Watcher, queue: VecDeque<Listing> },
+/// What a live watch follows: the change journal or the directory watcher.
+pub(super) trait Follow: Send {
+    /// Moves what the source has queued into its queue; `Some` if the source has ended.
+    fn drain(&mut self) -> Option<Ended>;
+    /// Applies queued changes until `deadline`; returns how many tree changes were made.
+    fn apply(&mut self, tree: &mut Tree, deadline: Instant) -> usize;
+    fn queued(&self) -> bool;
+    /// Work left that a timer tick should finish.
+    fn backlog(&self) -> bool {
+        self.queued()
+    }
+    /// Stops the source (blocks briefly: call off the UI thread).
+    fn stop(self: Box<Self>);
+}
+
+struct JournalFollow {
+    reader: JournalReader,
+    live: Live,
+    queue: VecDeque<Delta>,
+}
+
+struct DirFollow {
+    watcher: Watcher,
+    queue: VecDeque<Listing>,
+}
+
+impl Follow for JournalFollow {
+    fn drain(&mut self) -> Option<Ended> {
+        let ended = |rescan: bool, why: &str| Some(Ended { rescan, why: Some(why.to_string()) });
+        while let Some(ev) = self.reader.try_recv() {
+            match ev {
+                Event::Deltas(d) => self.queue.extend(d),
+                Event::Stopped(Stop::Requested) => return Some(Ended { rescan: false, why: None }),
+                Event::Stopped(Stop::Wrapped) => {
+                    return ended(true, "the change journal wrapped, so changes were missed");
+                }
+                Event::Stopped(Stop::Disabled) => return ended(false, "the change journal is not active"),
+                Event::Stopped(Stop::Failed(m)) => return ended(false, &m),
+            }
+        }
+        None
+    }
+
+    fn apply(&mut self, tree: &mut Tree, deadline: Instant) -> usize {
+        self.live.apply(tree, &mut self.queue, deadline)
+    }
+
+    fn queued(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    fn backlog(&self) -> bool {
+        self.queued() || self.live.pending()
+    }
+
+    fn stop(self: Box<Self>) {
+        self.reader.stop()
+    }
+}
+
+impl Follow for DirFollow {
+    fn drain(&mut self) -> Option<Ended> {
+        let ended = |rescan: bool, why: &str| Some(Ended { rescan, why: Some(why.to_string()) });
+        while let Some(ev) = self.watcher.try_recv() {
+            match ev {
+                WatchEvent::Listings(l) => self.queue.extend(l),
+                WatchEvent::Stopped(WatchStop::Overflow) => {
+                    return ended(true, "the directory watch overflowed, so changes were missed");
+                }
+                WatchEvent::Stopped(WatchStop::TooMany) => {
+                    return ended(true, "too many folders changed at once");
+                }
+                WatchEvent::Stopped(WatchStop::Failed(m)) => return ended(false, &m),
+            }
+        }
+        None
+    }
+
+    fn apply(&mut self, tree: &mut Tree, deadline: Instant) -> usize {
+        crate::dirsync::apply(tree, &mut self.queue, deadline)
+    }
+
+    fn queued(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    fn stop(self: Box<Self>) {
+        self.watcher.stop()
+    }
 }
 
 pub(super) struct Scanned {
@@ -21,7 +106,7 @@ pub(super) type ScanResult = std::result::Result<Scanned, String>;
 
 /// Everything live updates need for the view on screen.
 pub(super) struct Watch {
-    pub(super) src: Source,
+    pub(super) src: Box<dyn Follow>,
     pub(super) paced: Paced,
     /// `TIMER_LIVE` is running.
     pub(super) armed: bool,
@@ -36,65 +121,26 @@ pub(super) struct Ended {
 impl Watch {
     /// Moves what the source has queued into its queue; `Some` if the source has ended.
     pub(super) fn drain(&mut self) -> Option<Ended> {
-        let ended = |rescan: bool, why: &str| Some(Ended { rescan, why: Some(why.to_string()) });
-        match &mut self.src {
-            Source::Journal { reader, queue, .. } => {
-                while let Some(ev) = reader.try_recv() {
-                    match ev {
-                        Event::Deltas(d) => queue.extend(d),
-                        Event::Stopped(Stop::Requested) => return Some(Ended { rescan: false, why: None }),
-                        Event::Stopped(Stop::Wrapped) => {
-                            return ended(true, "the change journal wrapped, so changes were missed");
-                        }
-                        Event::Stopped(Stop::Disabled) => return ended(false, "the change journal is not active"),
-                        Event::Stopped(Stop::Failed(m)) => return ended(false, &m),
-                    }
-                }
-            }
-            Source::Dir { watcher, queue } => {
-                while let Some(ev) = watcher.try_recv() {
-                    match ev {
-                        WatchEvent::Listings(l) => queue.extend(l),
-                        WatchEvent::Stopped(WatchStop::Overflow) => {
-                            return ended(true, "the directory watch overflowed, so changes were missed");
-                        }
-                        WatchEvent::Stopped(WatchStop::TooMany) => {
-                            return ended(true, "too many folders changed at once");
-                        }
-                        WatchEvent::Stopped(WatchStop::Failed(m)) => return ended(false, &m),
-                    }
-                }
-            }
-        }
-        None
+        self.src.drain()
     }
 
     /// Applies queued changes for the budget; returns how many tree changes were made.
     pub(super) fn apply(&mut self, tree: &mut Tree, deadline: Instant) -> usize {
-        match &mut self.src {
-            Source::Journal { live, queue, .. } => live.apply(tree, queue, deadline),
-            Source::Dir { queue, .. } => crate::dirsync::apply(tree, queue, deadline),
-        }
+        self.src.apply(tree, deadline)
     }
 
     pub(super) fn queued(&self) -> bool {
-        match &self.src {
-            Source::Journal { queue, .. } => !queue.is_empty(),
-            Source::Dir { queue, .. } => !queue.is_empty(),
-        }
+        self.src.queued()
     }
 
     /// Work left that a timer tick should finish.
     pub(super) fn backlog(&self) -> bool {
-        self.queued() || matches!(&self.src, Source::Journal { live, .. } if live.pending())
+        self.src.backlog()
     }
 
     /// Stops the source (blocks briefly: call off the UI thread).
     pub(super) fn stop(self) {
-        match self.src {
-            Source::Journal { reader, .. } => reader.stop(),
-            Source::Dir { watcher, .. } => watcher.stop(),
-        }
+        self.src.stop()
     }
 }
 
@@ -123,7 +169,7 @@ impl Win {
             }
         });
         self.run.watch = Some(Watch {
-            src: Source::Journal { reader, live: Live::new(records), queue: VecDeque::new() },
+            src: Box::new(JournalFollow { reader, live: Live::new(records), queue: VecDeque::new() }),
             paced: Paced::new(Instant::now()),
             armed: false,
         });
@@ -135,7 +181,7 @@ impl Win {
     pub(super) fn install_dir_watch(&mut self, watcher: Watcher) {
         watcher.release();
         self.run.watch = Some(Watch {
-            src: Source::Dir { watcher, queue: VecDeque::new() },
+            src: Box::new(DirFollow { watcher, queue: VecDeque::new() }),
             paced: Paced::new(Instant::now()),
             armed: false,
         });
@@ -268,5 +314,53 @@ impl Win {
         }
         self.start_rescan(i);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Fake {
+        queue: usize,
+        pending: bool,
+        stopped: Arc<AtomicBool>,
+    }
+
+    impl Follow for Fake {
+        fn drain(&mut self) -> Option<Ended> {
+            self.queue += 2;
+            None
+        }
+        fn apply(&mut self, _: &mut Tree, _: Instant) -> usize {
+            std::mem::take(&mut self.queue)
+        }
+        fn queued(&self) -> bool {
+            self.queue > 0
+        }
+        fn backlog(&self) -> bool {
+            self.queued() || self.pending
+        }
+        fn stop(self: Box<Self>) {
+            self.stopped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_watch_forwards_to_its_source() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut w = Watch {
+            src: Box::new(Fake { queue: 0, pending: true, stopped: stopped.clone() }),
+            paced: Paced::new(Instant::now()),
+            armed: false,
+        };
+        assert!(!w.queued() && w.backlog(), "pending work is a backlog even with an empty queue");
+        assert!(w.drain().is_none() && w.queued());
+        let mut b = TreeBuilder::new();
+        b.push_str(NodeId::NONE, "C:", 0, plumb_core::NodeFlags::DIR);
+        let mut tree = b.finish().unwrap();
+        assert_eq!(w.apply(&mut tree, Instant::now()), 2);
+        w.stop();
+        assert!(stopped.load(Ordering::SeqCst));
     }
 }
