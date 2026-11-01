@@ -3,9 +3,10 @@
 param(
     [Parameter(Mandatory)][string]$Tag,
     [Parameter(Mandatory)][string]$Sha256,
-    [string]$Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    [string]$Root
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Root) { $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
 if ($Tag -notmatch '^v(\d+\.\d+\.\d+)$') { throw "tag '$Tag' is not vX.Y.Z" }
 $version = $Matches[1]
 if ($Sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "sha256 '$Sha256' is not 64 lowercase hex digits" }
