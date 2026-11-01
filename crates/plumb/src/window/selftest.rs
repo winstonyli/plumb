@@ -636,6 +636,22 @@ pub fn selftest_processes() -> Result<String> {
         wait("the child under this process", 5, &|w| node(w, cpid).is_some_and(|n| parent_pid(w, n) == me))?;
         let _ = child.wait();
         wait("the child gone", 10, &|w| node(w, cpid).is_none())?;
+        // End process: the confirmation is answered with a real click, and the process goes.
+        let mut victim = std::process::Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().map_err(|e| fail(e.to_string()))?;
+        let vpid = victim.id();
+        wait("the victim listed with its creation time", 10, &|w| node(w, vpid).is_some_and(|n| w.app.end_target(n).is_some()))?;
+        with(|w| {
+            let target = node(w, vpid).and_then(|n| w.app.end_target(n));
+            if let Some((pid, created, name)) = target {
+                w.app.ask(crate::modal::Modal::end(pid, created, &name));
+            }
+        });
+        press(hwnd, crate::modal::Pick::Yes)?;
+        wait("the victim gone", 10, &|w| node(w, vpid).is_none())?;
+        let code = victim.wait().map_err(|e| fail(e.to_string()))?.code();
+        if code != Some(1) {
+            return Err(fail(format!("the ended process exited with {code:?}")));
+        }
         // Another view on screen: the list is not followed, and comes back whole.
         let z = with(|w| {
             w.app.views.push(ViewInfo { root: "Z:\\".into(), total: 0, free: 0, kind: ViewKind::Disk });
@@ -729,7 +745,7 @@ pub fn selftest_processes() -> Result<String> {
             }
             None => String::new(),
         };
-        Ok(format!("this process {} in memory, a child followed, polling stopped while away or minimised, the Files held pane lists a file we hold and the wheel scrolls it and it refreshes when the process closes files{idle}", fmt::size(ws)))
+        Ok(format!("this process {} in memory, a child followed, End process ended one after a click on its confirmation, polling stopped while away or minimised, the Files held pane lists a file we hold and the wheel scrolls it and it refreshes when the process closes files{idle}", fmt::size(ws)))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);
