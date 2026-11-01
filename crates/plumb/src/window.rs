@@ -943,6 +943,7 @@ fn relaunch_elevated(view: Option<&str>) -> bool {
 fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
     match e {
         Effect::None => {}
+        Effect::Copy(text) => copy_to_clipboard(hwnd, &text),
         Effect::Delete { view, paths, permanent } => start_delete(hwnd, view, paths, permanent),
         Effect::Quit => {
             let _ = unsafe { DestroyWindow(hwnd) };

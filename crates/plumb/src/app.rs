@@ -230,6 +230,8 @@ pub enum Effect {
     Delete { view: usize, paths: Vec<String>, permanent: bool },
     /// Close the window (the modal asked about a running delete was answered Yes).
     Quit,
+    /// Put this text on the clipboard.
+    Copy(String),
     /// The Processes view's map now weighs by this (the tree's sizes must be rewritten).
     Metric(Metric),
 }
@@ -807,6 +809,16 @@ impl App {
 
     /// The first modal was answered: what it was about and the answer decide what happens next.
     fn answer(&mut self, pick: Pick) -> Effect {
+        if pick == Pick::Copy {
+            // Copying answers nothing: the modal stays, and its button says it was done.
+            let Some(m) = self.modals.front_mut() else { return Effect::None };
+            let Ask::Holders(text) = &m.ask else { return Effect::None };
+            let text = text.clone();
+            if let Some(b) = m.buttons.iter_mut().find(|b| b.pick == Pick::Copy) {
+                b.label = "Copied";
+            }
+            return Effect::Copy(text);
+        }
         let Some(m) = self.modals.pop_front() else { return Effect::None };
         self.hot = None;
         match (m.ask, pick) {
@@ -2652,6 +2664,19 @@ Test GPU", status_str(&a, true))));
             (r.x + r.w / 2.0, r.y + r.h / 2.0)
         };
         (a, centre)
+    }
+
+    #[test]
+    fn copy_on_the_holders_modal_copies_and_stays_open_until_closed() {
+        let mut a = scanned();
+        a.ask(Modal::holders("f.txt", &[plumb_scan::holders::Holder { pid: 7, name: "x.exe".into() }]));
+        let r = a.modal_button(Pick::Copy).expect("a Copy button");
+        let e = a.handle(Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0));
+        assert_eq!(e, Effect::Copy("f.txt\n7  x.exe".into()));
+        assert!(a.modal().is_some_and(|m| m.buttons[0].label == "Copied"), "the button says so");
+        let r = a.modal_button(Pick::Close).unwrap();
+        assert_eq!(a.handle(Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0)), Effect::None);
+        assert!(a.modal().is_none());
     }
 
     #[test]

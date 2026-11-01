@@ -17,6 +17,8 @@ pub enum Pick {
     No,
     Close,
     Cancel,
+    /// Put the holders on the clipboard; the modal stays.
+    Copy,
 }
 
 /// What a modal is about, and so what each answer does (`App::answer`).
@@ -28,8 +30,8 @@ pub enum Ask {
     Permanent(CommitRequest),
     /// These paths could not be deleted; Retry tries them again.
     Failed { view: usize, permanent: bool, paths: Vec<String> },
-    /// Which programs hold a file open.
-    Holders,
+    /// Which programs hold a file open; the text is what Copy puts on the clipboard (the path, then every holder).
+    Holders(String),
     /// A delete is still running and the window is being closed.
     Close,
 }
@@ -115,7 +117,13 @@ impl Modal {
             n => format!("{n} programs are using {path}."),
         };
         let list: Vec<String> = held_by.iter().map(|h| format!("{}  {}", h.pid, h.name)).collect();
-        Self::new(Ask::Holders, heading, &[], lines(&list), vec![button(Pick::Close, "Close", true)], 0, Pick::Close)
+        if list.is_empty() {
+            return Self::new(Ask::Holders(String::new()), heading, &[], Vec::new(), vec![button(Pick::Close, "Close", true)], 0, Pick::Close);
+        }
+        let text = format!("{path}
+{}", list.join("
+"));
+        Self::new(Ask::Holders(text), heading, &[], lines(&list), vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close)
     }
 
     /// The window is closing while a delete runs.
@@ -211,6 +219,22 @@ mod tests {
         assert_eq!(Modal::holders("f.txt", &[]).heading, "Nothing is using f.txt.");
         assert_eq!(Modal::holders("f.txt", &[h("x.exe", 7)]).detail, ["7  x.exe"]);
         assert_eq!(Modal::holders("f.txt", &[h("x.exe", 7), h("y.exe", 8)]).heading, "2 programs are using f.txt.");
+    }
+
+    #[test]
+    fn the_holders_modal_offers_copy_of_the_whole_list_beside_close_and_none_when_nothing_holds_the_file() {
+        let h = |name: &str, pid| Holder { pid, name: name.into() };
+        let m = Modal::holders("f.txt", &[h("x.exe", 7), h("y.exe", 8)]);
+        assert_eq!(m.ask, Ask::Holders("f.txt
+7  x.exe
+8  y.exe".into()));
+        assert_eq!(m.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Copy, Pick::Close]);
+        assert_eq!((m.buttons[m.focus].pick, m.cancel), (Pick::Close, Pick::Close), "Enter and Esc still close");
+        let none = Modal::holders("f.txt", &[]);
+        assert_eq!(none.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Close], "nothing to copy");
+        let many: Vec<Holder> = (0..30).map(|i| h("p.exe", i)).collect();
+        let Ask::Holders(text) = Modal::holders("f.txt", &many).ask else { panic!() };
+        assert_eq!(text.lines().count(), 31, "the copy has every holder, not the shown ones");
     }
 
     #[test]
