@@ -30,8 +30,8 @@ pub enum Ask {
     Permanent(CommitRequest),
     /// These paths could not be deleted; Retry tries them again.
     Failed { view: usize, permanent: bool, paths: Vec<String> },
-    /// Which programs hold a file open; the text is what Copy puts on the clipboard (the path, then every holder).
-    Holders(String),
+    /// Which programs hold a file open.
+    Holders,
     /// A delete is still running and the window is being closed.
     Close,
 }
@@ -57,6 +57,8 @@ pub struct Modal {
     pub focus: usize,
     /// What Esc answers.
     pub cancel: Pick,
+    /// What Copy puts on the clipboard, in full (the lines shown may be cut to fit); `None` for a modal with no Copy button.
+    pub copy: Option<String>,
 }
 
 /// The detail lines shown before "and N more".
@@ -80,7 +82,7 @@ fn button(pick: Pick, label: &'static str, primary: bool) -> Button {
 
 impl Modal {
     fn new(ask: Ask, heading: String, body: &[&str], detail: Vec<String>, buttons: Vec<Button>, focus: usize, cancel: Pick) -> Self {
-        Self { ask, heading, body: body.iter().map(|s| s.to_string()).collect(), detail, buttons, focus, cancel }
+        Self { ask, heading, body: body.iter().map(|s| s.to_string()).collect(), detail, buttons, focus, cancel, copy: None }
     }
 
     /// What to do with the marked `req.paths`.
@@ -106,7 +108,10 @@ impl Modal {
         let body = [if failed.len() == 1 { "It stays marked. Retry tries it again." } else { "They stay marked. Retry tries them again." }];
         let reasons: Vec<String> = failed.iter().map(|(p, why)| format!("{p}: {why}")).collect();
         let paths = failed.iter().map(|f| f.0.clone()).collect();
-        Self::new(Ask::Failed { view, permanent, paths }, heading, &body, lines(&reasons), vec![button(Pick::Retry, "Retry", true), button(Pick::Close, "Close", false)], 0, Pick::Close)
+let mut m =         Self::new(Ask::Failed { view, permanent, paths }, heading, &body, lines(&reasons), vec![button(Pick::Retry, "Retry", true), button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", false)], 0, Pick::Close);
+        m.copy = Some(reasons.join("
+"));
+        m
     }
 
     /// Which programs hold `path` open (or that none do).
@@ -118,12 +123,14 @@ impl Modal {
         };
         let list: Vec<String> = held_by.iter().map(|h| format!("{}  {}", h.pid, h.name)).collect();
         if list.is_empty() {
-            return Self::new(Ask::Holders(String::new()), heading, &[], Vec::new(), vec![button(Pick::Close, "Close", true)], 0, Pick::Close);
+            return Self::new(Ask::Holders, heading, &[], Vec::new(), vec![button(Pick::Close, "Close", true)], 0, Pick::Close);
         }
         let text = format!("{path}
 {}", list.join("
 "));
-        Self::new(Ask::Holders(text), heading, &[], lines(&list), vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close)
+        let mut m = Self::new(Ask::Holders, heading, &[], lines(&list), vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
+        m.copy = Some(text);
+        m
     }
 
     /// The window is closing while a delete runs.
@@ -225,15 +232,16 @@ mod tests {
     fn the_holders_modal_offers_copy_of_the_whole_list_beside_close_and_none_when_nothing_holds_the_file() {
         let h = |name: &str, pid| Holder { pid, name: name.into() };
         let m = Modal::holders("f.txt", &[h("x.exe", 7), h("y.exe", 8)]);
-        assert_eq!(m.ask, Ask::Holders("f.txt
+        assert_eq!(m.ask, Ask::Holders);
+        assert_eq!(m.copy.as_deref(), Some("f.txt
 7  x.exe
-8  y.exe".into()));
+8  y.exe"));
         assert_eq!(m.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Copy, Pick::Close]);
         assert_eq!((m.buttons[m.focus].pick, m.cancel), (Pick::Close, Pick::Close), "Enter and Esc still close");
         let none = Modal::holders("f.txt", &[]);
         assert_eq!(none.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Close], "nothing to copy");
         let many: Vec<Holder> = (0..30).map(|i| h("p.exe", i)).collect();
-        let Ask::Holders(text) = Modal::holders("f.txt", &many).ask else { panic!() };
+        let text = Modal::holders("f.txt", &many).copy.unwrap();
         assert_eq!(text.lines().count(), 31, "the copy has every holder, not the shown ones");
     }
 

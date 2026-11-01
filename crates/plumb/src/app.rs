@@ -812,8 +812,7 @@ impl App {
         if pick == Pick::Copy {
             // Copying answers nothing: the modal stays, and its button says it was done.
             let Some(m) = self.modals.front_mut() else { return Effect::None };
-            let Ask::Holders(text) = &m.ask else { return Effect::None };
-            let text = text.clone();
+            let Some(text) = m.copy.clone() else { return Effect::None };
             if let Some(b) = m.buttons.iter_mut().find(|b| b.pick == Pick::Copy) {
                 b.label = "Copied";
             }
