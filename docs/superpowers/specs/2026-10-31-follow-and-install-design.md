@@ -22,7 +22,7 @@ Cleanup items A7 and A8 (`PARKED.md`, evidence in `docs/superpowers/plans/2026-1
 
 ```rust
 // window/watch.rs
-pub(super) trait Follow {   // no Send bound: both sources are used on the UI thread only
+pub(super) trait Follow: Send {   // Send: `drop_watch` moves the whole `Watch` to a thread to stop it
     /// Moves what the source has queued into its queue; `Some` if the source has ended.
     fn drain(&mut self) -> Option<Ended>;
     /// Applies queued changes until `deadline`; returns the tree changes made.
@@ -33,8 +33,8 @@ pub(super) trait Follow {   // no Send bound: both sources are used on the UI th
     /// Stops the source (blocks briefly: call off the UI thread).
     fn stop(self: Box<Self>);
 }
-struct JournalSource { reader: JournalReader, live: Live, queue: VecDeque<Delta> }
-struct DirSource { watcher: Watcher, queue: VecDeque<Listing> }
+struct JournalFollow { reader: JournalReader, live: Live, queue: VecDeque<Delta> }
+struct DirFollow { watcher: Watcher, queue: VecDeque<Listing> }
 ```
 
 `Watch.src` becomes `Box<dyn Follow>`; `Watch` loses `drain`, `apply`, `queued`, `backlog` and `stop` bodies (they forward) and `enum Source` is deleted. The match arms move unchanged into the two `impl Follow` blocks.
@@ -62,7 +62,7 @@ Two private `App` helpers replace the repeated blocks; `finish_scan`, `preview_i
 
 ```rust
 /// A model for `tree` in the current sort, with the root expanded and selected.
-fn fresh_model(&self, tree: &mut Tree) -> RowModel;
+fn fresh_model(tree: &Tree, key: SortKey, desc: bool) -> RowModel; // an associated fn: callers hold a borrow of `self.slot.tree`
 /// After an install that ends a scan or a rescan: nothing is running, no preview is paused, live is off.
 fn settle(&mut self, summary: String); // sets summary, scan = Idle, refreshing = false, preview_paused = false, set_live(Off)
 ```
@@ -73,7 +73,7 @@ fn settle(&mut self, summary: String); // sets summary, scan = Idle, refreshing 
 
 - **No `install_tree(how)` enum** (earlier "i1" idea). The three entry points differ in what they leave alone (`preview_installed` keeps scan, summary and live; `swap_tree` keeps the view). A mode enum would be a dispatcher with those differences as branches; the two helpers are exactly the parts that really repeat. Recommended; the alternative is the enum, which adds a branch per difference.
 - **`finish_scan` now also clears `refreshing`** through `settle`. This is unreachable-by-construction today (`begin_scan` clears it and a rescan goes through `swap_tree`), so no behavior changes; a test pins it.
-- **`Box<dyn Follow>`**, not an enum with a `Follow` impl per variant. There are two implementors and no hot path (a few calls per 250 ms tick), so a vtable costs nothing and removes the enum. Recommended; the enum stays if a third source never comes and you prefer no dynamic dispatch.
+- **`Box<dyn Follow>` (the trait is `Send`)**, not an enum with a `Follow` impl per variant. There are two implementors and no hot path (a few calls per 250 ms tick), so a vtable costs nothing and removes the enum. Recommended; the enum stays if a third source never comes and you prefer no dynamic dispatch.
 - **Phase enum** (merging `scan`, `refreshing`, `preview_paused`) is not part of this. It is parked with its trigger (`PARKED.md`).
 
 ## Tests
