@@ -22,9 +22,7 @@ pub(super) type ScanResult = std::result::Result<Scanned, String>;
 /// Everything live updates need for the view on screen.
 pub(super) struct Watch {
     pub(super) src: Source,
-    pub(super) pacer: Pacer,
-    /// The tree changed since the rows were last refreshed.
-    pub(super) dirty: bool,
+    pub(super) paced: Paced,
     /// `TIMER_LIVE` is running.
     pub(super) armed: bool,
 }
@@ -126,8 +124,7 @@ impl Win {
         });
         self.run.watch = Some(Watch {
             src: Source::Journal { reader, live: Live::new(records), queue: VecDeque::new() },
-            pacer: Pacer::new(Instant::now()),
-            dirty: false,
+            paced: Paced::new(Instant::now()),
             armed: false,
         });
         self.app.set_live(LiveStatus::On { last: None });
@@ -139,8 +136,7 @@ impl Win {
         watcher.release();
         self.run.watch = Some(Watch {
             src: Source::Dir { watcher, queue: VecDeque::new() },
-            pacer: Pacer::new(Instant::now()),
-            dirty: false,
+            paced: Paced::new(Instant::now()),
             armed: false,
         });
         self.app.set_live(LiveStatus::On { last: None });
@@ -200,7 +196,7 @@ impl Win {
     pub(super) fn apply_queued(&mut self) {
         let (Some(w), Some(tree)) = (&mut self.run.watch, &mut self.app.slot.tree) else { return };
         let n = w.apply(tree, Instant::now() + APPLY_BUDGET);
-        w.dirty |= n > 0;
+        w.paced.mark(n > 0);
         if w.queued() {
             let _ = unsafe { PostMessageW(Some(self.hwnd), WM_JOURNAL, WPARAM(0), LPARAM(0)) };
         }
@@ -212,7 +208,7 @@ impl Win {
         self.apply_queued();
         if let Some(w) = &mut self.run.watch
             && !w.armed
-            && (w.dirty || w.backlog())
+            && (w.paced.dirty() || w.backlog())
             && !self.borrowed
         {
             w.armed = true;
@@ -223,15 +219,14 @@ impl Win {
     /// `TIMER_LIVE`: at most every `REPAINT`, refreshes the rows once if the tree changed.
     pub(super) fn live_tick(&mut self) {
         self.apply_live();
-        let due = self.run.watch.as_ref().is_some_and(|w| w.dirty && w.pacer.due(Instant::now()));
+        let due = self.run.watch.as_ref().is_some_and(|w| w.paced.due(Instant::now()));
         if due {
             let t0 = Instant::now();
             self.app.refresh_rows();
             self.app.live_changed(local_time());
             self.invalidate();
             if let Some(w) = &mut self.run.watch {
-                w.pacer.done(Instant::now(), t0.elapsed());
-                w.dirty = false;
+                w.paced.done(Instant::now(), t0.elapsed());
             }
             if self.app.slot.tree.as_ref().is_some_and(needs_compaction) {
                 self.auto_rescan();
@@ -239,7 +234,7 @@ impl Win {
         }
         if let Some(w) = &mut self.run.watch
             && w.armed
-            && !w.dirty
+            && !w.paced.dirty()
             && !w.backlog()
         {
             w.armed = false;

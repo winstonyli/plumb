@@ -1,7 +1,7 @@
 //! The UI side of the partial tree: turns the messages a running scan sends into `Tree`
 //! mutations. Approximate on purpose (the exact tree replaces this one when the scan ends).
 use plumb_core::{NodeFlags, NodeId, Tree, TreeBuilder};
-use crate::live::Records;
+use crate::live::{Paced, Records};
 use plumb_scan::journal::state::FileState;
 use plumb_scan::preview::{PreviewMsg, PreviewRx};
 use std::collections::HashMap;
@@ -40,6 +40,8 @@ pub struct Preview {
     frozen: bool,
     /// The last `apply` found the queue empty.
     drained: bool,
+    /// Paces the row refreshes that follow applied messages.
+    pub paced: Paced,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -54,7 +56,7 @@ pub struct Applied {
 
 impl Preview {
     pub fn new(rx: PreviewRx) -> Self {
-        Self { rx, kind: Kind::Idle, frozen: false, drained: false }
+        Self { rx, kind: Kind::Idle, frozen: false, drained: false, paced: Paced::new(Instant::now()) }
     }
 
     /// True once the preview has stopped following the scan and has nothing left to show.

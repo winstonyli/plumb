@@ -232,6 +232,42 @@ impl Pacer {
     }
 }
 
+/// A `Pacer` plus "the tree changed since the rows were last refreshed", as the live watch and the
+/// scan preview both keep them.
+pub struct Paced {
+    pacer: Pacer,
+    dirty: bool,
+}
+
+impl Paced {
+    pub fn new(now: Instant) -> Self {
+        Self { pacer: Pacer::new(now), dirty: false }
+    }
+
+    pub fn mark(&mut self, changed: bool) {
+        self.dirty |= changed;
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Rows need a refresh and the pace allows it.
+    pub fn due(&self, now: Instant) -> bool {
+        self.dirty && self.pacer.due(now)
+    }
+
+    /// Call after a refresh that finished at `now` and took `took`.
+    pub fn done(&mut self, now: Instant, took: Duration) {
+        self.pacer.done(now, took);
+        self.dirty = false;
+    }
+
+    pub fn reset(&mut self, now: Instant) {
+        *self = Self::new(now);
+    }
+}
+
 /// When an automatic rescan may start.
 #[derive(Default)]
 pub struct RescanPolicy {

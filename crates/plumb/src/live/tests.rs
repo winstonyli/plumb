@@ -371,3 +371,22 @@ fn the_last_write_day_follows_a_record_even_when_its_size_does_not_change() {
 fn node_at(t: &Tree, path: &str) -> NodeId {
     (0..t.len() as u32).map(NodeId).find(|&i| t.path(i) == path).unwrap_or_else(|| panic!("no {path}"))
 }
+
+#[test]
+fn paced_is_due_only_when_marked_and_the_pacer_allows() {
+    let t0 = Instant::now();
+    let mut p = Paced::new(t0);
+    assert!(!p.dirty() && !p.due(t0), "nothing changed, nothing to refresh");
+    p.mark(false);
+    assert!(!p.dirty());
+    p.mark(true);
+    assert!(p.dirty() && p.due(t0));
+    p.done(t0, Duration::from_millis(10));
+    assert!(!p.dirty(), "done clears dirty");
+    p.mark(true);
+    assert!(!p.due(t0 + Duration::from_millis(249)) && p.due(t0 + Duration::from_millis(250)));
+    p.mark(false);
+    assert!(p.dirty(), "an empty batch does not clear dirty");
+    p.reset(t0);
+    assert!(!p.dirty() && !p.due(t0));
+}

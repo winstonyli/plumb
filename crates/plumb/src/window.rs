@@ -10,7 +10,7 @@ use crate::state::Placement;
 use crate::gfx::Gfx;
 use crate::layout::{Layout, PICKER_H};
 use crate::preview::Preview;
-use crate::live::{needs_compaction, Live, Pacer, RescanPolicy, REPAINT};
+use crate::live::{needs_compaction, Live, Paced, RescanPolicy, REPAINT};
 use plumb_core::filter::Hits;
 use plumb_core::rows::Key;
 use plumb_core::{wide, NodeId, Tree, TreeBuilder};
@@ -181,9 +181,6 @@ struct Win {
     high_surrogate: Option<u16>,
     /// The left button went down in the filter box and is still held: moving extends the selection.
     filter_drag: bool,
-    preview_pacer: Pacer,
-    /// The preview tree changed since the rows were last refreshed.
-    preview_dirty: bool,
     /// The views not on screen that hold a tree or a scan, by view index.
     parked: Vec<Option<View>>,
     /// Counts view switches, to find the least recently used.
@@ -331,7 +328,6 @@ impl Win {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, run: Run::default(),
             policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
-            preview_pacer: Pacer::new(Instant::now()), preview_dirty: false,
             parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
@@ -549,8 +545,9 @@ impl Win {
         if self.run.preview.is_some() {
             // The scan kept building its tree while the view was away: make the rows for it as it is now.
             self.app.preview_installed();
-            self.preview_pacer = Pacer::new(Instant::now());
-            self.preview_dirty = false;
+            if let Some(p) = &mut self.run.preview {
+                p.paced.reset(Instant::now());
+            }
         }
         self.sync_marks();
         self.apply_live(); // what changed while it was away
@@ -711,8 +708,6 @@ impl Win {
         } else {
             let (tx, rx) = preview_channel(PREVIEW_QUEUE);
             self.run.preview = Some(Preview::new(rx));
-            self.preview_pacer = Pacer::new(Instant::now());
-            self.preview_dirty = false;
             Arc::new(Progress::with_preview(tx))
         };
         // Opened here so the choice of watch is known before the scan starts: a volume whose journal
@@ -835,14 +830,13 @@ impl Win {
         if a.reset || a.created {
             self.app.preview_installed(); // builds the model from whatever tree there is now
         } else {
-            self.preview_dirty |= a.changes > 0;
+            p.paced.mark(a.changes > 0);
         }
         self.app.slot.preview_paused = p.paused();
-        if self.preview_dirty && self.preview_pacer.due(Instant::now()) {
+        if p.paced.due(Instant::now()) {
             let t0 = Instant::now();
             self.app.refresh_rows();
-            self.preview_pacer.done(Instant::now(), t0.elapsed());
-            self.preview_dirty = false;
+            p.paced.done(Instant::now(), t0.elapsed());
         }
         self.invalidate();
     }
