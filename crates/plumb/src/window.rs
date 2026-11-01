@@ -91,6 +91,8 @@ const FILTER_DEBOUNCE_MS: u32 = 100;
 const TIMER_PREVIEW: usize = 4;
 /// The selection must rest this long before the files its process holds are looked up.
 const TIMER_HELD: usize = 5;
+const TIMER_FLASH: usize = 6;
+const FLASH_TICK_MS: u32 = 50;
 const HELD_SETTLE_MS: u32 = 300;
 /// How long one handle may take to name before it is skipped.
 const HELD_PER_HANDLE: Duration = Duration::from_millis(500);
@@ -185,8 +187,8 @@ struct Win {
     parked: Vec<Option<View>>,
     /// Counts view switches, to find the least recently used.
     clock: u64,
-    /// Which of the progress, preview and live timers are running.
-    timers: [bool; 3],
+    /// Which of the progress, preview, live and flash timers are running.
+    timers: [bool; 4],
     /// A parked view is swapped in for one operation (`in_slot`): timers and the filter stay as they are.
     borrowed: bool,
     /// The window is not the foreground one (`WM_ACTIVATE`): the Processes poller slows down.
@@ -330,7 +332,7 @@ impl Win {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, run: Run::default(),
             policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
-            parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false, background: false,
+            parked: Vec::new(), clock: 0, timers: [false; 4], borrowed: false, background: false,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
         win.apply_title_theme();
@@ -628,7 +630,7 @@ impl Win {
         self.app.marks = marks;
     }
 
-    /// Starts and stops the progress, preview and live timers to match the view on screen.
+    /// Starts and stops the progress, preview, live and flash timers to match the view on screen.
     fn sync_timers(&mut self) {
         if self.borrowed {
             return;
@@ -637,6 +639,7 @@ impl Win {
             (TIMER_PROGRESS, self.run.rx.is_some() && !self.run.background, 100),
             (TIMER_PREVIEW, self.run.preview.is_some() || self.parked.iter().flatten().any(|d| d.run.preview.is_some()), PREVIEW_TICK_MS),
             (TIMER_LIVE, self.run.watch.as_ref().is_some_and(|w| w.armed), REPAINT.as_millis() as u32),
+            (TIMER_FLASH, self.app.flashing(), FLASH_TICK_MS),
         ];
         for (i, (id, on, ms)) in want.into_iter().enumerate() {
             if self.timers[i] != on {
@@ -1430,6 +1433,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_TIMER if wp.0 == TIMER_PROGRESS => {
             with(|w| w.poll_progress());
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_FLASH => {
+            with(|w| w.flash_tick());
             LRESULT(0)
         }
         WM_TIMER if wp.0 == TIMER_LIVE => {

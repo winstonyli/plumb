@@ -219,6 +219,8 @@ pub struct View<'a> {
     pub found: Option<&'a Matcher>,
     /// Marked for deletion: these rows, and the rows under a marked folder, are tinted.
     pub basket: &'a Basket,
+    /// Rows live updates just changed: tinted while they fade.
+    pub flash: &'a crate::app::Flash,
 }
 
 /// The treemap pane's content: tiles from `plumb_core::treemap`, plus what is drawn over them.
@@ -1081,6 +1083,10 @@ impl Pen<'_> {
                 let _ = v.tree.write_path(id, &mut *path);
                 v.basket.covers(&path)
             };
+            let a = v.flash.alpha(id, std::time::Instant::now());
+            if a > 0.0 {
+                self.fill(r, D2D1_COLOR_F { a: a * 0.35, ..t.accent });
+            }
             if marked {
                 self.fill(r, D2D1_COLOR_F { a: 0.35, ..t.danger }); // as the map tints a marked tile
             }

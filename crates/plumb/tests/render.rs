@@ -56,7 +56,7 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         sort: (1, true),
         admin: Some(admin),
         hot: None, pressed: false,
-        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref(), basket: &Basket::default() }),
+        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref(), basket: &Basket::default(), flash: &Default::default() }),
         message: "",
         loading: false, kind: Default::default(), metric: Default::default(), held: None,
         status: "MFT scan: 200 files", notice: "", notice_ok: false, selection: "C:\\Users\\someone\\Documents  (1.2 GB, 300 items)",
@@ -261,7 +261,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
         let shoot = |selected: Option<usize>, stem: &str| {
             let scene = Scene {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-                view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+                view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default() }),
                 message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
                 map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
                 modal: None,
@@ -491,7 +491,7 @@ fn a_marked_row_is_tinted() {
     let shot = |basket: &Basket| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket }),
+            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket, flash: &Default::default() }),
             message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_scene(&gfx, &scene, "plumb-marked-row")
@@ -525,7 +525,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
         model.reveal(&tree, plumb_core::NodeId(1));
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default() }),
             message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_on(&painter, &gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
@@ -574,7 +574,7 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
     let layout = Layout { chips: chip_widths(&gfx, &chips), ..layout };
     let scene = Scene {
         layout, theme: Theme::new(false), chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot: None, pressed: false,
-        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default() }),
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Default::default(), held: None, status: "6 processes, 1.1 GB in use of 16 GB", notice: "", notice_ok: false, selection: "", banner: None,
         filter: FilterBar::default(), basket: None,
         map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
@@ -615,7 +615,7 @@ fn the_processes_map_follows_the_metric_button() {
         let classes = plumb_core::treemap::class_bytes(&tiles);
         let scene = Scene {
             layout, theme: Theme::new(false), chips: &chips, active_chip: Some(0), sort: (1, true), admin: None, hot: None, pressed: false,
-            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default() }),
             message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: m, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "", notice: "", notice_ok: false, selection: "", banner: None,
             filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
@@ -661,7 +661,7 @@ fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme:
     let hot = Some(hot(&layout));
     let scene = Scene {
         layout, theme, chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot, pressed,
-        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default() }),
+        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default() }),
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Metric::Memory, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB", selection: "", banner: None,
         filter: FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() }, basket: None,
         map: has_map.then_some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),

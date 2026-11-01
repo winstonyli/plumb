@@ -1,5 +1,7 @@
 //! Window-independent application state: what is selected, scrolled and scanning, and how
 //! input changes it. No Win32 types, so the whole interaction model tests anywhere.
+mod flash;
+pub use flash::Flash;
 mod marks;
 mod filter;
 mod held;
@@ -19,6 +21,7 @@ use plumb_scan::handles::{HandleError, HandleList};
 use plumb_core::treemap::{self, Class, Kind, Tile};
 use plumb_core::{NodeFlags, NodeId, Tree};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 use std::fmt::Write as _;
 
 use marks::BasketView;
@@ -301,6 +304,8 @@ pub struct Slot {
     pub preview_paused: bool,
     filter: filter::Filter,
     pub basket: Basket,
+    /// Rows that live updates just changed, tinted while they fade.
+    pub flash: Flash,
     /// The Processes view's extra facts about each process, by pid.
     pub proc_info: HashMap<u32, ProcInfo>,
     /// What the Processes view's map and Memory column weigh by.
@@ -478,6 +483,7 @@ impl App {
         self.slot.tree = None;
         self.slot.model = None;
         self.slot.scroll = 0;
+        self.slot.flash.clear();
         self.slot.summary.clear();
         self.set_live(LiveStatus::Off);
         self.slot.refreshing = false;
@@ -504,6 +510,7 @@ impl App {
 
     /// After an install that ends a scan or a rescan: nothing is running, no preview is paused, live is off.
     fn settle(&mut self, summary: String) {
+        self.slot.flash.clear();
         self.slot.summary = summary;
         self.slot.scan = Scan::Idle;
         self.slot.refreshing = false;
@@ -530,6 +537,7 @@ impl App {
         self.map_reset();
         self.slot.scroll = 0;
         self.slot.model = None;
+        self.slot.flash.clear();
         let key = self.kind().sort_key(self.sort.0);
         let Some(tree) = &mut self.slot.tree else { return };
         tree.take_touched(); // the model is built from the tree as it is now
@@ -555,6 +563,23 @@ impl App {
         self.slot.scroll = scroll;
         self.filter_reset();
         self.settle(summary);
+    }
+
+    /// Tints the rows the tree has changed since the last refresh (call before `refresh_rows`, which consumes them).
+    pub fn flash_changes(&mut self, now: Instant) {
+        if let Some(t) = &self.slot.tree {
+            self.slot.flash.mark(t.touched(), now);
+        }
+    }
+
+    /// Whether any row is still tinted, so the fade timer must run.
+    pub fn flashing(&self) -> bool {
+        self.slot.flash.active()
+    }
+
+    /// Forgets the tints that have faded out; true while any remain.
+    pub fn flash_tick(&mut self, now: Instant) -> bool {
+        self.slot.flash.tick(now)
     }
 
     /// Brings the rows up to date after the tree changed in place.
@@ -1275,7 +1300,7 @@ impl App {
         let running = matches!(self.slot.scan, Scan::Running { .. });
         let count = self.filter_count();
         let view = match (&self.slot.tree, &self.slot.model) {
-            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.slot.scroll, partial: matches!(self.slot.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher(), basket: &self.slot.basket }),
+            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.slot.scroll, partial: matches!(self.slot.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher(), basket: &self.slot.basket, flash: &self.slot.flash }),
             _ => None,
         };
         let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
@@ -2256,6 +2281,24 @@ Test GPU", status_str(&a, true))));
     }
 
     #[test]
+    fn changed_rows_are_tinted_until_they_fade_and_a_new_scan_forgets_them() {
+        let mut a = scanned();
+        let root = a.slot.model.as_ref().unwrap().rows()[0].id;
+        let t0 = Instant::now();
+        let new = a.slot.tree.as_mut().unwrap().add_child(root, &[b'n' as u16], 1, plumb_core::NodeFlags::empty());
+        a.flash_changes(t0);
+        a.refresh_rows();
+        assert!(a.flashing());
+        assert!(a.slot.flash.alpha(new, t0) > 0.9);
+        assert!(a.flash_tick(t0 + flash::FADE / 2));
+        assert!(!a.flash_tick(t0 + flash::FADE));
+        assert!(!a.flashing());
+        a.slot.flash.mark(&[new], t0);
+        a.begin_scan(0);
+        assert!(!a.flashing());
+    }
+
+    #[test]
     fn resize_reclamps_scroll() {
         let mut a = scanned();
         a.slot.scroll = 5;
@@ -2536,7 +2579,7 @@ Test GPU", status_str(&a, true))));
         assert_eq!((a.slot.refreshing, a.slot.summary.as_str()), (true, "mine"));
         assert_eq!(a.slot.filter.ui.text, "query");
         // Naming every field means a new one fails to compile until this test covers it.
-        let Slot { tree: _, model: _, scroll: _, scan: _, summary: _, live: _, refreshing: _, preview_paused: _, filter: _, basket: _, proc_info: _, proc_metric: _ } = &a.slot;
+        let Slot { tree: _, model: _, scroll: _, scan: _, summary: _, live: _, refreshing: _, preview_paused: _, filter: _, basket: _, flash: _, proc_info: _, proc_metric: _ } = &a.slot;
     }
 
     #[test]

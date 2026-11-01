@@ -263,14 +263,25 @@ impl Win {
     }
 
     /// `TIMER_LIVE`: at most every `REPAINT`, refreshes the rows once if the tree changed.
+    /// Fades the changed-row tint; stops its timer once nothing is tinted.
+    pub(super) fn flash_tick(&mut self) {
+        let more = self.app.flash_tick(Instant::now());
+        self.invalidate();
+        if !more {
+            self.sync_timers();
+        }
+    }
+
     pub(super) fn live_tick(&mut self) {
         self.apply_live();
         let due = self.run.watch.as_ref().is_some_and(|w| w.paced.due(Instant::now()));
         if due {
             let t0 = Instant::now();
+            self.app.flash_changes(t0);
             self.app.refresh_rows();
             self.app.live_changed(local_time());
             self.invalidate();
+            self.sync_timers();
             if let Some(w) = &mut self.run.watch {
                 w.paced.done(Instant::now(), t0.elapsed());
             }
