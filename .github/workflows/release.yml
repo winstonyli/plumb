@@ -62,6 +62,10 @@ jobs:
           }
           $body += ""
           $body += "The exe is unsigned, so Windows SmartScreen may warn on first run. Check the zip against the .sha256 file."
+          if ("${{ github.ref_name }}" -notlike "*-*") {
+            $body += ""
+            $body += 'Install with Scoop: `scoop bucket add plumb https://github.com/winstonyli/plumb`, then `scoop install plumb`.'
+          }
           $body | Out-File -Encoding utf8 notes.md
 
       - name: Publish
@@ -71,3 +75,29 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $pre = @(if ($tag -like "*-*") { "--prerelease" })
           gh release create $tag $env:ASSET "$env:ASSET.sha256" --title $tag --notes-file notes.md --verify-tag @pre
+
+      - name: Bucket
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $sha = ((Get-Content "$env:ASSET.sha256" -Raw) -split '\s+')[0]
+          $script = Join-Path $env:RUNNER_TEMP "bump-manifest.ps1"
+          Copy-Item .github/scripts/bump-manifest.ps1 $script
+          function Invoke-Git { git @args; if ($LASTEXITCODE) { throw "git $args failed ($LASTEXITCODE)" } }
+          if ($tag -like "*-*") {
+            # A prerelease only shows what the real release would write.
+            $dry = Join-Path $env:RUNNER_TEMP "bucket-dry"
+            & $script -Tag ($tag -replace '-.*$', '') -Sha256 $sha -Root $dry
+            Get-Content "$dry/bucket/plumb.json"
+            return
+          }
+          Invoke-Git fetch origin main
+          Invoke-Git checkout -B main origin/main
+          & $script -Tag $tag -Sha256 $sha -Root (Get-Location).Path
+          Invoke-Git config user.name "github-actions[bot]"
+          Invoke-Git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          Invoke-Git add bucket/plumb.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { "bucket already current"; return }
+          Invoke-Git commit -m "Bump bucket to $tag"
+          Invoke-Git pull --rebase origin main
+          Invoke-Git push origin HEAD:main
