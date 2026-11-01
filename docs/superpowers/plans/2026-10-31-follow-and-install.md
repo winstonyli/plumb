@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # One live-source trait, one pacer, one tree-install tail Implementation Plan
