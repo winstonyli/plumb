@@ -1,4 +1,4 @@
-//! The Processes view's runtime: a poller thread that takes a snapshot every second, and the reconciler state that
+//! The Processes view's runtime: a poller thread that takes a snapshot every second (every two while the window is in the background), and the reconciler state that
 //! folds each snapshot into the app's tree.
 use crate::app::{App, ProcInfo};
 use plumb_core::procs::{Metric, Procs, Sample};
@@ -12,8 +12,15 @@ use windows::Win32::UI::WindowsAndMessaging::{IsWindow, PostMessageW};
 
 /// How often the poller looks.
 const POLL: Duration = Duration::from_secs(1);
+/// How often it looks while the window is not the foreground one.
+const POLL_BACKGROUND: Duration = Duration::from_secs(2);
 /// Dead nodes the tree may collect before it is built afresh (selection and expansion reset once).
 const MAX_DEAD: usize = 20_000;
+
+/// The gap between snapshots: slower while the window is not the foreground one (it can still be seen, so it still moves).
+fn poll_interval(background: bool) -> Duration {
+    if background { POLL_BACKGROUND } else { POLL }
+}
 
 /// One snapshot, posted to the window as the `lparam` of `WM_PROCS` (a leaked `Box` if the window is gone).
 pub struct Snapshot {
@@ -32,7 +39,7 @@ struct Poller {
 }
 
 impl Poller {
-    fn start(hwnd: HWND, view: usize, msg: u32) -> Self {
+    fn start(hwnd: HWND, view: usize, msg: u32, background: Arc<AtomicBool>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let hwnd = hwnd.0 as isize;
@@ -53,7 +60,7 @@ impl Poller {
                         return;
                     }
                 }
-                std::thread::park_timeout(POLL);
+                std::thread::park_timeout(poll_interval(background.load(Ordering::Acquire)));
             }
         });
         Self { stop, thread: handle.thread().clone() }
@@ -80,6 +87,8 @@ impl Drop for Poller {
 pub struct ProcState {
     sync: Option<Procs>,
     poller: Option<Poller>,
+    /// The window is not the foreground one; the poller reads it between snapshots.
+    background: Arc<AtomicBool>,
     /// Snapshots folded in so far.
     updates: u64,
 }
@@ -88,7 +97,7 @@ impl ProcState {
     /// Starts polling (if not already), posting `msg` to `hwnd`. The first snapshot after a start has no rates.
     pub fn start(&mut self, hwnd: HWND, view: usize, msg: u32) {
         if self.poller.is_none() {
-            self.poller = Some(Poller::start(hwnd, view, msg));
+            self.poller = Some(Poller::start(hwnd, view, msg, self.background.clone()));
         }
     }
 
@@ -100,6 +109,17 @@ impl ProcState {
 
     pub fn polling(&self) -> bool {
         self.poller.is_some()
+    }
+
+    /// Polls at the background pace (or the normal one). Coming back to the front asks for a snapshot now; returns
+    /// whether it did.
+    pub fn set_background(&mut self, background: bool) -> bool {
+        let was = self.background.swap(background, Ordering::AcqRel);
+        let wake = was && !background;
+        if wake {
+            self.kick();
+        }
+        wake
     }
 
     /// Weighs the processes by `m` from now on (the view must be the app's active one).
@@ -152,5 +172,24 @@ impl ProcState {
             }
         }
         label(app) != before
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_poller_slows_to_every_two_seconds_while_the_window_is_not_the_foreground_one() {
+        assert_eq!(poll_interval(false), Duration::from_secs(1));
+        assert_eq!(poll_interval(true), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn leaving_the_background_asks_for_a_snapshot_now_and_entering_it_does_not() {
+        let mut st = ProcState::default();
+        assert!(!st.set_background(true), "slowing down needs no snapshot");
+        assert!(!st.set_background(true), "no change, nothing to do");
+        assert!(st.set_background(false), "coming back to the front wants fresh rows");
     }
 }

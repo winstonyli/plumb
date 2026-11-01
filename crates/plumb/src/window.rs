@@ -189,6 +189,8 @@ struct Win {
     timers: [bool; 3],
     /// A parked view is swapped in for one operation (`in_slot`): timers and the filter stay as they are.
     borrowed: bool,
+    /// The window is not the foreground one (`WM_ACTIVATE`): the Processes poller slows down.
+    background: bool,
     /// The tooltip control, the icon button it last described, and the text it reads from (`tip_text`).
     tooltip: HWND,
     tip: Option<TipKey>,
@@ -328,7 +330,7 @@ impl Win {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, run: Run::default(),
             policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
-            parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false,
+            parked: Vec::new(), clock: 0, timers: [false; 3], borrowed: false, background: false,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
         win.apply_title_theme();
@@ -742,13 +744,15 @@ impl Win {
     fn start_procs(&mut self, view: usize) {
         self.app.begin_scan(view);
         let mut st = procs::ProcState::default();
+        st.set_background(self.background);
         st.start(self.hwnd, view, WM_PROCS);
         self.run.procs = Some(st);
         self.sync_timers();
         self.invalidate();
     }
 
-    /// The process list is followed only while the window can be seen: a minimised window stops the poller and
+    /// The process list is followed only while the window can be seen: a minimised window stops the poller (one that
+    /// is not the foreground window polls every 2 s, see `ProcState::set_background`) and
     /// restoring it starts a new one (whose first snapshot has no rates).
     fn follow_processes(&mut self, on: bool) {
         let (Some(p), Some(view)) = (&mut self.run.procs, self.app.active) else { return };
@@ -1181,6 +1185,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 FillRect(HDC(wp.0 as _), &r, HBRUSH(GetStockObject(BLACK_BRUSH).0));
             }
             LRESULT(1)
+        }
+        WM_ACTIVATE => {
+            let background = wp.0 & 0xFFFF == WA_INACTIVE as usize;
+            with(|w| {
+                w.background = background;
+                if let Some(p) = &mut w.run.procs {
+                    p.set_background(background);
+                }
+            });
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         WM_SIZE => {
             let minimized = wp.0 == SIZE_MINIMIZED as usize;
