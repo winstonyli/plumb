@@ -2,6 +2,20 @@
 
 All notable changes to plumb. Format follows [Common Changelog](https://common-changelog.org/) from 0.10.0 on (older entries are in Keep a Changelog form); all crates share one version and are bumped together at each tag.
 
+## 0.11.0 - 2026-10-31
+
+### Added
+
+- Install plumb with Scoop: `scoop bucket add plumb https://github.com/winstonyli/plumb`, then `scoop install plumb`; each release updates the bucket manifest ([b0f2ba3](https://github.com/winstonyli/plumb/commit/b0f2ba3), [cbba1b9](https://github.com/winstonyli/plumb/commit/cbba1b9), [92cb62f](https://github.com/winstonyli/plumb/commit/92cb62f))
+
+### Internal
+
+- Hold a view's app and window state in one `Slot` and one `Run` that swap as a unit, instead of two hand-kept lists of fields ([e539517](https://github.com/winstonyli/plumb/commit/e539517), [bbb2d63](https://github.com/winstonyli/plumb/commit/bbb2d63), [bd30633](https://github.com/winstonyli/plumb/commit/bd30633))
+- Move Files held, the delete basket and the map out of `app.rs`, and the tooltip, live watch and context menu out of `window.rs` ([a000258](https://github.com/winstonyli/plumb/commit/a000258), [f2a440d](https://github.com/winstonyli/plumb/commit/f2a440d))
+- Share one record-to-node table (`live::Records`) between the preview and the live updates ([3155ae9](https://github.com/winstonyli/plumb/commit/3155ae9))
+- Share `wide`, the test helper `u` and the epoch constants; remove unused code ([a4d494b](https://github.com/winstonyli/plumb/commit/a4d494b), [699c525](https://github.com/winstonyli/plumb/commit/699c525))
+- Fix a race in the journal notify test ([6fa721a](https://github.com/winstonyli/plumb/commit/6fa721a))
+
 ## 0.10.1 - 2026-10-31
 
 _0.10.0 was tagged but never published: its release run failed a flaky test. This release has all of its changes, listed under 0.10.0 below._
