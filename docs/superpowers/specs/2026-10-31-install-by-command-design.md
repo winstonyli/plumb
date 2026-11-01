@@ -22,7 +22,7 @@ scoop install plumb            # later: scoop update plumb
 
 ## Files
 
-- `bucket/plumb.json`: Scoop manifest. `version`, `description`, `homepage`, `license` `MIT|Apache-2.0`, `url` and `hash` of the zip, `extract_dir` `plumb-v<version>-windows-x64`, `bin` `plumb.exe`, `checkver` `github`, and `autoupdate` (`url`, `extract_dir`, `hash` from `$url.sha256`). With `autoupdate`, `scoop checkver` can also refresh it by hand.
+- `bucket/plumb.json`: Scoop manifest. `version`, `description`, `homepage`, `license` `MIT|Apache-2.0`, `url` and `hash` of the zip, `extract_dir` `plumb-v<version>-windows-x64`, `bin` `plumb.exe`, a Start Menu shortcut, `checkver` `github`, and `autoupdate` (`url`, `extract_dir`, `hash` from `$url.sha256`). With `autoupdate`, `scoop checkver` can also refresh it by hand.
 - `.github/scripts/bump-manifest.ps1 -Tag vX.Y.Z -Sha256 <hex> [-Root <dir>]`: the one place that writes `bucket/plumb.json` from the tag and the hash alone.
 - `.github/workflows/release.yml`: a step after Publish. For a non-prerelease tag: fetch and check out `main`, run the script with the hash it already computed, commit `Bump bucket to <tag>` as `github-actions[bot]`, `git pull --rebase`, push. For a prerelease tag (`-rcN`): run the script into a temp `-Root` and print `git diff --stat`; no commit, no push. The release notes gain the install commands (`scoop bucket add`, `scoop install`).
 - `docs/releasing.md`: one paragraph on the manifest and the failure mode below. `ROADMAP.md`: v0.11 is Scoop only. `CHANGELOG.md`: an Added entry at the bump.
