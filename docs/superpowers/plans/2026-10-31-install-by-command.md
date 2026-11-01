@@ -18,7 +18,7 @@ status: draft
 
 - Do not push, tag, bump the version or publish unasked; the `-rcN` tag run (Task 3 Step 5) and the real `v0.11.0` are the user's go-ahead each. The CHANGELOG entry is written by the user's bump commit, not here.
 - Manifest file is UTF-8 without BOM, LF line endings, ends with a newline.
-- `license` is `MIT|Apache-2.0`; `description` wording (below) is for the user to review.
+- `license` is `MIT|Apache-2.0`; `description` is "Fast disk-usage explorer for Windows."
 - Edit workflow and doc files with the Edit tool. Never `python -` / stdin python.
 - Commit messages end with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 
@@ -97,30 +97,21 @@ if ($Tag -notmatch '^v(\d+\.\d+\.\d+)$') { throw "tag '$Tag' is not vX.Y.Z" }
 $version = $Matches[1]
 if ($Sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "sha256 '$Sha256' is not 64 lowercase hex digits" }
 
-# $version, $url, $sha256 and $basename inside the autoupdate block are Scoop's own placeholders.
+# $version and $url inside the autoupdate block are Scoop's own placeholders.
 $manifest = @'
 {
     "version": "__VERSION__",
-    "description": "Fast disk-usage explorer for Windows: scans an NTFS drive from its MFT, shows a size-sorted tree and a treemap, and follows changes live.",
+    "description": "Fast disk-usage explorer for Windows.",
     "homepage": "https://github.com/winstonyli/plumb",
     "license": "MIT|Apache-2.0",
     "url": "https://github.com/winstonyli/plumb/releases/download/v__VERSION__/plumb-v__VERSION__-windows-x64.zip",
     "hash": "__SHA256__",
     "extract_dir": "plumb-v__VERSION__-windows-x64",
     "bin": "plumb.exe",
-    "shortcuts": [
-        [
-            "plumb.exe",
-            "plumb"
-        ]
-    ],
     "checkver": "github",
     "autoupdate": {
         "url": "https://github.com/winstonyli/plumb/releases/download/v$version/plumb-v$version-windows-x64.zip",
-        "hash": {
-            "url": "$url.sha256",
-            "regex": "$sha256\\s+$basename"
-        },
+        "hash": { "url": "$url.sha256" },
         "extract_dir": "plumb-v$version-windows-x64"
     }
 }
@@ -142,8 +133,8 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 
 - [ ] **Step 1: Generate it for the latest release.** `powershell -NoProfile -File .github/scripts/bump-manifest.ps1 -Tag v0.10.1 -Sha256 c7271136a037af14180d7097fa04af6a76a7ce6372c408a15eddaa6df4f730e1`. Confirm the hash is still the release's: `gh release download v0.10.1 -p '*.sha256' -O -` prints it first.
 - [ ] **Step 2: Install from the file, without launching the GUI.** `scoop install "$PWD\bucket\plumb.json"`. Expected: it downloads the zip, passes the hash check, and ends with `'plumb' (0.10.1) was installed successfully!`. Then `scoop list plumb` shows 0.10.1, `Test-Path "$env:USERPROFILE\scoop\shims\plumb.exe"` is `True`, and `Test-Path "$env:USERPROFILE\scoop\apps\plumb\current\plumb.exe"` is `True`.
-- [ ] **Step 3: Uninstall.** `scoop uninstall plumb`. Expected: the shim and the Start Menu shortcut are gone (`Test-Path` on the shim is `False`).
-- [ ] **Step 4: Check the `autoupdate` block against the real release.** Copy `bucket\plumb.json` to a temp directory, then `& "$(scoop prefix scoop)\bin\checkver.ps1" -App plumb -Dir <that temp directory> -ForceUpdate`. Expected: no error, and the rewritten file has `version` 0.10.1 and the same `hash` as Step 1 (this proves the `url`, `$url.sha256` and `regex` lines resolve). If the hash differs or the regex fails, fix the `regex` line in the script's template, rerun Task 1 Step 4 and this task.
+- [ ] **Step 3: Uninstall.** `scoop uninstall plumb`. Expected: the shim is gone (`Test-Path` on the shim is `False`).
+- [ ] **Step 4: Check the `autoupdate` block against the real release.** Copy `bucket\plumb.json` to a temp directory, then `& "$(scoop prefix scoop)\bin\checkver.ps1" -App plumb -Dir <that temp directory> -ForceUpdate`. Expected: no error, and the rewritten file has `version` 0.10.1 and the same `hash` as Step 1 (this proves the `url` and `$url.sha256` lines resolve). If the hash differs or cannot be read from the `hash  file` line, add `, "regex": "$sha256\s+$basename"` to the `hash` object in the script's template, rerun Task 1 Step 4 and this task.
 - [ ] **Step 5: Commit** "Bucket: a Scoop manifest for plumb 0.10.1" (file: `bucket/plumb.json`).
 
 ### Task 3: The workflow step
