@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 ---
 
 # Install by command (v0.11) Implementation Plan
