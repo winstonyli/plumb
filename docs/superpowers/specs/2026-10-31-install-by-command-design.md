@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Install by command (v0.11)
