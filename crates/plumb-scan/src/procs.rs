@@ -1,8 +1,8 @@
 //! A snapshot of the running processes: `NtQuerySystemInformation(SystemProcessInformation)`, parsed by x64 offset.
 use windows::core::PWSTR;
-use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::Foundation::{CloseHandle, FILETIME};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE};
 
 const SYSTEM_PROCESS_INFORMATION: u32 = 5;
 
@@ -39,6 +39,22 @@ pub(crate) fn image_path(pid: u32) -> Option<String> {
     let ok = unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_FORMAT(0), PWSTR(buf.as_mut_ptr()), &mut n) }.is_ok();
     let _ = unsafe { CloseHandle(h) };
     ok.then(|| String::from_utf16_lossy(&buf[..n as usize]))
+}
+
+/// Ends the process `pid` that was created at `created` (the FILETIME from its entry), with exit code 1. A pid is reused,
+/// so a process created at another time is left alone. The error is the reason, in words.
+pub fn terminate(pid: u32, created: u64) -> Result<(), String> {
+    let why = |e: windows::core::Error| if e.code().0 == 0x8007_0005_u32 as i32 { "access denied (a protected or elevated process; run plumb as administrator)".to_string() } else { e.message() };
+    let h = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|e| if e.code().0 == 0x8007_0057_u32 as i32 { "it has already ended".to_string() } else { why(e) })?;
+    let (mut c, mut x, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+    let started = unsafe { GetProcessTimes(h, &mut c, &mut x, &mut k, &mut u) }.map(|_| (c.dwHighDateTime as u64) << 32 | c.dwLowDateTime as u64);
+    let out = match started {
+        Ok(t) if t == created => unsafe { TerminateProcess(h, 1) }.map_err(why),
+        Ok(_) => Err("the pid now belongs to a different process".to_string()),
+        Err(e) => Err(why(e)),
+    };
+    let _ = unsafe { CloseHandle(h) };
+    out
 }
 
 /// Takes snapshots, remembering each process's path (and that it could not be had) so the lookup, which opens
@@ -118,6 +134,18 @@ mod tests {
     use windows::Win32::Foundation::FILETIME;
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+
+    #[test]
+    fn terminate_ends_the_process_it_was_given_and_refuses_a_pid_created_at_another_time() {
+        let mut child = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let created = snapshot().unwrap().iter().find(|p| p.pid == child.id()).expect("child listed").created;
+        let err = terminate(child.id(), created + 1).unwrap_err();
+        assert!(err.contains("different process"), "{err}");
+        assert!(child.try_wait().unwrap().is_none(), "a mismatch kills nothing");
+        terminate(child.id(), created).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(1));
+        assert!(terminate(child.id(), created).is_err(), "an ended process cannot be ended again");
+    }
 
     #[test]
     fn the_handle_count_follows_the_handles_a_process_opens() {

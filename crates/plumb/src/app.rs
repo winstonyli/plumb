@@ -235,6 +235,8 @@ pub enum Effect {
     Quit,
     /// Put this text on the clipboard.
     Copy(String),
+    /// End this process (a modal was answered Yes); `name` is for the failure message.
+    End { pid: u32, created: u64, name: String },
     /// The Processes view's map now weighs by this (the tree's sizes must be rewritten).
     Metric(Metric),
 }
@@ -793,6 +795,18 @@ impl App {
         Some((tree.path(id), fmt::node_path(tree, id).to_string(), self.mark_state(id), file))
     }
 
+    /// What "End process" in the context menu of `id` ends: pid, creation time and name. Only in the Processes view, and
+    /// not for the Idle and System processes (pids 0 and 4).
+    pub fn end_target(&self, id: NodeId) -> Option<(u32, u64, String)> {
+        let tree = self.slot.tree.as_ref()?;
+        if self.kind() != ViewKind::Processes {
+            return None;
+        }
+        let pid = tree.aux.get(id.idx())?[2] as u32;
+        let created = self.slot.proc_info.get(&pid)?.created;
+        (pid > 4).then(|| (pid, created, fmt::node_name(tree, id).to_string()))
+    }
+
     /// The tooltip text under (x, y), written to `out`; false (with `out` empty) for none.
     pub fn tip_at(&self, x: f32, y: f32, out: &mut String) -> bool {
         out.clear();
@@ -857,6 +871,7 @@ impl App {
             }
             (Ask::Permanent(r), Pick::Yes) => Effect::Delete { view: r.view, paths: r.paths, permanent: true },
             (Ask::Failed { view, permanent, paths }, Pick::Retry) => Effect::Delete { view, paths, permanent },
+            (Ask::End { pid, created, name }, Pick::Yes) => Effect::End { pid, created, name },
             (Ask::Close, Pick::Yes) => Effect::Quit,
             _ => Effect::None,
         }
@@ -1701,6 +1716,21 @@ mod tests {
         assert!(!who, "a process has no holders to ask about");
         assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));
         assert_eq!(mark, MarkState::Refused("processes cannot be deleted"));
+    }
+
+    #[test]
+    fn end_process_is_offered_for_a_process_and_asks_before_it_acts() {
+        let (mut a, id) = process_app();
+        assert!(a.end_target(id).is_none(), "the process is not in the snapshot yet: no creation time to end it by");
+        a.set_procs(2, HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0 })]), (1, 1));
+        assert_eq!(a.end_target(id), Some((77, 5, "ping.exe".to_string())));
+        let root = a.slot.model.as_ref().unwrap().rows()[0].id;
+        assert!(a.end_target(root).is_none(), "the root is pid 0");
+        a.ask(Modal::end(77, 5, "ping.exe"));
+        assert_eq!(a.answer(Pick::No), Effect::None);
+        a.ask(Modal::end(77, 5, "ping.exe"));
+        assert_eq!(a.answer(Pick::Yes), Effect::End { pid: 77, created: 5, name: "ping.exe".into() });
+        assert!(a.modal().is_none());
     }
 
     #[test]

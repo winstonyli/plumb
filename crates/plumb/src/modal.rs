@@ -30,8 +30,10 @@ pub enum Ask {
     Permanent(CommitRequest),
     /// These paths could not be deleted; Retry tries them again.
     Failed { view: usize, permanent: bool, paths: Vec<String> },
-    /// Which programs hold a file open.
-    Holders,
+    /// Only to be read: which programs hold a file open, why a process could not be ended.
+    Info,
+    /// End this process (by pid and creation time, which together identify it).
+    End { pid: u32, created: u64, name: String },
     /// A delete is still running and the window is being closed.
     Close,
 }
@@ -123,13 +125,26 @@ let mut m =         Self::new(Ask::Failed { view, permanent, paths }, heading, &
         };
         let list: Vec<String> = held_by.iter().map(|h| format!("{}  {}", h.pid, h.name)).collect();
         if list.is_empty() {
-            return Self::new(Ask::Holders, heading, &[], Vec::new(), vec![button(Pick::Close, "Close", true)], 0, Pick::Close);
+            return Self::new(Ask::Info, heading, &[], Vec::new(), vec![button(Pick::Close, "Close", true)], 0, Pick::Close);
         }
         let text = format!("{path}
 {}", list.join("
 "));
-        let mut m = Self::new(Ask::Holders, heading, &[], lines(&list), vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
+        let mut m = Self::new(Ask::Info, heading, &[], lines(&list), vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
         m.copy = Some(text);
+        m
+    }
+
+    /// Ending the process `name` (pid `pid`, created at FILETIME `created`); Cancel is the default.
+    pub fn end(pid: u32, created: u64, name: &str) -> Self {
+        let buttons = vec![button(Pick::Yes, "End process", false), button(Pick::No, "Cancel", true)];
+        Self::new(Ask::End { pid, created, name: name.to_string() }, format!("End {name} (PID {pid})?"), &["It stops at once, and anything unsaved in it is lost."], Vec::new(), buttons, 1, Pick::No)
+    }
+
+    /// Why the process `name` (pid `pid`) could not be ended.
+    pub fn end_failed(pid: u32, name: &str, reason: &str) -> Self {
+        let mut m = Self::new(Ask::Info, format!("Could not end {name} (PID {pid})"), &[], vec![reason.to_string()], vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
+        m.copy = Some(format!("{name} (PID {pid}): {reason}"));
         m
     }
 
@@ -232,7 +247,7 @@ mod tests {
     fn the_holders_modal_offers_copy_of_the_whole_list_beside_close_and_none_when_nothing_holds_the_file() {
         let h = |name: &str, pid| Holder { pid, name: name.into() };
         let m = Modal::holders("f.txt", &[h("x.exe", 7), h("y.exe", 8)]);
-        assert_eq!(m.ask, Ask::Holders);
+        assert_eq!(m.ask, Ask::Info);
         assert_eq!(m.copy.as_deref(), Some("f.txt
 7  x.exe
 8  y.exe"));

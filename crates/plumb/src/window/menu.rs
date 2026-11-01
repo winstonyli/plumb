@@ -11,9 +11,11 @@ pub(super) const CMD_WHO: usize = 5;
 
 pub(super) const CMD_MARK: usize = 4;
 
+pub(super) const CMD_END: usize = 6;
+
 /// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
 /// because `TrackPopupMenu` runs its own message loop.
-pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: bool, at: (i32, i32)) {
+pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: bool, end: Option<(u32, u64, String)>, at: (i32, i32)) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let _ = AppendMenuW(menu, MF_STRING, CMD_REVEAL, w!("Reveal in Explorer"));
@@ -21,6 +23,9 @@ pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkStat
         let _ = AppendMenuW(menu, MF_STRING, CMD_PROPS, w!("Properties"));
         if who {
             let _ = AppendMenuW(menu, MF_STRING, CMD_WHO, w!("Who is using this"));
+        }
+        if end.is_some() {
+            let _ = AppendMenuW(menu, MF_STRING, CMD_END, w!("End process"));
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         match &mark {
@@ -53,6 +58,14 @@ pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkStat
                         drop(Box::from_raw(boxed));
                     }
                 });
+            }
+            CMD_END => {
+                if let Some((pid, created, name)) = end {
+                    with(|w| {
+                        w.app.ask(Modal::end(pid, created, &name));
+                        w.invalidate();
+                    });
+                }
             }
             CMD_MARK => {
                 with(|w| {

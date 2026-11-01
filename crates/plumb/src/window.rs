@@ -951,6 +951,14 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
     match e {
         Effect::None => {}
         Effect::Copy(text) => copy_to_clipboard(hwnd, &text),
+        Effect::End { pid, created, name } => {
+            if let Err(why) = plumb_scan::procs::terminate(pid, created) {
+                with(|w| {
+                    w.app.ask(Modal::end_failed(pid, &name, &why));
+                    w.invalidate();
+                });
+            }
+        }
         Effect::Delete { view, paths, permanent } => start_delete(hwnd, view, paths, permanent),
         Effect::Quit => {
             let _ = unsafe { DestroyWindow(hwnd) };
@@ -982,9 +990,9 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             }
         }
         Effect::Menu(id) => {
-            let info = with(|w| w.app.menu_target(id)).flatten();
-            if let Some((raw, p, mark, who)) = info {
-                context_menu(hwnd, raw, p, mark, who, at);
+            let info = with(|w| w.app.menu_target(id).map(|t| (t, w.app.end_target(id)))).flatten();
+            if let Some(((raw, p, mark, who), end)) = info {
+                context_menu(hwnd, raw, p, mark, who, end, at);
             }
         }
     }
