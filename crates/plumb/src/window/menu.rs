@@ -67,7 +67,7 @@ pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkStat
             CMD_END => {
                 if let Some((pid, created, name)) = end {
                     with(|w| {
-                        w.app.ask(Modal::end(pid, created, &name));
+                        w.ask(Modal::end(pid, created, &name));
                         w.invalidate();
                     });
                 }

@@ -74,6 +74,12 @@ fn items(n: usize) -> fmt::Show<'static> {
     fmt::noun(n as u64, "item", "items")
 }
 
+fn sentence(reason: &str, hint: &str) -> String {
+    let mut c = reason.chars();
+    let first: String = c.next().map(|f| f.to_uppercase().collect()).unwrap_or_default();
+    format!("{first}{}.{hint}", c.as_str())
+}
+
 fn lines(items: &[String]) -> Vec<String> {
     fmt::path_list(items, SHOWN).lines().map(str::to_string).collect()
 }
@@ -143,10 +149,17 @@ let mut m =         Self::new(Ask::Failed { view, permanent, paths }, heading, &
 
     /// Why the process `name` (pid `pid`) could not be ended.
     pub fn end_failed(pid: u32, name: &str, reason: &str) -> Self {
-        let hint: &[&str] = if reason.starts_with("access denied") { &["Run plumb as administrator to end more processes."] } else { &[] };
-        let mut m = Self::new(Ask::Info, format!("Could not end {name} (PID {pid})"), hint, vec![reason.to_string()], vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
+        let hint = if reason.starts_with("access denied") { " Run plumb as administrator to end more processes." } else { "" };
+        let mut m = Self::new(Ask::Info, format!("Could not end {name} (PID {pid})"), &[&sentence(reason, hint)], Vec::new(), vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
         m.copy = Some(format!("{name} (PID {pid}): {reason}"));
         m
+    }
+
+    /// Wraps each body line to the panel, `measure` giving a text's width in DIPs. Done once, when the modal is put up, so
+    /// that `geometry` stays a pure function of the lines.
+    pub fn fit(&mut self, w: f32, h: f32, measure: &dyn Fn(&str) -> f32) {
+        let width = self.geometry(w, h).body.w;
+        self.body = self.body.iter().flat_map(|l| fmt::wrap(l, width, measure)).collect();
     }
 
     /// The window is closing while a delete runs.
@@ -256,6 +269,15 @@ mod tests {
         assert_eq!((m.buttons[m.focus].pick, m.cancel), (Pick::Close, Pick::Close), "Enter and Esc still close");
         let none = Modal::holders("f.txt", &[]);
         assert_eq!(none.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Close], "nothing to copy");
+        let f = Modal::end_failed(7, "x.exe", "access denied (protected or elevated process)");
+        assert_eq!(f.body, ["Access denied (protected or elevated process). Run plumb as administrator to end more processes."]);
+        assert_eq!(f.copy.as_deref(), Some("x.exe (PID 7): access denied (protected or elevated process)"), "the copy is the raw reason");
+        let narrow = |s: &str| s.chars().count() as f32 * 7.0;
+        let before = f.geometry(1000.0, 700.0).panel.h;
+        let mut wrapped = f.clone();
+        wrapped.fit(1000.0, 700.0, &narrow);
+        assert!(wrapped.body.len() > 1 && wrapped.body.iter().all(|l| narrow(l) <= 420.0), "{:?}", wrapped.body);
+        assert!(wrapped.geometry(1000.0, 700.0).panel.h > before, "the panel grows with the wrapped lines");
         let many: Vec<Holder> = (0..30).map(|i| h("p.exe", i)).collect();
         let text = Modal::holders("f.txt", &many).copy.unwrap();
         assert_eq!(text.lines().count(), 31, "the copy has every holder, not the shown ones");

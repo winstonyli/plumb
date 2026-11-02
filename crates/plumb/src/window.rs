@@ -898,6 +898,13 @@ impl Win {
         self.invalidate();
     }
 
+    /// Puts a modal up, its text wrapped to the panel by the real font.
+    pub(super) fn ask(&mut self, mut m: Modal) {
+        let (w, h) = (self.app.layout.w, self.app.layout.h);
+        m.fit(w, h, &|s| self.painter.text_width(&self.gfx, Role::Caption, s));
+        self.app.ask(m);
+    }
+
     fn selected_path(&self) -> Option<String> {
         let id = self.app.slot.model.as_ref()?.selected()?;
         self.app.menu_target(id).map(|t| t.1).filter(|p| !p.is_empty())
@@ -954,7 +961,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         Effect::End { pid, created, name } => {
             if let Err(why) = plumb_scan::procs::terminate(pid, created) {
                 with(|w| {
-                    w.app.ask(Modal::end_failed(pid, &name, &why));
+                    w.ask(Modal::end_failed(pid, &name, &why));
                     w.invalidate();
                 });
             }
@@ -1461,7 +1468,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let (view, permanent, out) = *unsafe { Box::from_raw(raw) };
                 // What failed and why, to retry only those.
                 if let Some((failed, total)) = w.finish_delete(view, out) {
-                    w.app.ask(Modal::failed(view, permanent, &failed, total));
+                    w.ask(Modal::failed(view, permanent, &failed, total));
                     w.invalidate();
                 }
             });
@@ -1474,7 +1481,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_HOLDERS => {
             let (path, found) = *unsafe { Box::from_raw(lp.0 as *mut (String, Vec<plumb_scan::holders::Holder>)) };
             with(|w| {
-                w.app.ask(Modal::holders(&path, &found));
+                w.ask(Modal::holders(&path, &found));
                 w.invalidate();
             });
             LRESULT(0)

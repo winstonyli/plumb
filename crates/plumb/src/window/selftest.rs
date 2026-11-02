@@ -643,7 +643,7 @@ pub fn selftest_processes() -> Result<String> {
         with(|w| {
             let target = node(w, vpid).and_then(|n| w.app.end_target(n));
             if let Some((pid, created, name)) = target {
-                w.app.ask(crate::modal::Modal::end(pid, created, &name));
+                w.ask(crate::modal::Modal::end(pid, created, &name));
             }
         });
         press(hwnd, crate::modal::Pick::Yes)?;

@@ -207,9 +207,34 @@ pub fn path_list(paths: &[String], max: usize) -> String {
     out
 }
 
+/// `text` broken into lines no wider than `max_w` (by `measure`), at spaces. A word wider than a line stands alone on one.
+pub fn wrap(text: &str, max_w: f32, measure: &dyn Fn(&str) -> f32) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        if let Some(last) = lines.last_mut() {
+            let joined = format!("{last} {word}");
+            if measure(&joined) <= max_w {
+                *last = joined;
+                continue;
+            }
+        }
+        lines.push(word.to_string());
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrap_breaks_at_spaces_to_the_width_and_keeps_a_long_word_whole() {
+        let w = |s: &str| s.chars().count() as f32;
+        assert_eq!(wrap("one two three four", 9.0, &w), ["one two", "three", "four"]);
+        assert_eq!(wrap("short", 40.0, &w), ["short"]);
+        assert_eq!(wrap("a supercalifragilistic b", 5.0, &w), ["a", "supercalifragilistic", "b"]);
+        assert!(wrap("  ", 5.0, &w).is_empty());
+    }
 
     #[test]
     fn a_path_list_shows_the_first_few_and_counts_the_rest() {
