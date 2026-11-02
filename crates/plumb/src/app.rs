@@ -782,13 +782,13 @@ impl App {
     }
 
     /// What the context menu of `id` acts on: the path in the tree's terms (to mark by) and as a file system path
-    /// (to reveal and copy). A process offers its executable; none when that is unknown.
+    /// (to reveal and copy). A process offers its executable; the path is empty when that is unknown (protected processes), and the menu then has no file actions.
     /// The last element is whether to offer "Who is using this": a file on a disk.
     pub fn menu_target(&self, id: NodeId) -> Option<(String, String, MarkState, bool)> {
         let tree = self.slot.tree.as_ref()?;
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx())?[2] as u32;
-            let path = self.slot.proc_info.get(&pid)?.path.clone()?;
+            let path = self.slot.proc_info.get(&pid).and_then(|i| i.path.clone()).unwrap_or_default();
             return Some((String::new(), path, self.mark_state(id), false));
         }
         let file = !tree.flags[id].contains(NodeFlags::DIR);
@@ -1710,7 +1710,7 @@ mod tests {
         let (mut a, id) = process_app();
         a.slot.model.as_mut().unwrap().select(id);
         assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
-        assert!(a.menu_target(id).is_none(), "no executable known: no menu");
+        assert_eq!(a.menu_target(id).map(|t| t.1), Some(String::new()), "no executable known: a menu with no path");
         a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0 })]), (1, 1));
         let (raw, path, mark, who) = a.menu_target(id).unwrap();
         assert!(!who, "a process has no holders to ask about");

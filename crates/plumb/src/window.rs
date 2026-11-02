@@ -900,7 +900,7 @@ impl Win {
 
     fn selected_path(&self) -> Option<String> {
         let id = self.app.slot.model.as_ref()?.selected()?;
-        self.app.menu_target(id).map(|t| t.1)
+        self.app.menu_target(id).map(|t| t.1).filter(|p| !p.is_empty())
     }
 }
 

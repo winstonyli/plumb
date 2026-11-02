@@ -18,16 +18,21 @@ pub(super) const CMD_END: usize = 6;
 pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: bool, end: Option<(u32, u64, String)>, at: (i32, i32)) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
-        let _ = AppendMenuW(menu, MF_STRING, CMD_REVEAL, w!("Reveal in Explorer"));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_COPY, w!("Copy path"));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_PROPS, w!("Properties"));
+        let files = !path.is_empty(); // a process whose executable is unknown has none
+        if files {
+            let _ = AppendMenuW(menu, MF_STRING, CMD_REVEAL, w!("Reveal in Explorer"));
+            let _ = AppendMenuW(menu, MF_STRING, CMD_COPY, w!("Copy path"));
+            let _ = AppendMenuW(menu, MF_STRING, CMD_PROPS, w!("Properties"));
+        }
         if who {
             let _ = AppendMenuW(menu, MF_STRING, CMD_WHO, w!("Who is using this"));
         }
         if end.is_some() {
             let _ = AppendMenuW(menu, MF_STRING, CMD_END, w!("End process"));
         }
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        if files || end.is_some() || who {
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        }
         match &mark {
             MarkState::Mark => {
                 let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Mark for deletion\tDel"));
