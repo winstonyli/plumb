@@ -44,7 +44,7 @@ pub(crate) fn image_path(pid: u32) -> Option<String> {
 /// Ends the process `pid` that was created at `created` (the FILETIME from its entry), with exit code 1. A pid is reused,
 /// so a process created at another time is left alone. The error is the reason, in words.
 pub fn terminate(pid: u32, created: u64) -> Result<(), String> {
-    let why = |e: windows::core::Error| if e.code().0 == 0x8007_0005_u32 as i32 { "access denied (a protected or elevated process; run plumb as administrator)".to_string() } else { e.message() };
+    let why = |e: windows::core::Error| if e.code().0 == 0x8007_0005_u32 as i32 { "access denied (protected or elevated process)".to_string() } else { e.message() };
     let h = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|e| if e.code().0 == 0x8007_0057_u32 as i32 { "it has already ended".to_string() } else { why(e) })?;
     let (mut c, mut x, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
     let started = unsafe { GetProcessTimes(h, &mut c, &mut x, &mut k, &mut u) }.map(|_| (c.dwHighDateTime as u64) << 32 | c.dwLowDateTime as u64);

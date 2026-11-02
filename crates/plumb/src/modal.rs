@@ -143,7 +143,8 @@ let mut m =         Self::new(Ask::Failed { view, permanent, paths }, heading, &
 
     /// Why the process `name` (pid `pid`) could not be ended.
     pub fn end_failed(pid: u32, name: &str, reason: &str) -> Self {
-        let mut m = Self::new(Ask::Info, format!("Could not end {name} (PID {pid})"), &[], vec![reason.to_string()], vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
+        let hint: &[&str] = if reason.starts_with("access denied") { &["Run plumb as administrator to end more processes."] } else { &[] };
+        let mut m = Self::new(Ask::Info, format!("Could not end {name} (PID {pid})"), hint, vec![reason.to_string()], vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
         m.copy = Some(format!("{name} (PID {pid}): {reason}"));
         m
     }
