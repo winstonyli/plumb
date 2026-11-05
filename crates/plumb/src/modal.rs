@@ -116,9 +116,8 @@ impl Modal {
         let body = [if failed.len() == 1 { "It stays marked. Retry tries it again." } else { "They stay marked. Retry tries them again." }];
         let reasons: Vec<String> = failed.iter().map(|(p, why)| format!("{p}: {why}")).collect();
         let paths = failed.iter().map(|f| f.0.clone()).collect();
-let mut m =         Self::new(Ask::Failed { view, permanent, paths }, heading, &body, lines(&reasons), vec![button(Pick::Retry, "Retry", true), button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", false)], 0, Pick::Close);
-        m.copy = Some(reasons.join("
-"));
+let mut m = Self::new(Ask::Failed { view, permanent, paths }, heading, &body, lines(&reasons), vec![button(Pick::Retry, "Retry", true), button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", false)], 0, Pick::Close);
+        m.copy = Some(reasons.join("\n"));
         m
     }
 
@@ -133,9 +132,7 @@ let mut m =         Self::new(Ask::Failed { view, permanent, paths }, heading, &
         if list.is_empty() {
             return Self::new(Ask::Info, heading, &[], Vec::new(), vec![button(Pick::Close, "Close", true)], 0, Pick::Close);
         }
-        let text = format!("{path}
-{}", list.join("
-"));
+        let text = format!("{path}\n{}", list.join("\n"));
         let mut m = Self::new(Ask::Info, heading, &[], lines(&list), vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
         m.copy = Some(text);
         m
@@ -262,9 +259,7 @@ mod tests {
         let h = |name: &str, pid| Holder { pid, name: name.into() };
         let m = Modal::holders("f.txt", &[h("x.exe", 7), h("y.exe", 8)]);
         assert_eq!(m.ask, Ask::Info);
-        assert_eq!(m.copy.as_deref(), Some("f.txt
-7  x.exe
-8  y.exe"));
+        assert_eq!(m.copy.as_deref(), Some("f.txt\n7  x.exe\n8  y.exe"));
         assert_eq!(m.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Copy, Pick::Close]);
         assert_eq!((m.buttons[m.focus].pick, m.cancel), (Pick::Close, Pick::Close), "Enter and Esc still close");
         let none = Modal::holders("f.txt", &[]);

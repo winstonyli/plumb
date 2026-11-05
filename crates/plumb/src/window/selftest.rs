@@ -737,11 +737,19 @@ pub fn selftest_processes() -> Result<String> {
         // hidden, so nothing is painted: this is the poll, the reconcile and the row refresh).
         let idle = match std::env::var("PLUMB_PROCS_SECS").ok().and_then(|v| v.parse::<u64>().ok()) {
             Some(n) => {
-                let (cpu0, t0) = (process_cpu(), Instant::now());
-                let until = t0 + Duration::from_secs(n);
-                wait("the idle period", n + 5, &|_| Instant::now() >= until)?;
-                let (cpu, wall) = (process_cpu() - cpu0, t0.elapsed());
-                format!("; idle on the view for {:.0} s: {:.1} ms CPU ({:.2} % of one core)", wall.as_secs_f64(), cpu.as_secs_f64() * 1e3, 100.0 * cpu.as_secs_f64() / wall.as_secs_f64())
+                // Once as the foreground window (1 s poll), once deactivated (2 s poll).
+                let mut out = String::new();
+                for (name, inactive) in [("foreground", false), ("background", true)] {
+                    let state = if inactive { WA_INACTIVE } else { WA_ACTIVE };
+                    unsafe { SendMessageW(hwnd, WM_ACTIVATE, Some(WPARAM(state as usize)), Some(LPARAM(0))) };
+                    let (cpu0, t0, up0) = (process_cpu(), Instant::now(), with(|w| w.run.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0));
+                    let until = t0 + Duration::from_secs(n);
+                    wait("the idle period", n + 5, &|_| Instant::now() >= until)?;
+                    let (cpu, wall) = (process_cpu() - cpu0, t0.elapsed());
+                    let snaps = with(|w| w.run.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0) - up0;
+                    out += &format!("; {name} for {:.0} s: {snaps} snapshots, {:.1} ms CPU ({:.2} % of one core)", wall.as_secs_f64(), cpu.as_secs_f64() * 1e3, 100.0 * cpu.as_secs_f64() / wall.as_secs_f64());
+                }
+                out
             }
             None => String::new(),
         };
