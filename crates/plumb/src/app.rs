@@ -129,6 +129,23 @@ pub struct ProcInfo {
     pub created: u64,
     /// Open handles when last seen; a change suggests the files held changed.
     pub handles: u32,
+    /// Every thread is suspended.
+    pub suspended: bool,
+}
+
+/// What a row's context menu offers (`App::row_menu`).
+pub struct RowMenu {
+    /// The path in the tree's terms, to mark by.
+    pub raw: String,
+    /// The file system path, to reveal and copy; empty when unknown.
+    pub path: String,
+    pub mark: MarkState,
+    /// Whether to offer "Who is using this".
+    pub who: bool,
+    /// The processes End process (the first) and End process tree (all) act on.
+    pub end: Option<Vec<Victim>>,
+    /// The process Suspend or Resume acts on, and whether it is suspended now.
+    pub pause: Option<(Victim, bool)>,
 }
 
 /// The map class of a process by where its executable is: the Windows folder, Program Files, a user profile, or
@@ -752,6 +769,9 @@ impl App {
                 out.push('\n');
                 out.push_str(path);
             }
+            if info.suspended {
+                out.push_str("\nsuspended");
+            }
             if info.created > 0 {
                 let (day, now) = (fmt::local_day(info.created), fmt::local_day(now_filetime()));
                 let _ = write!(out, "\nstarted {}, {}", fmt::date(day), fmt::age(now, day));
@@ -800,14 +820,7 @@ impl App {
     /// (pids 0 and 4). A process missing from the last snapshot (no creation time) is left out.
     pub fn end_targets(&self, id: NodeId) -> Option<Vec<Victim>> {
         let tree = self.slot.tree.as_ref()?;
-        if self.kind() != ViewKind::Processes {
-            return None;
-        }
-        let victim = |n: NodeId| -> Option<Victim> {
-            let pid = tree.aux.get(n.idx())?[2] as u32;
-            let created = self.slot.proc_info.get(&pid)?.created;
-            (pid > 4).then(|| Victim { pid, created, name: fmt::node_name(tree, n).to_string() })
-        };
+        let victim = |n: NodeId| self.process_at(n);
         let first = victim(id)?;
         let mut out = vec![first];
         let mut stack: Vec<NodeId> = tree.children(id).collect();
@@ -819,6 +832,33 @@ impl App {
             stack[before..].reverse();
         }
         Some(out)
+    }
+
+    /// Everything the context menu of `id` offers.
+    pub fn row_menu(&self, id: NodeId) -> Option<RowMenu> {
+        let (raw, path, mark, who) = self.menu_target(id)?;
+        Some(RowMenu { raw, path, mark, who, end: self.end_targets(id), pause: self.pause_target(id) })
+    }
+
+    /// The process a Processes row stands for, as the pid and creation time that identify it. `None` outside the
+    /// Processes view, for the Idle and System processes (pids 0 and 4), and for a process missing from the last
+    /// snapshot (no creation time).
+    fn process_at(&self, n: NodeId) -> Option<Victim> {
+        let tree = self.slot.tree.as_ref()?;
+        if self.kind() != ViewKind::Processes {
+            return None;
+        }
+        let pid = tree.aux.get(n.idx())?[2] as u32;
+        let created = self.slot.proc_info.get(&pid)?.created;
+        (pid > 4).then(|| Victim { pid, created, name: fmt::node_name(tree, n).to_string() })
+    }
+
+    /// What "Suspend process" or "Resume process" in the context menu of `id` acts on, and whether it is suspended now
+    /// (so the menu offers Resume).
+    pub fn pause_target(&self, id: NodeId) -> Option<(Victim, bool)> {
+        let v = self.process_at(id)?;
+        let suspended = self.slot.proc_info.get(&v.pid)?.suspended;
+        Some((v, suspended))
     }
 
     /// The tooltip text under (x, y), written to `out`; false (with `out` empty) for none.
@@ -1573,7 +1613,7 @@ mod tests {
 
     /// One Processes snapshot as `set_procs` sees it: pid 77 with `handles` open handles.
     fn snapshot_with(a: &mut App, handles: u32) {
-        let info = HashMap::from([(77u32, ProcInfo { path: None, created: 5, handles })]);
+        let info = HashMap::from([(77u32, ProcInfo { path: None, created: 5, handles, suspended: false })]);
         a.set_procs(2, info, (16 << 30, 4 << 30));
     }
 
@@ -1725,7 +1765,7 @@ mod tests {
         a.slot.model.as_mut().unwrap().select(id);
         assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
         assert_eq!(a.menu_target(id).map(|t| t.1), Some(String::new()), "no executable known: a menu with no path");
-        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0 })]), (1, 1));
+        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0, suspended: false })]), (1, 1));
         let (raw, path, mark, who) = a.menu_target(id).unwrap();
         assert!(!who, "a process has no holders to ask about");
         assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));
@@ -1733,11 +1773,24 @@ mod tests {
     }
 
     #[test]
+    fn suspend_is_offered_for_a_process_and_resume_once_every_thread_of_it_is_suspended() {
+        let (mut a, id) = process_app();
+        assert!(a.pause_target(id).is_none(), "not in the snapshot yet: no creation time to act by");
+        let info = |suspended| HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0, suspended })]);
+        a.set_procs(2, info(false), (1, 1));
+        assert_eq!(a.pause_target(id), Some((Victim { pid: 77, created: 5, name: "ping.exe".into() }, false)));
+        a.set_procs(2, info(true), (1, 1));
+        assert!(a.pause_target(id).is_some_and(|t| t.1), "Resume is offered");
+        let root = a.slot.model.as_ref().unwrap().rows()[0].id;
+        assert!(a.pause_target(root).is_none(), "the root is pid 0");
+    }
+
+    #[test]
     fn end_process_is_offered_for_a_process_and_asks_before_it_acts() {
         let (mut a, id) = process_app();
         let v = |pid, name: &str| Victim { pid, created: 5, name: name.into() };
         assert!(a.end_targets(id).is_none(), "the process is not in the snapshot yet: no creation time to end it by");
-        a.set_procs(2, HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0 })]), (1, 1));
+        a.set_procs(2, HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0, suspended: false })]), (1, 1));
         assert_eq!(a.end_targets(id), Some(vec![v(77, "ping.exe")]));
         let root = a.slot.model.as_ref().unwrap().rows()[0].id;
         assert!(a.end_targets(root).is_none(), "the root is pid 0");
@@ -1759,7 +1812,7 @@ mod tests {
         procs.apply(&mut tree, &[s(77, 1, "a.exe"), s(78, 77, "b.exe"), s(79, 78, "c.exe"), s(80, 77, "d.exe"), s(90, 1, "other.exe")], 0);
         let top = tree.find(r"Processes\a.exe").expect("the top process");
         a.finish_scan(tree, "x".into());
-        let info = |pids: &[u32]| pids.iter().map(|&p| (p, ProcInfo { path: None, created: 5, handles: 0 })).collect::<HashMap<_, _>>();
+        let info = |pids: &[u32]| pids.iter().map(|&p| (p, ProcInfo { path: None, created: 5, handles: 0, suspended: false })).collect::<HashMap<_, _>>();
         a.set_procs(2, info(&[77, 78, 79, 80, 90]), (1, 1));
         let pids = |a: &App| a.end_targets(top).unwrap().iter().map(|v| v.pid).collect::<Vec<_>>();
         let all = pids(&a);

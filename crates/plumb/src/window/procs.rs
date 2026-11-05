@@ -154,7 +154,7 @@ impl ProcState {
             .iter()
             .map(|e| Sample { pid: e.pid, parent: e.parent, created: e.created, name: e.name.clone(), memory: e.working_set, private: e.private_bytes, cpu_100ns: e.cpu_100ns, io_bytes: e.io_bytes })
             .collect();
-        let info = entries.into_iter().map(|e| (e.pid, ProcInfo { path: e.path, created: e.created, handles: e.handles })).collect();
+        let info = entries.into_iter().map(|e| (e.pid, ProcInfo { path: e.path, created: e.created, handles: e.handles, suspended: e.suspended })).collect();
         let label = |app: &App| app.views.get(view).map(|d| crate::fmt::size(d.free).to_string());
         let before = label(app);
         app.set_procs(view, info, ram);

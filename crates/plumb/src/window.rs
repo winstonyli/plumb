@@ -1,6 +1,6 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
-use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, Slot, TipKey, ViewKind};
+use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, RowMenu, Slot, TipKey, ViewKind};
 use crate::modal::Modal;
 use crate::trash;
 use crate::draw::{Mark, Painter, Role};
@@ -998,9 +998,8 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             }
         }
         Effect::Menu(id) => {
-            let info = with(|w| w.app.menu_target(id).map(|t| (t, w.app.end_targets(id)))).flatten();
-            if let Some(((raw, p, mark, who), end)) = info {
-                context_menu(hwnd, raw, p, mark, who, end, at);
+            if let Some(menu) = with(|w| w.app.row_menu(id)).flatten() {
+                context_menu(hwnd, menu, at);
             }
         }
     }

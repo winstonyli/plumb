@@ -1,10 +1,19 @@
 //! A snapshot of the running processes: `NtQuerySystemInformation(SystemProcessInformation)`, parsed by x64 offset.
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, FILETIME};
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE};
+use windows::Win32::System::Threading::{
+    GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
+};
 
 const SYSTEM_PROCESS_INFORMATION: u32 = 5;
+/// Where a process's threads start in its entry, and the size of each: `SYSTEM_PROCESS_INFORMATION` and
+/// `SYSTEM_THREAD_INFORMATION` on x64.
+const THREADS_AT: usize = 256;
+const THREAD_LEN: usize = 80;
+/// `ThreadState` Waiting and `WaitReason` Suspended: how a suspended thread reads (the Task Manager's test).
+const WAITING: u32 = 5;
+const SUSPENDED: u32 = 5;
 
 #[derive(Debug, Clone)]
 pub struct ProcEntry {
@@ -21,6 +30,8 @@ pub struct ProcEntry {
     pub io_bytes: u64,
     /// Open handles of all kinds (`HandleCount`, byte offset 96); a cheap sign that the files held may have changed.
     pub handles: u32,
+    /// Every thread is suspended (and there is at least one).
+    pub suspended: bool,
     /// `None` when the process cannot be opened (another user's, protected).
     pub path: Option<String>,
 }
@@ -41,20 +52,38 @@ pub(crate) fn image_path(pid: u32) -> Option<String> {
     ok.then(|| String::from_utf16_lossy(&buf[..n as usize]))
 }
 
-/// Ends the process `pid` that was created at `created` (the FILETIME from its entry), with exit code 1. A pid is reused,
-/// so a process created at another time is left alone. The error is the reason, in words.
-pub fn terminate(pid: u32, created: u64) -> Result<(), String> {
-    let why = |e: windows::core::Error| if e.code().0 == 0x8007_0005_u32 as i32 { "access denied (protected or elevated process)".to_string() } else { e.message() };
-    let h = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|e| if e.code().0 == 0x8007_0057_u32 as i32 { "it has already ended".to_string() } else { why(e) })?;
+const ACCESS_DENIED: &str = "access denied (protected or elevated process)";
+
+fn why(e: windows::core::Error) -> String {
+    if e.code().0 == 0x8007_0005_u32 as i32 { ACCESS_DENIED.to_string() } else { e.message() }
+}
+
+/// Runs `act` on the process `pid` opened with `access`, if it was created at `created` (the FILETIME from its entry). A
+/// pid is reused, so a process created at another time is left alone. The error is the reason, in words.
+fn with_process(pid: u32, created: u64, access: PROCESS_ACCESS_RIGHTS, act: impl FnOnce(HANDLE) -> Result<(), String>) -> Result<(), String> {
+    let h = unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|e| if e.code().0 == 0x8007_0057_u32 as i32 { "it has already ended".to_string() } else { why(e) })?;
     let (mut c, mut x, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
     let started = unsafe { GetProcessTimes(h, &mut c, &mut x, &mut k, &mut u) }.map(|_| (c.dwHighDateTime as u64) << 32 | c.dwLowDateTime as u64);
     let out = match started {
-        Ok(t) if t == created => unsafe { TerminateProcess(h, 1) }.map_err(why),
+        Ok(t) if t == created => act(h),
         Ok(_) => Err("the pid now belongs to a different process".to_string()),
         Err(e) => Err(why(e)),
     };
     let _ = unsafe { CloseHandle(h) };
     out
+}
+
+/// Ends the process `pid` created at `created`, with exit code 1.
+pub fn terminate(pid: u32, created: u64) -> Result<(), String> {
+    with_process(pid, created, PROCESS_TERMINATE, |h| unsafe { TerminateProcess(h, 1) }.map_err(why))
+}
+
+/// Suspends the process `pid` created at `created` (or, with `resume`, resumes it). The system counts suspensions, so a
+/// process suspended twice needs two resumes.
+pub fn pause(pid: u32, created: u64, resume: bool) -> Result<(), String> {
+    with_process(pid, created, PROCESS_SUSPEND_RESUME, |h| {
+        crate::nt::pause_process(h, resume).map_err(|s| if s == 0xC000_0022_u32 as i32 { ACCESS_DENIED.to_string() } else { format!("the system refused (status {s:#010x})") })
+    })
 }
 
 /// Takes snapshots, remembering each process's path (and that it could not be had) so the lookup, which opens
@@ -101,6 +130,9 @@ fn read() -> Result<Vec<ProcEntry>, ProcError> {
             // The name lives in the same buffer, after the entries.
             String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(name_ptr, len / 2) })
         };
+        let threads = u32::from_le_bytes(e[4..8].try_into().unwrap()) as usize;
+        let thread_u32 = |i: usize, off: usize| u32::from_le_bytes(e[THREADS_AT + i * THREAD_LEN + off..][..4].try_into().unwrap());
+        let suspended = threads > 0 && (0..threads).all(|i| thread_u32(i, 68) == WAITING && thread_u32(i, 72) == SUSPENDED);
         out.push(ProcEntry {
             pid,
             parent: u64_at(e, 88) as u32,
@@ -111,6 +143,7 @@ fn read() -> Result<Vec<ProcEntry>, ProcError> {
             cpu_100ns: u64_at(e, 40) + u64_at(e, 48),
             io_bytes: u64_at(e, 232) + u64_at(e, 240) + u64_at(e, 248),
             handles: u32::from_le_bytes(e[96..100].try_into().unwrap()),
+            suspended,
             path: None,
         });
         let next = u32::from_le_bytes(e[0..4].try_into().unwrap()) as usize;
@@ -145,6 +178,25 @@ mod tests {
         terminate(child.id(), created).unwrap();
         assert_eq!(child.wait().unwrap().code(), Some(1));
         assert!(terminate(child.id(), created).is_err(), "an ended process cannot be ended again");
+    }
+
+    #[test]
+    fn a_suspended_process_reads_as_suspended_until_it_is_resumed_and_a_stale_pid_is_refused() {
+        let mut child = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let state = || snapshot().unwrap().into_iter().find(|p| p.pid == child.id()).expect("child listed");
+        let created = state().created;
+        assert!(!state().suspended, "a running process is not suspended");
+        assert!(pause(child.id(), created + 1, false).unwrap_err().contains("different process"));
+        pause(child.id(), created, false).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state().suspended && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(state().suspended, "every thread waits as suspended");
+        pause(child.id(), created, true).unwrap();
+        assert!(!state().suspended, "resumed");
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]

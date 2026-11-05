@@ -172,6 +172,14 @@ let mut m = Self::new(Ask::Failed { view, permanent, paths }, heading, &body, li
         m
     }
 
+    /// Why `victim` could not be suspended (or, with `resume`, resumed).
+    pub fn pause_failed(victim: &Victim, why: &str, resume: bool) -> Self {
+        let hint = if why.starts_with("access denied") { " Run plumb as administrator to reach more processes." } else { "" };
+        let verb = if resume { "resume" } else { "suspend" };
+        let buttons = vec![button(Pick::Close, "Close", true)];
+        Self::new(Ask::Info, format!("Could not {verb} {} (PID {})", victim.name, victim.pid), &[&sentence(why, hint)], Vec::new(), buttons, 0, Pick::Close)
+    }
+
     /// Wraps each body line to the panel, `measure` giving a text's width in DIPs. Done once, when the modal is put up, so
     /// that `geometry` stays a pure function of the lines.
     pub fn fit(&mut self, w: f32, h: f32, measure: &dyn Fn(&str) -> f32) {

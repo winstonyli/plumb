@@ -29,7 +29,21 @@ pub fn query(class: u32, initial: usize) -> Result<Vec<u64>, i32> {
     }
 }
 
-type NtQueryProcess = unsafe extern "system" fn(HANDLE, u32, *mut c_void, u32, *mut u32) -> i32;
+type NtPause = unsafe extern "system" fn(HANDLE) -> i32;
+
+/// Suspends every thread of `process` (or, with `resume`, undoes one suspension: the system keeps a count). `Err`
+/// carries the NTSTATUS (0 when ntdll has no such function).
+pub fn pause_process(process: HANDLE, resume: bool) -> Result<(), i32> {
+    let nt: NtPause = unsafe {
+        let ntdll = GetModuleHandleA(s!("ntdll.dll")).map_err(|e| e.code().0)?;
+        let name = if resume { s!("NtResumeProcess") } else { s!("NtSuspendProcess") };
+        std::mem::transmute(GetProcAddress(ntdll, name).ok_or(0)?)
+    };
+    let status = unsafe { nt(process) };
+    if status < 0 { Err(status) } else { Ok(()) }
+}
+
+type NtQueryProcess =unsafe extern "system" fn(HANDLE, u32, *mut c_void, u32, *mut u32) -> i32;
 
 /// The information of `class` about `process`, in a buffer of 8-byte words, grown as `query` does; `Err` carries the
 /// NTSTATUS (0 when ntdll has no such function).
