@@ -32,10 +32,18 @@ pub enum Ask {
     Failed { view: usize, permanent: bool, paths: Vec<String> },
     /// Only to be read: which programs hold a file open, why a process could not be ended.
     Info,
-    /// End this process (by pid and creation time, which together identify it).
-    End { pid: u32, created: u64, name: String },
+    /// End these processes, in this order.
+    End(Vec<Victim>),
     /// A delete is still running and the window is being closed.
     Close,
+}
+
+/// A process to end: the pid and creation time (FILETIME) together identify it, since pids are reused.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Victim {
+    pub pid: u32,
+    pub created: u64,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -138,17 +146,29 @@ let mut m = Self::new(Ask::Failed { view, permanent, paths }, heading, &body, li
         m
     }
 
-    /// Ending the process `name` (pid `pid`, created at FILETIME `created`); Cancel is the default.
-    pub fn end(pid: u32, created: u64, name: &str) -> Self {
-        let buttons = vec![button(Pick::Yes, "End process", false), button(Pick::No, "Cancel", true)];
-        Self::new(Ask::End { pid, created, name: name.to_string() }, format!("End {name} (PID {pid})?"), &["It stops at once, and anything unsaved in it is lost."], Vec::new(), buttons, 1, Pick::No)
+    /// Ending `victims` (one process, or a process and its descendants); Cancel is the default.
+    pub fn end(victims: Vec<Victim>) -> Self {
+        let n = victims.len();
+        let (heading, body, label) = match victims.first() {
+            Some(v) if n == 1 => (format!("End {} (PID {})?", v.name, v.pid), "It stops at once, and anything unsaved in it is lost.", "End process"),
+            _ => (format!("End {n} processes?"), "They stop at once, and anything unsaved in them is lost.", "End all"),
+        };
+        let detail = if n > 1 { lines(&victims.iter().map(|v| format!("{}  (PID {})", v.name, v.pid)).collect::<Vec<_>>()) } else { Vec::new() };
+        let buttons = vec![button(Pick::Yes, label, false), button(Pick::No, "Cancel", true)];
+        Self::new(Ask::End(victims), heading, &[body], detail, buttons, 1, Pick::No)
     }
 
-    /// Why the process `name` (pid `pid`) could not be ended.
-    pub fn end_failed(pid: u32, name: &str, reason: &str) -> Self {
-        let hint = if reason.starts_with("access denied") { " Run plumb as administrator to end more processes." } else { "" };
-        let mut m = Self::new(Ask::Info, format!("Could not end {name} (PID {pid})"), &[&sentence(reason, hint)], Vec::new(), vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)], 1, Pick::Close);
-        m.copy = Some(format!("{name} (PID {pid}): {reason}"));
+    /// Why these processes could not be ended: each with its reason.
+    pub fn end_failed(failed: &[(Victim, String)]) -> Self {
+        let hint = if failed.iter().any(|(_, why)| why.starts_with("access denied")) { " Run plumb as administrator to end more processes." } else { "" };
+        let each: Vec<String> = failed.iter().map(|(v, why)| format!("{} (PID {}): {why}", v.name, v.pid)).collect();
+        let buttons = vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)];
+        let mut m = match failed {
+            [(v, why)] => Self::new(Ask::Info, format!("Could not end {} (PID {})", v.name, v.pid), &[&sentence(why, hint)], Vec::new(), buttons, 1, Pick::Close),
+            _ => Self::new(Ask::Info, format!("{} processes not ended", failed.len()), &[hint.trim()], lines(&each), buttons, 1, Pick::Close),
+        };
+        m.body.retain(|l| !l.is_empty());
+        m.copy = Some(each.join("\n"));
         m
     }
 
@@ -264,9 +284,16 @@ mod tests {
         assert_eq!((m.buttons[m.focus].pick, m.cancel), (Pick::Close, Pick::Close), "Enter and Esc still close");
         let none = Modal::holders("f.txt", &[]);
         assert_eq!(none.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Close], "nothing to copy");
-        let f = Modal::end_failed(7, "x.exe", "access denied (protected or elevated process)");
+        let v = |pid, name: &str| Victim { pid, created: 5, name: name.into() };
+        let f = Modal::end_failed(&[(v(7, "x.exe"), "access denied (protected or elevated process)".into())]);
         assert_eq!(f.body, ["Access denied (protected or elevated process). Run plumb as administrator to end more processes."]);
         assert_eq!(f.copy.as_deref(), Some("x.exe (PID 7): access denied (protected or elevated process)"), "the copy is the raw reason");
+        let two = Modal::end_failed(&[(v(7, "x.exe"), "access denied (protected or elevated process)".into()), (v(8, "y.exe"), "it has already ended".into())]);
+        assert_eq!((two.heading.as_str(), two.detail.len()), ("2 processes not ended", 2));
+        assert_eq!(two.detail[1], "y.exe (PID 8): it has already ended");
+        let (one, many) = (Modal::end(vec![v(7, "x.exe")]), Modal::end(vec![v(7, "x.exe"), v(8, "y.exe")]));
+        assert_eq!((one.buttons[0].label, one.detail.len()), ("End process", 0));
+        assert_eq!((many.heading.as_str(), many.buttons[0].label, many.detail.len()), ("End 2 processes?", "End all", 2));
         let narrow = |s: &str| s.chars().count() as f32 * 7.0;
         let before = f.geometry(1000.0, 700.0).panel.h;
         let mut wrapped = f.clone();

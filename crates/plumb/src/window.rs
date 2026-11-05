@@ -958,10 +958,11 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
     match e {
         Effect::None => {}
         Effect::Copy(text) => copy_to_clipboard(hwnd, &text),
-        Effect::End { pid, created, name } => {
-            if let Err(why) = plumb_scan::procs::terminate(pid, created) {
+        Effect::End(victims) => {
+            let failed: Vec<_> = victims.iter().filter_map(|v| plumb_scan::procs::terminate(v.pid, v.created).err().map(|why| (v.clone(), why))).collect();
+            if !failed.is_empty() {
                 with(|w| {
-                    w.ask(Modal::end_failed(pid, &name, &why));
+                    w.ask(Modal::end_failed(&failed));
                     w.invalidate();
                 });
             }
@@ -997,7 +998,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             }
         }
         Effect::Menu(id) => {
-            let info = with(|w| w.app.menu_target(id).map(|t| (t, w.app.end_target(id)))).flatten();
+            let info = with(|w| w.app.menu_target(id).map(|t| (t, w.app.end_targets(id)))).flatten();
             if let Some(((raw, p, mark, who), end)) = info {
                 context_menu(hwnd, raw, p, mark, who, end, at);
             }

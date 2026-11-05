@@ -11,7 +11,7 @@ use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
 use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
-use crate::modal::{Ask, Modal, Pick};
+use crate::modal::{Ask, Modal, Pick, Victim};
 use crate::restore::Snapshot;
 use crate::state::{MapState, Sort, State};
 use plumb_core::basket::{self, Basket};
@@ -236,7 +236,7 @@ pub enum Effect {
     /// Put this text on the clipboard.
     Copy(String),
     /// End this process (a modal was answered Yes); `name` is for the failure message.
-    End { pid: u32, created: u64, name: String },
+    End(Vec<Victim>),
     /// The Processes view's map now weighs by this (the tree's sizes must be rewritten).
     Metric(Metric),
 }
@@ -795,16 +795,30 @@ impl App {
         Some((tree.path(id), fmt::node_path(tree, id).to_string(), self.mark_state(id), file))
     }
 
-    /// What "End process" in the context menu of `id` ends: pid, creation time and name. Only in the Processes view, and
-    /// not for the Idle and System processes (pids 0 and 4).
-    pub fn end_target(&self, id: NodeId) -> Option<(u32, u64, String)> {
+    /// What "End process" in the context menu of `id` ends: the process first, then its descendants top-down, each with
+    /// the pid and creation time that identify it. Only in the Processes view, and not for the Idle and System processes
+    /// (pids 0 and 4). A process missing from the last snapshot (no creation time) is left out.
+    pub fn end_targets(&self, id: NodeId) -> Option<Vec<Victim>> {
         let tree = self.slot.tree.as_ref()?;
         if self.kind() != ViewKind::Processes {
             return None;
         }
-        let pid = tree.aux.get(id.idx())?[2] as u32;
-        let created = self.slot.proc_info.get(&pid)?.created;
-        (pid > 4).then(|| (pid, created, fmt::node_name(tree, id).to_string()))
+        let victim = |n: NodeId| -> Option<Victim> {
+            let pid = tree.aux.get(n.idx())?[2] as u32;
+            let created = self.slot.proc_info.get(&pid)?.created;
+            (pid > 4).then(|| Victim { pid, created, name: fmt::node_name(tree, n).to_string() })
+        };
+        let first = victim(id)?;
+        let mut out = vec![first];
+        let mut stack: Vec<NodeId> = tree.children(id).collect();
+        stack.reverse();
+        while let Some(n) = stack.pop() {
+            out.extend(victim(n));
+            let before = stack.len();
+            stack.extend(tree.children(n));
+            stack[before..].reverse();
+        }
+        Some(out)
     }
 
     /// The tooltip text under (x, y), written to `out`; false (with `out` empty) for none.
@@ -871,7 +885,7 @@ impl App {
             }
             (Ask::Permanent(r), Pick::Yes) => Effect::Delete { view: r.view, paths: r.paths, permanent: true },
             (Ask::Failed { view, permanent, paths }, Pick::Retry) => Effect::Delete { view, paths, permanent },
-            (Ask::End { pid, created, name }, Pick::Yes) => Effect::End { pid, created, name },
+            (Ask::End(victims), Pick::Yes) => Effect::End(victims),
             (Ask::Close, Pick::Yes) => Effect::Quit,
             _ => Effect::None,
         }
@@ -1721,16 +1735,43 @@ mod tests {
     #[test]
     fn end_process_is_offered_for_a_process_and_asks_before_it_acts() {
         let (mut a, id) = process_app();
-        assert!(a.end_target(id).is_none(), "the process is not in the snapshot yet: no creation time to end it by");
+        let v = |pid, name: &str| Victim { pid, created: 5, name: name.into() };
+        assert!(a.end_targets(id).is_none(), "the process is not in the snapshot yet: no creation time to end it by");
         a.set_procs(2, HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0 })]), (1, 1));
-        assert_eq!(a.end_target(id), Some((77, 5, "ping.exe".to_string())));
+        assert_eq!(a.end_targets(id), Some(vec![v(77, "ping.exe")]));
         let root = a.slot.model.as_ref().unwrap().rows()[0].id;
-        assert!(a.end_target(root).is_none(), "the root is pid 0");
-        a.ask(Modal::end(77, 5, "ping.exe"));
+        assert!(a.end_targets(root).is_none(), "the root is pid 0");
+        a.ask(Modal::end(vec![v(77, "ping.exe")]));
         assert_eq!(a.answer(Pick::No), Effect::None);
-        a.ask(Modal::end(77, 5, "ping.exe"));
-        assert_eq!(a.answer(Pick::Yes), Effect::End { pid: 77, created: 5, name: "ping.exe".into() });
+        a.ask(Modal::end(vec![v(77, "ping.exe")]));
+        assert_eq!(a.answer(Pick::Yes), Effect::End(vec![v(77, "ping.exe")]));
         assert!(a.modal().is_none());
+    }
+
+    #[test]
+    fn end_process_tree_lists_the_process_then_its_descendants_top_down() {
+        use plumb_core::procs::{Metric, Procs, Sample};
+        let mut a = app();
+        a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
+        a.begin_scan(2);
+        let (mut procs, mut tree) = Procs::new(Metric::Memory);
+        let s = |pid, parent, name: &str| Sample { pid, parent, created: 5, name: name.into(), memory: 4096, private: 2048, cpu_100ns: 0, io_bytes: 0 };
+        procs.apply(&mut tree, &[s(77, 1, "a.exe"), s(78, 77, "b.exe"), s(79, 78, "c.exe"), s(80, 77, "d.exe"), s(90, 1, "other.exe")], 0);
+        let top = tree.find(r"Processes\a.exe").expect("the top process");
+        a.finish_scan(tree, "x".into());
+        let info = |pids: &[u32]| pids.iter().map(|&p| (p, ProcInfo { path: None, created: 5, handles: 0 })).collect::<HashMap<_, _>>();
+        a.set_procs(2, info(&[77, 78, 79, 80, 90]), (1, 1));
+        let pids = |a: &App| a.end_targets(top).unwrap().iter().map(|v| v.pid).collect::<Vec<_>>();
+        let all = pids(&a);
+        assert_eq!(all[0], 77, "the process first");
+        let at = |p: u32| all.iter().position(|&x| x == p).unwrap();
+        assert!(at(78) < at(79), "a child before its own child");
+        assert_eq!(all.len(), 4);
+        assert!(!all.contains(&90), "not another top-level process");
+        a.set_procs(2, info(&[77, 78, 80, 90]), (1, 1));
+        let mut left_out = pids(&a);
+        left_out.sort();
+        assert_eq!(left_out, [77, 78, 80], "a descendant missing from the snapshot is left out");
     }
 
     #[test]

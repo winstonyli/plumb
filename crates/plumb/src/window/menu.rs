@@ -1,5 +1,6 @@
 //! The row context menu and the shell actions behind it (reveal, properties, copy).
 use super::*;
+use crate::modal::Victim;
 
 pub(super) const CMD_REVEAL: usize = 1;
 
@@ -13,9 +14,11 @@ pub(super) const CMD_MARK: usize = 4;
 
 pub(super) const CMD_END: usize = 6;
 
+pub(super) const CMD_END_TREE: usize = 7;
+
 /// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
 /// because `TrackPopupMenu` runs its own message loop.
-pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: bool, end: Option<(u32, u64, String)>, at: (i32, i32)) {
+pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkState, who: bool, end: Option<Vec<Victim>>, at: (i32, i32)) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let files = !path.is_empty(); // a process whose executable is unknown has none
@@ -27,8 +30,12 @@ pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkStat
         if who {
             let _ = AppendMenuW(menu, MF_STRING, CMD_WHO, w!("Who is using this"));
         }
-        if end.is_some() {
+        if let Some(list) = &end {
             let _ = AppendMenuW(menu, MF_STRING, CMD_END, w!("End process"));
+            if list.len() > 1 {
+                let text = wide(&format!("End process tree ({})", list.len()));
+                let _ = AppendMenuW(menu, MF_STRING, CMD_END_TREE, PCWSTR(text.as_ptr()));
+            }
         }
         if files || end.is_some() || who {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -64,10 +71,13 @@ pub(super) fn context_menu(hwnd: HWND, raw: String, path: String, mark: MarkStat
                     }
                 });
             }
-            CMD_END => {
-                if let Some((pid, created, name)) = end {
+            CMD_END | CMD_END_TREE => {
+                if let Some(mut list) = end {
+                    if cmd.0 as usize == CMD_END {
+                        list.truncate(1);
+                    }
                     with(|w| {
-                        w.ask(Modal::end(pid, created, &name));
+                        w.ask(Modal::end(list));
                         w.invalidate();
                     });
                 }

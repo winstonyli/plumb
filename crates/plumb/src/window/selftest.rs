@@ -639,11 +639,10 @@ pub fn selftest_processes() -> Result<String> {
         // End process: the confirmation is answered with a real click, and the process goes.
         let mut victim = std::process::Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().map_err(|e| fail(e.to_string()))?;
         let vpid = victim.id();
-        wait("the victim listed with its creation time", 10, &|w| node(w, vpid).is_some_and(|n| w.app.end_target(n).is_some()))?;
+        wait("the victim listed with its creation time", 10, &|w| node(w, vpid).is_some_and(|n| w.app.end_targets(n).is_some()))?;
         with(|w| {
-            let target = node(w, vpid).and_then(|n| w.app.end_target(n));
-            if let Some((pid, created, name)) = target {
-                w.ask(crate::modal::Modal::end(pid, created, &name));
+            if let Some(list) = node(w, vpid).and_then(|n| w.app.end_targets(n)) {
+                w.ask(crate::modal::Modal::end(list));
             }
         });
         press(hwnd, crate::modal::Pick::Yes)?;
@@ -652,6 +651,20 @@ pub fn selftest_processes() -> Result<String> {
         if code != Some(1) {
             return Err(fail(format!("the ended process exited with {code:?}")));
         }
+        // End process tree: a shell and the program it runs go together, shell first.
+        let mut shell = std::process::Command::new("cmd").args(["/c", "ping -n 60 127.0.0.1 >nul"]).spawn().map_err(|e| fail(e.to_string()))?;
+        let spid = shell.id();
+        wait("the shell with a child to end", 10, &|w| node(w, spid).is_some_and(|n| w.app.end_targets(n).is_some_and(|l| l.len() >= 2)))?;
+        let pids = with(|w| {
+            let list = node(w, spid).and_then(|n| w.app.end_targets(n)).unwrap_or_default();
+            let pids: Vec<u32> = list.iter().map(|v| v.pid).collect();
+            w.ask(crate::modal::Modal::end(list));
+            pids
+        })
+        .unwrap_or_default();
+        press(hwnd, crate::modal::Pick::Yes)?;
+        wait("the shell and its child gone", 10, &|w| pids.iter().all(|&p| node(w, p).is_none()))?;
+        let _ = shell.wait();
         // Another view on screen: the list is not followed, and comes back whole.
         let z = with(|w| {
             w.app.views.push(ViewInfo { root: "Z:\\".into(), total: 0, free: 0, kind: ViewKind::Disk });
@@ -753,7 +766,7 @@ pub fn selftest_processes() -> Result<String> {
             }
             None => String::new(),
         };
-        Ok(format!("this process {} in memory, a child followed, End process ended one after a click on its confirmation, polling stopped while away or minimised, the Files held pane lists a file we hold and the wheel scrolls it and it refreshes when the process closes files{idle}", fmt::size(ws)))
+        Ok(format!("this process {} in memory, a child followed, End process ended one, and a shell with its child, after a click on the confirmation, polling stopped while away or minimised, the Files held pane lists a file we hold and the wheel scrolls it and it refreshes when the process closes files{idle}", fmt::size(ws)))
     };
     let out = run();
     let _ = std::fs::remove_dir_all(&dir);
