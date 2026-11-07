@@ -22,7 +22,7 @@ pub struct Tree {
     /// Files (non-directories) in the subtree, including the node itself.
     pub subtree_files: Vec<u32>,
     pub flags: Vec<NodeFlags>,
-    /// Last-write day (days since 1601-01-01); `None` when unknown.
+    /// Last-write time (unix seconds); `None` when unknown.
     pub mtime: Vec<Option<NonZeroU32>>,
     /// Three more numbers per node for a source to sort by (the process view: CPU, I/O, PID). Empty for a tree
     /// that never called [`Tree::set_aux`]; otherwise one entry per node.
