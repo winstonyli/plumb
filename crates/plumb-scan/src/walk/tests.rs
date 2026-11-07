@@ -185,3 +185,19 @@ fn files_carry_their_last_write_day() {
     let day = t.mtime[f].expect("a freshly written file has a time").get();
     assert!(day.abs_diff(today) <= 1, "{day} vs {today}");
 }
+
+#[test]
+fn a_hidden_file_is_a_system_trait_and_an_offline_one_is_a_cloud_trait() {
+    let fx = fixture("traits");
+    let attrib = |flag: &str, name: &str| {
+        let out = std::process::Command::new("attrib").arg(flag).arg(fx.0.join("a").join(name)).output().unwrap();
+        assert!(out.status.success(), "attrib {flag} failed");
+    };
+    attrib("+H", "small.txt");
+    attrib("+O", "big.bin");
+    let (t, _) = scan(&fx.0, 2);
+    let flags = |name: &str| t.flags[find(&t, name)];
+    assert!(flags("a\\small.txt").contains(NodeFlags::SYSTEM) && !flags("a\\small.txt").contains(NodeFlags::CLOUD));
+    assert!(flags("a\\big.bin").contains(NodeFlags::CLOUD) && !flags("a\\big.bin").contains(NodeFlags::SYSTEM));
+    assert!(!flags("b\\c\\five.dat").intersects(NodeFlags::SYSTEM | NodeFlags::CLOUD), "a plain file has neither");
+}
