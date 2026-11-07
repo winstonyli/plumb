@@ -741,7 +741,7 @@ fn each_modal_paints_over_a_dimmed_view_in_both_themes_and_scales() {
     let modals = [
         ("delete", Modal::delete(req.clone())),
         ("permanent", Modal::permanent(req)),
-        ("failed", Modal::failed(0, false, &failed, 12)),
+        ("failed", Modal::failed(0, false, &plumb::outcome::Failure::new("delete", "deleted", &failed, 12, ""), failed.iter().map(|f| f.0.clone()).collect())),
         ("holders", Modal::holders(r"C:\Users\me\notes.txt", &holders)),
         ("closing", Modal::closing()),
     ];

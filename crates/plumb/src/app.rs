@@ -13,6 +13,7 @@ use crate::filter_ui::Edit;
 use crate::fmt;
 use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
 use crate::modal::{Ask, Modal, Pick, Victim};
+use crate::outcome::Outcome;
 use crate::restore::Snapshot;
 use crate::state::{MapState, Sort, State};
 use plumb_core::basket::{self, Basket};
@@ -407,12 +408,9 @@ pub struct App {
     basket_view: BasketView,
     /// A delete is running on the worker thread.
     deleting: bool,
-    /// A one-off message (a refused mark, a delete result) shown first on the status line until the next click or key.
-    notice: String,
-    /// Every failure of the last delete, one a line: part of the full status line (the hover text).
-    notice_detail: Vec<String>,
-    /// The notice reports success (nothing to alarm about); any other notice is drawn as a problem.
-    notice_ok: bool,
+    /// A one-off message (a refused mark, what an action did) shown first on the status line until the next click or key;
+    /// its detail lines are part of the full status line (the hover text).
+    outcome: Outcome,
     system_root: String,
     /// Marks of views whose kept state was let go (see `Win::evict`): a later scan of that view takes them back.
     stash: HashMap<usize, Basket>,
@@ -427,7 +425,7 @@ impl App {
             layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), slot: Slot::default(),
             can_elevate: false, accent: None, sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
-            held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, notice: String::new(), notice_detail: Vec::new(), notice_ok: false, stash: HashMap::new(), skipped: Vec::new(),
+            held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, outcome: Outcome::default(), stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -1006,15 +1004,18 @@ impl App {
         self.slot.model.as_ref()?.rows().get(self.slot.scroll + i).map(|r| r.id)
     }
 
+    /// Shows what an action did, first on the status line until the next click or key.
+    pub fn report(&mut self, outcome: Outcome) {
+        self.outcome = outcome;
+    }
+
     pub fn handle(&mut self, input: Input) -> Effect {
         self.layout.cancel = self.cancelable();
         self.layout.basket = self.basket_active();
         self.layout.metric = self.kind() == ViewKind::Processes;
         self.layout.held = self.kind() == ViewKind::Processes;
         if self.modal().is_none() && matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
-            self.notice.clear();
-            self.notice_detail.clear();
-            self.notice_ok = false;
+            self.outcome = Outcome::default();
         }
         if self.modal().is_some() && !matches!(input, Input::Resize(..) | Input::Release) {
             return self.modal_input(input);
@@ -1302,12 +1303,12 @@ impl App {
                 out.push_str("   |   ");
             }
         };
-        if with_notice && !self.notice.is_empty() {
+        if with_notice && !self.outcome.is_empty() {
             sep(out);
-            out.push_str(&self.notice);
-            if full && !self.notice_detail.is_empty() {
+            out.push_str(&self.outcome.line);
+            if full && !self.outcome.detail.is_empty() {
                 sep(out);
-                for (i, d) in self.notice_detail.iter().enumerate() {
+                for (i, d) in self.outcome.detail.iter().enumerate() {
                     if i > 0 {
                         out.push_str("; ");
                     }
@@ -1413,8 +1414,8 @@ impl App {
             message: if running { "" } else { &message },
             loading: running && self.slot.tree.is_none(),
             status: &status,
-            notice: &self.notice,
-            notice_ok: self.notice_ok,
+            notice: &self.outcome.line,
+            notice_ok: self.outcome.ok,
             selection: &selection,
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),
@@ -1427,6 +1428,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outcome::Failure;
 
     /// The text-returning forms of the tooltip and status builders, which write into a buffer.
     fn tip_str(a: &App, x: f32, y: f32) -> Option<String> {
@@ -2348,7 +2350,7 @@ Test GPU", status_str(&a, true))));
         let bar = a.layout.status();
         let (x, y) = (bar.x + 40.0, bar.y + 5.0);
         let (key, before) = target_str(&a, x, y).unwrap();
-        a.notice = "something happened".into();
+        a.report(Outcome::problem("something happened"));
         let (same, after) = target_str(&a, x, y).unwrap();
         assert_eq!(key, same, "the status bar is the same target");
         assert_ne!(before, after, "whose text moved on");
@@ -2766,14 +2768,14 @@ Test GPU", status_str(&a, true))));
         assert_eq!(req.paths.len(), 1);
         assert_eq!(a.basket().len(), 1, "the refused mark is dropped");
         a.finish_delete(&req.paths, 0, &[]);
-        assert!(a.notice.contains("1 skipped: the Windows folder is protected"), "{}", a.notice);
-        assert!(a.notice_detail.iter().any(|d| d.starts_with(&bad_path)));
+        assert!(a.outcome.line.contains("1 skipped: the Windows folder is protected"), "{}", a.outcome.line);
+        assert!(a.outcome.detail.iter().any(|d| d.starts_with(&bad_path)));
         // Alone, it gives no request, only the reason.
         let mut a = scanned();
         a.toggle_mark(bad);
         a.system_root = a.slot.tree.as_ref().unwrap().path(bad);
         assert!(a.commit_request().is_none());
-        assert!(a.notice.starts_with("1 marked item skipped"), "{}", a.notice);
+        assert!(a.outcome.line.starts_with("1 marked item skipped"), "{}", a.outcome.line);
         assert!(a.basket().is_empty());
     }
 
@@ -2871,10 +2873,10 @@ Test GPU", status_str(&a, true))));
     #[test]
     fn answering_a_modal_keeps_the_status_notice() {
         let (mut a, centre) = asking();
-        a.notice = "1 of 1 not deleted: in use; still marked".into();
+        a.report(Outcome::problem("could not delete C:\\f: in use; still marked"));
         let (x, y) = centre(&a, Pick::Cancel);
         a.handle(Input::Click(x, y));
-        assert!(a.modal().is_none() && a.notice.starts_with("1 of 1 not deleted"), "{:?}", a.notice);
+        assert!(a.modal().is_none() && a.outcome.line.starts_with("could not delete"), "{:?}", a.outcome.line);
     }
 
     #[test]
@@ -2936,7 +2938,7 @@ Test GPU", status_str(&a, true))));
         a.handle(Input::Hover(1.0, 1.0));
         assert_eq!(a.with_scene(false, |s| s.hot), None);
         // A failure and a close question arriving over the delete question wait their turn, the close question once.
-        a.ask(Modal::failed(0, false, &[("C:\\f".into(), "in use".into())], 1));
+        a.ask(Modal::failed(0, false, &Failure::new("delete", "deleted", &[("C:\\f".into(), "in use".into())], 1, ""), vec!["C:\\f".into()]));
         a.ask_close();
         a.ask_close();
         assert_eq!(a.modals.len(), 3);

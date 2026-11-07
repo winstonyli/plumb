@@ -1,7 +1,8 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
 use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, RowMenu, Slot, TipKey, ViewKind};
-use crate::modal::Modal;
+use crate::modal::{process_failure, Modal};
+use crate::outcome::Failure;
 use crate::trash;
 use crate::draw::{Mark, Painter, Role};
 use crate::filter_ui::{byte_at, push_utf16, Edit, Motion};
@@ -599,7 +600,7 @@ impl Win {
 
     /// A delete batch ended: unmark what went, keep what failed, say so on the status line. Returns the failures
     /// (path, reason) and the batch size when the view is on screen, for the failure dialog.
-    fn finish_delete(&mut self, view: usize, out: Vec<trash::Outcome>) -> Option<(Vec<(String, String)>, usize)> {
+    fn finish_delete(&mut self, view: usize, out: Vec<trash::Outcome>) -> Option<(Failure, Vec<String>)> {
         let gone: Vec<String> = out.iter().filter(|o| !matches!(o.verdict, trash::Verdict::Failed(_))).map(|o| o.path.clone()).collect();
         let missing = out.iter().filter(|o| o.verdict == trash::Verdict::Missing).count();
         let failed: Vec<(String, String)> = out
@@ -610,12 +611,13 @@ impl Win {
             })
             .collect();
         let shown = self.app.active == Some(view);
-        if self.in_slot(view, |w| w.app.finish_delete(&gone, missing, &failed)).is_none() {
+        let failure = self.in_slot(view, |w| w.app.finish_delete(&gone, missing, &failed));
+        if failure.is_none() {
             self.app.set_deleting(false); // the view's slot was evicted meanwhile
         }
         self.invalidate();
-        let total = gone.len() + failed.len();
-        (shown && !failed.is_empty()).then_some((failed, total))
+        let paths = failed.into_iter().map(|f| f.0).collect();
+        failure.flatten().filter(|_| shown).map(|f| (f, paths))
     }
 
     /// Updates the chip marks from what the other views hold.
@@ -961,8 +963,10 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
         Effect::End(victims) => {
             let failed: Vec<_> = victims.iter().filter_map(|v| plumb_scan::procs::terminate(v.pid, v.created).err().map(|why| (v.clone(), why))).collect();
             if !failed.is_empty() {
+                let failure = process_failure("end", "ended", &failed, victims.len());
                 with(|w| {
-                    w.ask(Modal::end_failed(&failed, victims.len()));
+                    w.app.report(failure.outcome(""));
+                    w.ask(Modal::process_failed(&failure));
                     w.invalidate();
                 });
             }
@@ -1467,8 +1471,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             let done = with(|w| {
                 let (view, permanent, out) = *unsafe { Box::from_raw(raw) };
                 // What failed and why, to retry only those.
-                if let Some((failed, total)) = w.finish_delete(view, out) {
-                    w.ask(Modal::failed(view, permanent, &failed, total));
+                if let Some((failure, paths)) = w.finish_delete(view, out) {
+                    w.ask(Modal::failed(view, permanent, &failure, paths));
                     w.invalidate();
                 }
             });

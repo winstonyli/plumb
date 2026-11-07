@@ -1,5 +1,6 @@
 //! The basket of marked paths, counted against the tree, and the delete commit built from it.
 use super::*;
+use crate::outcome::Failure;
 
 /// What the context menu and `Del` can do with a node.
 #[derive(Debug, PartialEq)]
@@ -71,7 +72,7 @@ impl App {
     /// Marks or unmarks `id`; a refusal goes to the status line.
     pub fn toggle_mark(&mut self, id: NodeId) {
         if let MarkState::Refused(why) = self.mark_state(id) {
-            self.notice = format!("cannot mark: {why}");
+            self.outcome = Outcome::problem(format!("cannot mark: {why}"));
             return;
         }
         let Some(path) = self.slot.tree.as_ref().map(|t| t.path(id)) else { return };
@@ -83,7 +84,7 @@ impl App {
     pub fn toggle_mark_path(&mut self, path: &str) {
         match self.slot.tree.as_ref().and_then(|t| t.find(path)) {
             Some(id) => self.toggle_mark(id),
-            None => self.notice = "that item is gone".into(),
+            None => self.outcome = Outcome::problem("that item is gone"),
         }
     }
 
@@ -132,11 +133,11 @@ impl App {
     /// Starts a delete if none runs and no scan does; otherwise says why not on the status line.
     pub fn begin_delete(&mut self) -> bool {
         if self.deleting {
-            self.notice = "a delete is already running".into();
+            self.outcome = Outcome::problem("a delete is already running");
             return false;
         }
         if self.cancelable() {
-            self.notice = "cannot delete while the drive is being scanned".into();
+            self.outcome = Outcome::problem("cannot delete while the drive is being scanned");
             return false;
         }
         self.deleting = true;
@@ -150,11 +151,11 @@ impl App {
     /// What a commit would delete right now, or `None` (with the reason on the status line).
     pub fn commit_request(&mut self) -> Option<CommitRequest> {
         if self.deleting {
-            self.notice = "a delete is already running".into();
+            self.outcome = Outcome::problem("a delete is already running");
             return None;
         }
         if self.cancelable() {
-            self.notice = "cannot delete while the drive is being scanned".into();
+            self.outcome = Outcome::problem("cannot delete while the drive is being scanned");
             return None;
         }
         let (view, tree) = (self.active?, self.slot.tree.as_ref()?);
@@ -168,11 +169,10 @@ impl App {
         self.basket_rev += 1;
         if ids.is_empty() {
             self.clear_basket();
-            self.notice = match self.skipped.first() {
-                Some((_, why)) => format!("{} skipped: {why}", fmt::noun(self.skipped.len() as u64, "marked item", "marked items")),
-                None => "the marked items are already gone".into(),
+            self.outcome = match self.skipped.first() {
+                Some((_, why)) => Outcome::default().and(&format!("{} skipped: {why}", fmt::noun(self.skipped.len() as u64, "marked item", "marked items")), self.skipped_detail()),
+                None => Outcome::problem("the marked items are already gone"),
             };
-            self.notice_detail = self.skipped.drain(..).map(|(p, why)| format!("{p}: {why}")).collect();
             return None;
         }
         let paths = ids.iter().map(|&i| tree.path(i)).collect();
@@ -180,23 +180,30 @@ impl App {
         Some(CommitRequest { view, paths, bytes })
     }
 
+    /// "<path>: <why>" for each mark the last commit left out, which it drains.
+    fn skipped_detail(&mut self) -> Vec<String> {
+        self.skipped.drain(..).map(|(p, why)| format!("{p}: {why}")).collect()
+    }
+
     /// A delete ended: `gone` (deleted, `missing` of them already absent) leave the basket, `failed` (path, reason) stay.
-    pub fn finish_delete(&mut self, gone: &[String], missing: usize, failed: &[(String, String)]) {
+    /// Returns what could not be deleted, for the dialog.
+    pub fn finish_delete(&mut self, gone: &[String], missing: usize, failed: &[(String, String)]) -> Option<Failure> {
         self.deleting = false;
         self.slot.basket.remove_under(gone);
         self.basket_rev += 1;
         let deleted = gone.len() - missing.min(gone.len());
         let items = fmt::noun(deleted as u64, "item", "items");
-        self.notice_ok = failed.is_empty() && self.skipped.is_empty();
-        self.notice = match failed.first() {
-            None if missing == 0 => format!("deleted {items}"),
-            None => format!("deleted {items}, {missing} already gone"),
-            Some((_, why)) => format!("{} of {} not deleted: {why}; still marked", failed.len(), gone.len() + failed.len()),
+        let failure = (!failed.is_empty()).then(|| Failure::new("delete", "deleted", failed, gone.len() + failed.len(), ""));
+        let mut outcome = match &failure {
+            None if missing == 0 => Outcome::ok(format!("deleted {items}")),
+            None => Outcome::ok(format!("deleted {items}, {missing} already gone")),
+            Some(f) => f.outcome("; still marked"),
         };
-        self.notice_detail = failed.iter().map(|(p, why)| format!("{p}: {why}")).collect();
         if let Some((_, why)) = self.skipped.first() {
-            self.notice += &format!("; {} skipped: {why}", self.skipped.len());
-            self.notice_detail.extend(self.skipped.drain(..).map(|(p, why)| format!("{p}: {why}")));
+            let line = format!("{} skipped: {why}", self.skipped.len());
+            outcome = outcome.and(&line, self.skipped_detail());
         }
+        self.outcome = outcome;
+        failure
     }
 }

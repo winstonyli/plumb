@@ -490,7 +490,7 @@ pub fn selftest_delete() -> Result<String> {
             tip
         })
         .unwrap_or_default();
-        if !tip.contains("not deleted: in use by plumb.exe (") {
+        if !tip.contains(": in use by plumb.exe (") {
             return Err(fail(format!("the failure's reason does not name this process on the status line: {tip:?}")));
         }
         drop(held);

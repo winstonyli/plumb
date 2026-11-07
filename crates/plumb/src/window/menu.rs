@@ -93,7 +93,12 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
                     with(|w| {
                         match out {
                             Ok(()) => w.run.procs.as_ref().map_or((), |p| p.kick()),
-                            Err(why) => w.ask(Modal::pause_failed(&v, &why, suspended)),
+                            Err(why) => {
+                                let (verb, past) = if suspended { ("resume", "resumed") } else { ("suspend", "suspended") };
+                                let failure = process_failure(verb, past, &[(v.clone(), why)], 1);
+                                w.app.report(failure.outcome(""));
+                                w.ask(Modal::process_failed(&failure));
+                            }
                         }
                         w.invalidate();
                     });

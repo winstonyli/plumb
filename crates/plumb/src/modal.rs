@@ -3,6 +3,9 @@
 use crate::app::CommitRequest;
 use crate::fmt;
 use crate::layout::{Rect, FILTER_BOX_H, ROW_H};
+use crate::outcome::{admin_hint, lines, Failure};
+#[cfg(test)]
+use crate::outcome::SHOWN;
 use plumb_scan::holders::Holder;
 use plumb_scan::reason::Reason;
 
@@ -72,8 +75,6 @@ pub struct Modal {
     pub copy: Option<String>,
 }
 
-/// The detail lines shown before "and N more".
-const SHOWN: usize = 8;
 const PAD: f32 = 20.0;
 const GAP: f32 = 8.0;
 const HEADING_H: f32 = 28.0;
@@ -83,38 +84,10 @@ fn items(n: usize) -> fmt::Show<'static> {
     fmt::noun(n as u64, "item", "items")
 }
 
-fn sentence(reason: &str, hint: &str) -> String {
-    let mut c = reason.chars();
-    let first: String = c.next().map(|f| f.to_uppercase().collect()).unwrap_or_default();
-    format!("{first}{}.{hint}", c.as_str())
-}
-
-/// The parts every "could not be done" dialog shares, so each reads the same: one item gets "Could not <verb> <it>" and
-/// its reason as a sentence; several get "N of M not <past>" and a line per item. `hint` follows the reason(s).
-struct Failure {
-    heading: String,
-    body: Vec<String>,
-    detail: Vec<String>,
-    /// "<subject>: <reason>" per item, for Copy.
-    copy: String,
-}
-
-fn failure(verb: &str, past: &str, failed: &[(String, String)], total: usize, hint: &str) -> Failure {
-    let each: Vec<String> = failed.iter().map(|(subject, why)| format!("{subject}: {why}")).collect();
-    let copy = each.join("\n");
-    match failed {
-        [(subject, why)] if total == 1 => Failure { heading: format!("Could not {verb} {subject}"), body: vec![sentence(why, hint)], detail: Vec::new(), copy },
-        _ => Failure { heading: format!("{} of {total} not {past}", failed.len()), body: vec![hint.trim().to_string()], detail: lines(&each), copy },
-    }
-}
-
-/// What to do about a refusal, for the process dialogs: only "access denied" has a remedy.
-fn admin_hint<'a>(reasons: impl IntoIterator<Item = &'a Reason>) -> &'static str {
-    if reasons.into_iter().any(Reason::is_access_denied) { " It may be protected or elevated; run plumb as administrator to reach more processes." } else { "" }
-}
-
-fn lines(items: &[String]) -> Vec<String> {
-    fmt::path_list(items, SHOWN).lines().map(str::to_string).collect()
+/// Why `failed` processes (each with its reason) could not be `verb`ed out of `total`.
+pub fn process_failure(verb: &str, past: &str, failed: &[(Victim, Reason)], total: usize) -> Failure {
+    let named: Vec<(String, String)> = failed.iter().map(|(v, why)| (format!("{} (PID {})", v.name, v.pid), why.to_string())).collect();
+    Failure::new(verb, past, &named, total, admin_hint(failed.iter().map(|(_, why)| why)))
 }
 
 fn button(pick: Pick, label: &'static str, primary: bool) -> Button {
@@ -143,16 +116,14 @@ impl Modal {
         Self::new(Ask::Permanent(req), heading, &[&size, "This cannot be undone."], Vec::new(), buttons, 1, Pick::No)
     }
 
-    /// What a delete could not remove (`failed` is (path, reason)) out of `total`; Retry tries just those again.
-    pub fn failed(view: usize, permanent: bool, failed: &[(String, String)], total: usize) -> Self {
-        let f = failure("delete", "deleted", failed, total, "");
-        let again = if failed.len() == 1 { "It stays marked. Retry tries it again." } else { "They stay marked. Retry tries them again." };
-        let paths = failed.iter().map(|f| f.0.clone()).collect();
+    /// What a delete could not remove (`f`, of the `paths`); Retry tries just those again.
+    pub fn failed(view: usize, permanent: bool, f: &Failure, paths: Vec<String>) -> Self {
+        let again = if paths.len() == 1 { "It stays marked. Retry tries it again." } else { "They stay marked. Retry tries them again." };
         let mut body: Vec<&str> = f.body.iter().map(String::as_str).filter(|l| !l.is_empty()).collect();
         body.push(again);
         let buttons = vec![button(Pick::Retry, "Retry", true), button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", false)];
-        let mut m = Self::new(Ask::Failed { view, permanent, paths }, f.heading, &body, f.detail, buttons, 0, Pick::Close);
-        m.copy = Some(f.copy);
+        let mut m = Self::new(Ask::Failed { view, permanent, paths }, f.heading.clone(), &body, f.detail.clone(), buttons, 0, Pick::Close);
+        m.copy = Some(f.copy.clone());
         m
     }
 
@@ -185,24 +156,12 @@ impl Modal {
         Self::new(Ask::End(victims), heading, &[body], detail, buttons, 1, Pick::No)
     }
 
-    /// Why these processes could not be ended: each with its reason.
-    pub fn end_failed(failed: &[(Victim, Reason)], total: usize) -> Self {
-        Self::process_failed("end", "ended", failed, total)
-    }
-
-    /// Why `victim` could not be suspended (or, with `resume`, resumed).
-    pub fn pause_failed(victim: &Victim, why: &Reason, resume: bool) -> Self {
-        let (verb, past) = if resume { ("resume", "resumed") } else { ("suspend", "suspended") };
-        Self::process_failed(verb, past, &[(victim.clone(), why.clone())], 1)
-    }
-
-    fn process_failed(verb: &str, past: &str, failed: &[(Victim, Reason)], total: usize) -> Self {
-        let named: Vec<(String, String)> = failed.iter().map(|(v, why)| (format!("{} (PID {})", v.name, v.pid), why.to_string())).collect();
-        let f = failure(verb, past, &named, total, admin_hint(failed.iter().map(|(_, why)| why)));
+    /// Why processes could not be ended, suspended or resumed (`process_failure`).
+    pub fn process_failed(f: &Failure) -> Self {
         let buttons = vec![button(Pick::Copy, "Copy", false), button(Pick::Close, "Close", true)];
         let body: Vec<&str> = f.body.iter().map(String::as_str).filter(|l| !l.is_empty()).collect();
-        let mut m = Self::new(Ask::Info, f.heading, &body, f.detail, buttons, 1, Pick::Close);
-        m.copy = Some(f.copy);
+        let mut m = Self::new(Ask::Info, f.heading.clone(), &body, f.detail.clone(), buttons, 1, Pick::Close);
+        m.copy = Some(f.copy.clone());
         m
     }
 
@@ -298,10 +257,11 @@ mod tests {
     #[test]
     fn the_failure_modal_names_each_reason_and_the_holders_modal_says_none_one_or_many() {
         let f: Vec<(String, String)> = (0..2).map(|i| (format!("C:\\f{i}"), "in use by another program".into())).collect();
-        let m = Modal::failed(3, false, &f, 5);
+        let paths = |f: &[(String, String)]| f.iter().map(|p| p.0.clone()).collect::<Vec<_>>();
+        let m = Modal::failed(3, false, &Failure::new("delete", "deleted", &f, 5, ""), paths(&f));
         assert_eq!(m.heading, "2 of 5 not deleted");
         assert_eq!(m.detail[0], "C:\\f0: in use by another program");
-        let one = Modal::failed(3, false, &f[..1], 1);
+        let one = Modal::failed(3, false, &Failure::new("delete", "deleted", &f[..1], 1, ""), paths(&f[..1]));
         assert_eq!((one.heading.as_str(), one.body[0].as_str()), ("Could not delete C:\\f0", "In use by another program."));
         assert_eq!(m.ask, Ask::Failed { view: 3, permanent: false, paths: vec!["C:\\f0".into(), "C:\\f1".into()] });
         let h = |name: &str, pid| Holder { pid, name: name.into() };
@@ -321,13 +281,14 @@ mod tests {
         let none = Modal::holders("f.txt", &[]);
         assert_eq!(none.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Close], "nothing to copy");
         let v = |pid, name: &str| Victim { pid, created: 5, name: name.into() };
-        let f = Modal::end_failed(&[(v(7, "x.exe"), Reason::AccessDenied)], 1);
+        let failed = |list: &[(Victim, Reason)], total| Modal::process_failed(&process_failure("end", "ended", list, total));
+        let f = failed(&[(v(7, "x.exe"), Reason::AccessDenied)], 1);
         assert_eq!(f.heading, "Could not end x.exe (PID 7)");
         assert_eq!(f.body, ["Access denied. It may be protected or elevated; run plumb as administrator to reach more processes."]);
         assert_eq!(f.copy.as_deref(), Some("x.exe (PID 7): access denied"), "the copy is the plain reason");
-        let two = Modal::end_failed(&[(v(7, "x.exe"), Reason::AccessDenied), (v(8, "y.exe"), Reason::other("it has already ended"))], 3);
+        let two = failed(&[(v(7, "x.exe"), Reason::AccessDenied), (v(8, "y.exe"), Reason::other("it has already ended"))], 3);
         assert_eq!((two.heading.as_str(), two.detail.len()), ("2 of 3 not ended", 2));
-        let paused = Modal::pause_failed(&v(9, "z.exe"), &Reason::other("the system refused (status 0x1)"), true);
+        let paused = Modal::process_failed(&process_failure("resume", "resumed", &[(v(9, "z.exe"), Reason::other("the system refused (status 0x1)"))], 1));
         assert_eq!((paused.heading.as_str(), paused.body[0].as_str()), ("Could not resume z.exe (PID 9)", "The system refused (status 0x1)."), "no hint without access denied");
         assert_eq!(two.detail[1], "y.exe (PID 8): it has already ended");
         let (one, many) = (Modal::end(vec![v(7, "x.exe")]), Modal::end(vec![v(7, "x.exe"), v(8, "y.exe")]));
