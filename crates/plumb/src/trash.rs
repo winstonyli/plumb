@@ -1,5 +1,6 @@
 //! Deleting paths through the shell: one `IFileOperation` batch to the Recycle Bin or for good, with a verdict per path.
 use plumb_scan::holders::{holders, Holder};
+use plumb_scan::reason::Reason;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::HWND;
@@ -112,11 +113,10 @@ fn perform(paths: &[&str], permanent: bool, owner: isize, results: &Results) -> 
 
 /// Why a path failed, in words. The shell's own codes (`COPYENGINE_E_*`, facility 0x27) have no system message text, so the
 /// ones a delete can meet are named here; anything else is the system's message, or the code itself.
-pub fn reason(hr: i32) -> String {
-    const NAMED: [(HRESULT, &str); 17] = [
+pub fn reason(hr: i32) -> Reason {
+    const NAMED: [(HRESULT, &str); 16] = [
         (HRESULT(CANCELLED), "skipped"), // what `judge` gives an item still there with no failure code: declined in the shell's own prompt
         (COPYENGINE_E_SHARING_VIOLATION_SRC, "in use by another program"),
-        (COPYENGINE_E_ACCESS_DENIED_SRC, "access denied"),
         (COPYENGINE_E_ACCESSDENIED_READONLY, "read-only"),
         (COPYENGINE_E_REQUIRES_ELEVATION, "needs administrator rights"),
         (COPYENGINE_E_PATH_NOT_FOUND_SRC, "path not found"),
@@ -132,21 +132,25 @@ pub fn reason(hr: i32) -> String {
         (COPYENGINE_E_CANCELLED, "cancelled"),
         (COPYENGINE_E_BLOCKED_BY_DLP_POLICY, "blocked by policy"),
     ];
+    const E_ACCESSDENIED: HRESULT = HRESULT(0x8007_0005_u32 as i32);
     let code = HRESULT(hr);
+    if code == E_ACCESSDENIED || code == COPYENGINE_E_ACCESS_DENIED_SRC {
+        return Reason::AccessDenied;
+    }
     if let Some((_, text)) = NAMED.iter().find(|(c, _)| *c == code) {
-        return (*text).into();
+        return Reason::other(*text);
     }
     let message = windows::core::Error::from(code).message();
     match message.trim() {
-        "" => format!("error {:#010x}", hr as u32),
-        m => m.into(),
+        "" => Reason::other(format!("error {:#010x}", hr as u32)),
+        m => Reason::other(m),
     }
 }
 
 /// `reason`, with the programs holding the file named when known: "in use by chrome.exe (1234) and 2 more".
-pub fn with_holders(reason: &str, held_by: &[Holder]) -> String {
+pub fn with_holders(reason: &Reason, held_by: &[Holder]) -> String {
     match held_by {
-        [] => reason.into(),
+        [] => reason.to_string(),
         [h] => format!("in use by {} ({})", h.name, h.pid),
         [h, rest @ ..] => format!("in use by {} ({}) and {} more", h.name, h.pid, rest.len()),
     }
@@ -196,9 +200,9 @@ mod tests {
     #[test]
     fn a_sharing_violation_reason_names_the_holder_when_there_is_one() {
         let h = |name: &str, pid| Holder { pid, name: name.into() };
-        assert_eq!(with_holders("in use by another program", &[]), "in use by another program");
-        assert_eq!(with_holders("x", &[h("chrome.exe", 1234)]), "in use by chrome.exe (1234)");
-        assert_eq!(with_holders("x", &[h("chrome.exe", 1234), h("a.exe", 1), h("b.exe", 2)]), "in use by chrome.exe (1234) and 2 more");
+        assert_eq!(with_holders(&Reason::other("in use by another program"), &[]), "in use by another program");
+        assert_eq!(with_holders(&Reason::other("x"), &[h("chrome.exe", 1234)]), "in use by chrome.exe (1234)");
+        assert_eq!(with_holders(&Reason::other("x"), &[h("chrome.exe", 1234), h("a.exe", 1), h("b.exe", 2)]), "in use by chrome.exe (1234) and 2 more");
     }
 
     /// A fresh directory under `%LOCALAPPDATA%` (long path form, which the shell reports back).
@@ -241,10 +245,10 @@ mod tests {
 
     #[test]
     fn a_locked_file_has_a_reason_in_words_and_an_unknown_code_shows_itself() {
-        assert_eq!(reason(COPYENGINE_E_SHARING_VIOLATION_SRC.0), "in use by another program");
-        assert_eq!(reason(0x8027ff00u32 as i32), "error 0x8027ff00", "a shell code without text");
-        assert_eq!(reason(CANCELLED), "skipped", "an item left alone after a shell prompt");
-        assert!(!reason(0x80070005u32 as i32).is_empty(), "a system code keeps the system's text");
+        assert_eq!(reason(COPYENGINE_E_SHARING_VIOLATION_SRC.0), Reason::other("in use by another program"));
+        assert_eq!(reason(0x8027ff00u32 as i32), Reason::other("error 0x8027ff00"), "a shell code without text");
+        assert_eq!(reason(CANCELLED), Reason::other("skipped"), "an item left alone after a shell prompt");
+        assert!(reason(0x80070005u32 as i32).is_access_denied() && reason(COPYENGINE_E_ACCESS_DENIED_SRC.0).is_access_denied(), "the shell code and the system code are one reason");
     }
 
     #[test]

@@ -962,7 +962,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             let failed: Vec<_> = victims.iter().filter_map(|v| plumb_scan::procs::terminate(v.pid, v.created).err().map(|why| (v.clone(), why))).collect();
             if !failed.is_empty() {
                 with(|w| {
-                    w.ask(Modal::end_failed(&failed));
+                    w.ask(Modal::end_failed(&failed, victims.len()));
                     w.invalidate();
                 });
             }

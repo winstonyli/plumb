@@ -15,6 +15,7 @@ pub mod listing;
 pub mod merge;
 pub mod mft_scan;
 pub mod preview;
+pub mod reason;
 #[cfg(windows)]
 pub mod select;
 #[cfg(windows)]

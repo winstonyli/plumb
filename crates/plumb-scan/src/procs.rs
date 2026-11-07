@@ -1,4 +1,5 @@
 //! A snapshot of the running processes: `NtQuerySystemInformation(SystemProcessInformation)`, parsed by x64 offset.
+use crate::reason::Reason;
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
@@ -61,21 +62,19 @@ fn identity(pid: u32) -> (Option<String>, bool) {
     (ok.then(|| String::from_utf16_lossy(&buf[..n as usize])), elevated)
 }
 
-const ACCESS_DENIED: &str = "access denied (protected or elevated process)";
-
-fn why(e: windows::core::Error) -> String {
-    if e.code().0 == 0x8007_0005_u32 as i32 { ACCESS_DENIED.to_string() } else { e.message() }
+fn why(e: windows::core::Error) -> Reason {
+    if e.code().0 == 0x8007_0005_u32 as i32 { Reason::AccessDenied } else { Reason::other(e.message()) }
 }
 
 /// Runs `act` on the process `pid` opened with `access`, if it was created at `created` (the FILETIME from its entry). A
 /// pid is reused, so a process created at another time is left alone. The error is the reason, in words.
-fn with_process(pid: u32, created: u64, access: PROCESS_ACCESS_RIGHTS, act: impl FnOnce(HANDLE) -> Result<(), String>) -> Result<(), String> {
-    let h = unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|e| if e.code().0 == 0x8007_0057_u32 as i32 { "it has already ended".to_string() } else { why(e) })?;
+fn with_process(pid: u32, created: u64, access: PROCESS_ACCESS_RIGHTS, act: impl FnOnce(HANDLE) -> Result<(), Reason>) -> Result<(), Reason> {
+    let h = unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|e| if e.code().0 == 0x8007_0057_u32 as i32 { Reason::other("it has already ended") } else { why(e) })?;
     let (mut c, mut x, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
     let started = unsafe { GetProcessTimes(h, &mut c, &mut x, &mut k, &mut u) }.map(|_| (c.dwHighDateTime as u64) << 32 | c.dwLowDateTime as u64);
     let out = match started {
         Ok(t) if t == created => act(h),
-        Ok(_) => Err("the pid now belongs to a different process".to_string()),
+        Ok(_) => Err(Reason::other("the pid now belongs to a different process")),
         Err(e) => Err(why(e)),
     };
     let _ = unsafe { CloseHandle(h) };
@@ -83,15 +82,15 @@ fn with_process(pid: u32, created: u64, access: PROCESS_ACCESS_RIGHTS, act: impl
 }
 
 /// Ends the process `pid` created at `created`, with exit code 1.
-pub fn terminate(pid: u32, created: u64) -> Result<(), String> {
+pub fn terminate(pid: u32, created: u64) -> Result<(), Reason> {
     with_process(pid, created, PROCESS_TERMINATE, |h| unsafe { TerminateProcess(h, 1) }.map_err(why))
 }
 
 /// Suspends the process `pid` created at `created` (or, with `resume`, resumes it). The system counts suspensions, so a
 /// process suspended twice needs two resumes.
-pub fn pause(pid: u32, created: u64, resume: bool) -> Result<(), String> {
+pub fn pause(pid: u32, created: u64, resume: bool) -> Result<(), Reason> {
     with_process(pid, created, PROCESS_SUSPEND_RESUME, |h| {
-        crate::nt::pause_process(h, resume).map_err(|s| if s == 0xC000_0022_u32 as i32 { ACCESS_DENIED.to_string() } else { format!("the system refused (status {s:#010x})") })
+        crate::nt::pause_process(h, resume).map_err(|s| if s == 0xC000_0022_u32 as i32 { Reason::AccessDenied } else { Reason::other(format!("the system refused (status {s:#010x})")) })
     })
 }
 
@@ -183,7 +182,7 @@ mod tests {
         let mut child = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
         let created = snapshot().unwrap().iter().find(|p| p.pid == child.id()).expect("child listed").created;
         let err = terminate(child.id(), created + 1).unwrap_err();
-        assert!(err.contains("different process"), "{err}");
+        assert!(err.to_string().contains("different process"), "{err}");
         assert!(child.try_wait().unwrap().is_none(), "a mismatch kills nothing");
         terminate(child.id(), created).unwrap();
         assert_eq!(child.wait().unwrap().code(), Some(1));
@@ -197,7 +196,7 @@ mod tests {
         let created = state().created;
         assert!(!state().suspended, "a running process is not suspended");
         assert_eq!(state().elevated, crate::volume::is_elevated(), "a child runs with its parent's token");
-        assert!(pause(child.id(), created + 1, false).unwrap_err().contains("different process"));
+        assert!(pause(child.id(), created + 1, false).unwrap_err().to_string().contains("different process"));
         pause(child.id(), created, false).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !state().suspended && std::time::Instant::now() < deadline {
