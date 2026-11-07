@@ -132,15 +132,23 @@ impl App {
 
     /// Starts a delete if none runs and no scan does; otherwise says why not on the status line.
     pub fn begin_delete(&mut self) -> bool {
-        if self.deleting {
-            self.outcome = Outcome::problem("a delete is already running");
-            return false;
-        }
-        if self.cancelable() {
-            self.outcome = Outcome::problem("cannot delete while the drive is being scanned");
+        if self.delete_refused() {
             return false;
         }
         self.deleting = true;
+        true
+    }
+
+    /// Whether a delete cannot start now (one runs, or a scan does), saying why on the status line.
+    fn delete_refused(&mut self) -> bool {
+        let why = if self.deleting {
+            "a delete is already running"
+        } else if self.cancelable() {
+            "cannot delete while the drive is being scanned"
+        } else {
+            return false;
+        };
+        self.outcome = Outcome::problem(why);
         true
     }
 
@@ -150,12 +158,7 @@ impl App {
 
     /// What a commit would delete right now, or `None` (with the reason on the status line).
     pub fn commit_request(&mut self) -> Option<CommitRequest> {
-        if self.deleting {
-            self.outcome = Outcome::problem("a delete is already running");
-            return None;
-        }
-        if self.cancelable() {
-            self.outcome = Outcome::problem("cannot delete while the drive is being scanned");
+        if self.delete_refused() {
             return None;
         }
         let (view, tree) = (self.active?, self.slot.tree.as_ref()?);
