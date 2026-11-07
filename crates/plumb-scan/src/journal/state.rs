@@ -22,7 +22,7 @@ pub struct FileState {
     pub traits: NodeFlags,
     /// How many names the record has; more than 1 means hard links.
     pub links: u32,
-    /// Last-write day (days since 1601); `None` if unknown.
+    /// Last-write time (unix seconds); `None` if unknown.
     pub mtime: Option<std::num::NonZeroU32>,
 }
 

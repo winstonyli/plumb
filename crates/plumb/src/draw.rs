@@ -232,7 +232,7 @@ pub struct MapView<'a> {
     pub tiles: &'a [Tile],
     /// Changes whenever `tiles` does: the tiles are drawn into a cached bitmap once per generation.
     pub generation: u64,
-    /// Today as a day count since 1601; tiles are shaded by their age against it. Changes only with `generation`.
+    /// Now in unix seconds; tiles are shaded by their age against it. Changes only with `generation`.
     pub now: u32,
     /// Index of the tile of the selected node, if it has one.
     pub selected: Option<usize>,

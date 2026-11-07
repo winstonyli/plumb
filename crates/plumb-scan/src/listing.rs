@@ -15,7 +15,7 @@ pub struct Entry {
     /// The file's id on its volume, the same for every hard link to it (the 128-bit id folded to 64 bits;
     /// NTFS ids fit in 64). Only meaningful for files.
     pub id: u64,
-    /// Last-write day (days since 1601); `None` if unknown.
+    /// Last-write time (unix seconds); `None` if unknown.
     pub mtime: Option<NonZeroU32>,
 }
 

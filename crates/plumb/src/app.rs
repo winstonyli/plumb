@@ -381,7 +381,7 @@ pub struct App {
     map_dirty: bool,
     /// Bumped whenever `map_tiles` is rebuilt, so the painter knows its cached bitmap is stale.
     map_gen: u64,
-    /// Today as a day count since 1601, taken when the tiles were last rebuilt: tiles are shaded by age against it.
+    /// Now in unix seconds, taken when the tiles were last rebuilt: tiles are shaded by age against it.
     map_now: u32,
     /// Bytes per class among the tiles, largest first: the legend.
     map_classes: Vec<(treemap::Class, u64)>,
