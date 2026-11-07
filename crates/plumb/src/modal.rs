@@ -101,7 +101,7 @@ impl Modal {
 
     /// What to do with the marked `req.paths`.
     pub fn delete(req: CommitRequest) -> Self {
-        let heading = format!("Delete {}? Up to {}.", items(req.paths.len()), fmt::size(req.bytes));
+        let heading = format!("Delete {} (up to {})?", items(req.paths.len()), fmt::size(req.bytes));
         let detail = lines(&req.paths);
         let body = ["Recycle moves them to the Recycle Bin (Explorer can undo it).", "Delete permanently cannot be undone."];
         let buttons = vec![button(Pick::Recycle, "Recycle", true), button(Pick::Permanent, "Delete permanently", false), button(Pick::Unmark, "Unmark all", false), button(Pick::Cancel, "Cancel", false)];
@@ -130,11 +130,11 @@ impl Modal {
     /// Which programs hold `path` open (or that none do).
     pub fn holders(path: &str, held_by: &[Holder]) -> Self {
         let heading = match held_by.len() {
-            0 => format!("Nothing is using {path}."),
-            1 => format!("1 program is using {path}."),
-            n => format!("{n} programs are using {path}."),
+            0 => format!("Nothing is using {path}"),
+            1 => format!("1 program is using {path}"),
+            n => format!("{n} programs are using {path}"),
         };
-        let list: Vec<String> = held_by.iter().map(|h| format!("{}  {}", h.pid, h.name)).collect();
+        let list: Vec<String> = held_by.iter().map(|h| format!("{}  (PID {})", h.name, h.pid)).collect();
         if list.is_empty() {
             return Self::new(Ask::Info, heading, &[], Vec::new(), vec![button(Pick::Close, "Close", true)], 0, Pick::Close);
         }
@@ -174,7 +174,7 @@ impl Modal {
 
     /// The window is closing while a delete runs.
     pub fn closing() -> Self {
-        Self::new(Ask::Close, "A delete is still running.".into(), &["Closing now stops it partway."], Vec::new(), vec![button(Pick::Yes, "Close anyway", false), button(Pick::No, "Keep open", true)], 1, Pick::No)
+        Self::new(Ask::Close, "A delete is still running".into(), &["Closing now stops it partway."], Vec::new(), vec![button(Pick::Yes, "Close anyway", false), button(Pick::No, "Keep open", true)], 1, Pick::No)
     }
 
     /// Moves the focus to the next (or previous) button, wrapping.
@@ -248,10 +248,24 @@ mod tests {
     #[test]
     fn the_delete_modal_counts_items_and_caps_a_long_list() {
         let m = Modal::delete(req(12));
-        assert_eq!(m.heading, "Delete 12 items? Up to 2.0 KB.");
+        assert_eq!(m.heading, "Delete 12 items (up to 2.0 KB)?");
         assert_eq!(m.detail.len(), SHOWN + 1);
         assert_eq!(m.detail.last().unwrap(), "and 4 more");
-        assert_eq!(Modal::delete(req(1)).heading, "Delete 1 item? Up to 2.0 KB.");
+        assert_eq!(Modal::delete(req(1)).heading, "Delete 1 item (up to 2.0 KB)?");
+    }
+
+    #[test]
+    fn no_heading_ends_in_a_full_stop() {
+        let v = |pid, name: &str| Victim { pid, created: 0, name: name.into() };
+        let h = Holder { pid: 7, name: "x.exe".into() };
+        let failure = Failure::new("delete", "deleted", &[("C:\\f".to_string(), "in use".to_string())], 1, "");
+        let all = [
+            Modal::delete(req(2)), Modal::permanent(req(2)), Modal::closing(), Modal::end(vec![v(1, "a.exe")]), Modal::end(vec![v(1, "a.exe"), v(2, "b.exe")]),
+            Modal::holders("f", &[]), Modal::holders("f", std::slice::from_ref(&h)), Modal::failed(0, false, &failure, vec![]), Modal::process_failed(&failure),
+        ];
+        for m in all {
+            assert!(!m.heading.ends_with('.'), "{:?}", m.heading);
+        }
     }
 
     #[test]
@@ -265,9 +279,9 @@ mod tests {
         assert_eq!((one.heading.as_str(), one.body[0].as_str()), ("Could not delete C:\\f0", "In use by another program."));
         assert_eq!(m.ask, Ask::Failed { view: 3, permanent: false, paths: vec!["C:\\f0".into(), "C:\\f1".into()] });
         let h = |name: &str, pid| Holder { pid, name: name.into() };
-        assert_eq!(Modal::holders("f.txt", &[]).heading, "Nothing is using f.txt.");
-        assert_eq!(Modal::holders("f.txt", &[h("x.exe", 7)]).detail, ["7  x.exe"]);
-        assert_eq!(Modal::holders("f.txt", &[h("x.exe", 7), h("y.exe", 8)]).heading, "2 programs are using f.txt.");
+        assert_eq!(Modal::holders("f.txt", &[]).heading, "Nothing is using f.txt");
+        assert_eq!(Modal::holders("f.txt", &[h("x.exe", 7)]).detail, ["x.exe  (PID 7)"]);
+        assert_eq!(Modal::holders("f.txt", &[h("x.exe", 7), h("y.exe", 8)]).heading, "2 programs are using f.txt");
     }
 
     #[test]
@@ -275,7 +289,7 @@ mod tests {
         let h = |name: &str, pid| Holder { pid, name: name.into() };
         let m = Modal::holders("f.txt", &[h("x.exe", 7), h("y.exe", 8)]);
         assert_eq!(m.ask, Ask::Info);
-        assert_eq!(m.copy.as_deref(), Some("f.txt\n7  x.exe\n8  y.exe"));
+        assert_eq!(m.copy.as_deref(), Some("f.txt\nx.exe  (PID 7)\ny.exe  (PID 8)"));
         assert_eq!(m.buttons.iter().map(|b| b.pick).collect::<Vec<_>>(), [Pick::Copy, Pick::Close]);
         assert_eq!((m.buttons[m.focus].pick, m.cancel), (Pick::Close, Pick::Close), "Enter and Esc still close");
         let none = Modal::holders("f.txt", &[]);

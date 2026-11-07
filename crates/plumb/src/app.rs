@@ -1317,17 +1317,14 @@ impl App {
         }
         match &self.slot.live {
             LiveStatus::Off => {}
-            LiveStatus::On { last: None } | LiveStatus::On { last: Some(_) } if !full => {
+            LiveStatus::On { last } => {
                 sep(out);
-                out.push_str("live");
-            }
-            LiveStatus::On { last: None } => {
-                sep(out);
-                out.push_str("live");
-            }
-            LiveStatus::On { last: Some(t) } => {
-                sep(out);
-                let _ = write!(out, "live, last change {t}");
+                match last {
+                    Some(t) if full => {
+                        let _ = write!(out, "live, last change {t}");
+                    }
+                    _ => out.push_str("live"),
+                }
             }
             LiveStatus::Stale(_) => {
                 sep(out);
@@ -1356,7 +1353,7 @@ impl App {
     }
 
     /// The used space of the disk view `view`'s drive; `None` for the processes view or a drive that reports no size.
-    fn used(&self, view: usize) -> Option<u64> {
+    pub fn used(&self, view: usize) -> Option<u64> {
         let d = self.views.get(view).filter(|d| d.kind == ViewKind::Disk && d.total > 0)?;
         Some(d.total.saturating_sub(d.free))
     }
@@ -1578,7 +1575,7 @@ mod tests {
         a.held_sync();
         let (g, _) = a.held_request().unwrap();
         a.held_done(g, Err(HandleError::Denied));
-        assert!(a.held_text().unwrap().0.contains("run as administrator"));
+        assert!(a.held_text().unwrap().0.contains("run plumb as administrator"));
         let (mut a, id) = process_app();
         a.slot.model.as_mut().unwrap().select(id);
         a.held_sync();
@@ -1751,7 +1748,7 @@ mod tests {
     #[test]
     fn a_process_view_cannot_mark() {
         let (a, id) = process_app();
-        assert_eq!(a.mark_state(id), MarkState::Refused("processes cannot be deleted"));
+        assert_eq!(a.mark_state(id), MarkState::Refused("it is a process"));
     }
 
     #[test]
@@ -1772,7 +1769,7 @@ mod tests {
         let (raw, path, mark, who) = a.menu_target(id).unwrap();
         assert!(!who, "a process has no holders to ask about");
         assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));
-        assert_eq!(mark, MarkState::Refused("processes cannot be deleted"));
+        assert_eq!(mark, MarkState::Refused("it is a process"));
     }
 
     #[test]
@@ -2687,10 +2684,10 @@ Test GPU", status_str(&a, true))));
     fn roots_and_scans_are_refused_with_a_reason_that_reaches_the_status_line() {
         let mut a = scanned();
         let root = a.slot.tree.as_ref().unwrap().roots[0];
-        assert_eq!(a.mark_state(root), MarkState::Refused("a drive root cannot be deleted"));
+        assert_eq!(a.mark_state(root), MarkState::Refused("it is a drive root"));
         a.toggle_mark(root);
         assert!(a.basket().is_empty());
-        assert!(status_str(&a, true).starts_with("cannot mark: a drive root cannot be deleted"), "{}", status_str(&a, true));
+        assert!(status_str(&a, true).starts_with("cannot mark: it is a drive root"), "{}", status_str(&a, true));
         a.handle(Input::Click(5.0, a.layout.header().y + 5.0)); // any click clears the notice
         assert!(!status_str(&a, true).starts_with("cannot mark"));
         let (file, ..) = picks(&a);
@@ -2852,7 +2849,7 @@ Test GPU", status_str(&a, true))));
         a.ask(Modal::holders("f.txt", &[plumb_scan::holders::Holder { pid: 7, name: "x.exe".into() }]));
         let r = a.modal_button(Pick::Copy).expect("a Copy button");
         let e = a.handle(Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0));
-        assert_eq!(e, Effect::Copy("f.txt\n7  x.exe".into()));
+        assert_eq!(e, Effect::Copy("f.txt\nx.exe  (PID 7)".into()));
         assert!(a.modal().is_some_and(|m| m.buttons[0].label == "Copied"), "the button says so");
         let r = a.modal_button(Pick::Close).unwrap();
         assert_eq!(a.handle(Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0)), Effect::None);
@@ -3024,6 +3021,5 @@ Test GPU", status_str(&a, true))));
         a.set_deleting(false);
         a.slot.refreshing = true;
         assert!(!a.begin_delete());
-        assert!(status_str(&a, true).starts_with("cannot delete while the drive is being scanned"));
-    }
+        assert!(status_str(&a, true).starts_with("cannot delete: the drive is being scanned"));    }
 }

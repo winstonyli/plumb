@@ -151,8 +151,8 @@ pub fn reason(hr: i32) -> Reason {
 pub fn with_holders(reason: &Reason, held_by: &[Holder]) -> String {
     match held_by {
         [] => reason.to_string(),
-        [h] => format!("in use by {} ({})", h.name, h.pid),
-        [h, rest @ ..] => format!("in use by {} ({}) and {} more", h.name, h.pid, rest.len()),
+        [h] => format!("in use by {} (PID {})", h.name, h.pid),
+        [h, rest @ ..] => format!("in use by {} (PID {}) and {} more", h.name, h.pid, rest.len()),
     }
 }
 
@@ -201,8 +201,8 @@ mod tests {
     fn a_sharing_violation_reason_names_the_holder_when_there_is_one() {
         let h = |name: &str, pid| Holder { pid, name: name.into() };
         assert_eq!(with_holders(&Reason::other("in use by another program"), &[]), "in use by another program");
-        assert_eq!(with_holders(&Reason::other("x"), &[h("chrome.exe", 1234)]), "in use by chrome.exe (1234)");
-        assert_eq!(with_holders(&Reason::other("x"), &[h("chrome.exe", 1234), h("a.exe", 1), h("b.exe", 2)]), "in use by chrome.exe (1234) and 2 more");
+        assert_eq!(with_holders(&Reason::other("x"), &[h("chrome.exe", 1234)]), "in use by chrome.exe (PID 1234)");
+        assert_eq!(with_holders(&Reason::other("x"), &[h("chrome.exe", 1234), h("a.exe", 1), h("b.exe", 2)]), "in use by chrome.exe (PID 1234) and 2 more");
     }
 
     /// A fresh directory under `%LOCALAPPDATA%` (long path form, which the shell reports back).

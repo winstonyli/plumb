@@ -732,6 +732,7 @@ impl Win {
                 let report = scan_auto(Path::new(&root), &mut b, &progress).map_err(|e| match e {
                     ScanError::Root(e) => e.to_string(),
                     ScanError::Mft(m) => m,
+                    // Never shown: a cancelled scan's receiver is dropped first (`cancel_scan`, `spawn_scan`).
                     ScanError::Cancelled => "cancelled".to_string(),
                 })?;
                 let tree = b.finish().map_err(|e| format!("{e:?}"))?;
@@ -860,7 +861,8 @@ impl Win {
             Ok(sc) => {
                 let files = sc.tree.subtree_files[NodeId(0)] as u64;
                 let corrupt = sc.report.mft.as_ref().map(|m| m.stats.corrupt);
-                let s = summary(sc.report.used, files, sc.elapsed, corrupt, sc.report.note.as_deref());
+                let found = self.app.active.and_then(|v| self.app.used(v)).filter(|&u| u > 0).map(|u| (sc.tree.subtree_size[NodeId(0)].saturating_mul(1000) / u).min(1000));
+                let s = summary(sc.report.used, files, sc.elapsed, found, corrupt, sc.report.note.as_deref());
                 // `begin_scan` cleared the tree, so one on screen is the preview (or the tree
                 // being rescanned); with none yet the scan finished before the first preview.
                 if self.app.slot.tree.is_some() {
@@ -913,12 +915,16 @@ impl Win {
     }
 }
 
-pub fn summary(used: Used, files: u64, elapsed: Duration, corrupt: Option<u64>, note: Option<&str>) -> String {
+/// The status line after a scan; `found` is the share (tenths of a percent) of the drive's used space the scan accounted for.
+pub fn summary(used: Used, files: u64, elapsed: Duration, found: Option<u64>, corrupt: Option<u64>, note: Option<&str>) -> String {
     let scanner = match used {
         Used::Mft => "MFT scan",
         Used::Walk => "Directory walk",
     };
     let mut s = format!("{scanner}: {} in {:.1}s", crate::fmt::noun(files, "file", "files"), elapsed.as_secs_f64());
+    if let Some(t) = found {
+        s.push_str(&format!(", {} of the used space", crate::fmt::tenths(t)));
+    }
     if let Some(c) = corrupt.filter(|&c| c > 0) {
         s.push_str(&format!(", {} skipped", crate::fmt::noun(c, "record", "records")));
     }
@@ -1665,8 +1671,8 @@ mod tests {
 
     #[test]
     fn summary_lists_scanner_counts_skips_and_notes() {
-        let s = summary(Used::Mft, 1234, Duration::from_millis(2500), Some(3), Some("note"));
-        assert_eq!(s, "MFT scan: 1,234 files in 2.5s, 3 records skipped (note)");
-        assert_eq!(summary(Used::Walk, 5, Duration::from_secs(1), None, None), "Directory walk: 5 files in 1.0s");
+        let s = summary(Used::Mft, 1234, Duration::from_millis(2500), Some(923), Some(3), Some("note"));
+        assert_eq!(s, "MFT scan: 1,234 files in 2.5s, 92.3% of the used space, 3 records skipped (note)");
+        assert_eq!(summary(Used::Walk, 5, Duration::from_secs(1), None, None, None), "Directory walk: 5 files in 1.0s");
     }
 }

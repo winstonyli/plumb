@@ -113,7 +113,7 @@ impl App {
         let head = |what: String| format!("Files held by {name} (PID {pid}): {what}");
         Some(match &self.held.state {
             HeldState::Idle | HeldState::Waiting | HeldState::Loading => (head("reading\u{2026}".into()), &[]),
-            HeldState::Ready(Err(HandleError::Denied)) => (head("run as administrator to see the files of this process".into()), &[]),
+            HeldState::Ready(Err(HandleError::Denied)) => (head("run plumb as administrator to see the files of this process".into()), &[]),
             HeldState::Ready(Err(HandleError::Query(_))) => (head("the system handle list could not be read".into()), &[]),
             HeldState::Ready(Ok(list)) => {
                 let n = list.files.len();

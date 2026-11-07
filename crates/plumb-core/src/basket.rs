@@ -77,7 +77,7 @@ impl Basket {
 /// Why `id` may not be marked, or `None` if it may: a drive root, or `system_root` ("C:\Windows") and anything under it.
 pub fn refusal(tree: &Tree, id: NodeId, system_root: &str) -> Option<&'static str> {
     if tree.parent[id].is_none() {
-        return Some("a drive root cannot be deleted");
+        return Some("it is a drive root");
     }
     let path = tree.path(id);
     let starts = |a: &str, b: &str| a.get(..b.len()).is_some_and(|h| h.eq_ignore_ascii_case(b)) && (a.len() == b.len() || a.as_bytes()[b.len()] == b'\\');
@@ -87,7 +87,7 @@ pub fn refusal(tree: &Tree, id: NodeId, system_root: &str) -> Option<&'static st
     // Win32 rewrites these names (a trailing dot or space is dropped), so a delete could hit another file; the orphan folder is not a real one.
     let mut parts = path.split('\\').skip(1);
     if parts.any(|p| p == "<orphans>" || p.ends_with('.') || p.ends_with(' ')) {
-        return Some("this name cannot be deleted safely");
+        return Some("its name is not safe to delete");
     }
     None
 }

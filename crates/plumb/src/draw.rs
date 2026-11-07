@@ -1160,7 +1160,7 @@ impl Pen<'_> {
                     self.fade(Rect { x: bx + bw * frac, y: r.y + 3.0, w: bw * (high - frac), h: r.h - 6.0 }, t.bound);
                 }
             }
-            self.text_fmt(format_args!("{:.1}%", frac * 100.0), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
+            self.text_fmt(format_args!("{}", fmt::tenths((frac * 1000.0).round() as u64)), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (third, fourth) = s.kind.last_two(v.tree, id);
             let (ix, iw) = l.column(3);
             self.text_fmt(format_args!("{third}"), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);

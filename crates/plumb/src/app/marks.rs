@@ -2,6 +2,9 @@
 use super::*;
 use crate::outcome::Failure;
 
+/// Why nothing can be marked or deleted while the drive is read: the one wording of that reason.
+const SCANNING: &str = "the drive is being scanned";
+
 /// What the context menu and `Del` can do with a node.
 #[derive(Debug, PartialEq)]
 pub enum MarkState {
@@ -58,13 +61,13 @@ impl App {
     pub fn mark_state(&self, id: NodeId) -> MarkState {
         let Some(tree) = &self.slot.tree else { return MarkState::Refused("no drive is shown") };
         if self.kind() == ViewKind::Processes {
-            return MarkState::Refused("processes cannot be deleted");
+            return MarkState::Refused("it is a process");
         }
         if self.slot.basket.contains(&tree.path(id)) {
             return MarkState::Unmark;
         }
         if self.cancelable() {
-            return MarkState::Refused("the drive is being scanned");
+            return MarkState::Refused(SCANNING);
         }
         basket::refusal(tree, id, &self.system_root).map_or(MarkState::Mark, MarkState::Refused)
     }
@@ -144,11 +147,11 @@ impl App {
         let why = if self.deleting {
             "a delete is already running"
         } else if self.cancelable() {
-            "cannot delete while the drive is being scanned"
+            SCANNING
         } else {
             return false;
         };
-        self.outcome = Outcome::problem(why);
+        self.outcome = Outcome::problem(format!("cannot delete: {why}"));
         true
     }
 
