@@ -583,6 +583,38 @@ pub fn selftest_tooltip() -> Result<String> {
     Ok(seen.join(", "))
 }
 
+/// A job object that kills everything assigned to it, with its descendants, when it is dropped: a selftest that fails
+/// partway through still leaves none of the processes it started (a `Child` is not killed on drop, and a killed shell
+/// leaves the program it ran).
+struct Job(HANDLE);
+
+impl Job {
+    fn new() -> Result<Self> {
+        use windows::Win32::System::JobObjects::*;
+        unsafe {
+            let job = Self(CreateJobObjectW(None, PCWSTR::null())?);
+            let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+                BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION { LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, ..Default::default() },
+                ..Default::default()
+            };
+            SetInformationJobObject(job.0, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of_val(&info) as u32)?;
+            Ok(job)
+        }
+    }
+
+    /// Takes `child` and the programs it starts from now on; run it straight after the spawn.
+    fn add(&self, child: &std::process::Child) -> Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        unsafe { windows::Win32::System::JobObjects::AssignProcessToJobObject(self.0, HANDLE(child.as_raw_handle())) }
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
 /// The Processes view in a hidden window: it lists this process with a plausible size, follows a child that starts
 /// and exits, stops polling while another view is on screen, and comes back without a burst of CPU.
 /// Run it with `plumb --selftest-processes`.
@@ -623,6 +655,7 @@ pub fn selftest_processes() -> Result<String> {
     };
     let run = || -> Result<String> {
         let me = std::process::id();
+        let job = Job::new()?;
         let pi = with(|w| w.app.views.iter().position(|d| d.kind == ViewKind::Processes)).flatten().ok_or_else(|| fail("no Processes view in the list".into()))?;
         with(|w| w.start_scan(pi));
         wait("this process in the list", 20, &|w| node(w, me).is_some_and(|n| w.app.slot.tree.as_ref().unwrap().size[n] > 0))?;
@@ -632,12 +665,14 @@ pub fn selftest_processes() -> Result<String> {
             return Err(fail(format!("status line: {status:?}")));
         }
         let mut child = std::process::Command::new("cmd").args(["/c", "ping -n 4 127.0.0.1 >nul"]).spawn().map_err(|e| fail(e.to_string()))?;
+        job.add(&child)?;
         let cpid = child.id();
         wait("the child under this process", 5, &|w| node(w, cpid).is_some_and(|n| parent_pid(w, n) == me))?;
         let _ = child.wait();
         wait("the child gone", 10, &|w| node(w, cpid).is_none())?;
         // End process: the confirmation is answered with a real click, and the process goes.
         let mut victim = std::process::Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().map_err(|e| fail(e.to_string()))?;
+        job.add(&victim)?;
         let vpid = victim.id();
         wait("the victim listed with its creation time", 10, &|w| node(w, vpid).is_some_and(|n| w.app.tree_targets(n).is_some()))?;
         with(|w| {
@@ -653,6 +688,7 @@ pub fn selftest_processes() -> Result<String> {
         }
         // End process tree: a shell and the program it runs go together, shell first.
         let mut shell = std::process::Command::new("cmd").args(["/c", "ping -n 60 127.0.0.1 >nul"]).spawn().map_err(|e| fail(e.to_string()))?;
+        job.add(&shell)?;
         let spid = shell.id();
         wait("the shell with a child to end", 10, &|w| node(w, spid).is_some_and(|n| w.app.tree_targets(n).is_some_and(|l| l.len() >= 2)))?;
         // Suspend process tree, then Resume process tree: both processes report suspended, then running again.
