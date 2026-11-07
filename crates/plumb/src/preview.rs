@@ -194,9 +194,8 @@ impl Mft {
             {
                 size = ext;
             }
-            let mut flags = NodeFlags::empty();
+            let mut flags = s.traits;
             flags.set(NodeFlags::DIR, s.is_dir);
-            flags.set(NodeFlags::REPARSE, s.reparse);
             let id = t.add_child(parent, &s.name, size, flags);
             t.set_mtime(id, s.mtime);
             self.records.set(record, id);

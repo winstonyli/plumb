@@ -129,9 +129,15 @@ impl RecordBuilder {
     }
 
     /// A `$STANDARD_INFORMATION` attribute whose last-write time (value offset 0x08) is `modified`.
-    pub fn standard_info(mut self, modified: u64) -> Self {
+    pub fn standard_info(self, modified: u64) -> Self {
+        self.standard_info_with(modified, 0)
+    }
+
+    /// As [`RecordBuilder::standard_info`], with the Win32 file attributes (value offset 0x20) too.
+    pub fn standard_info_with(mut self, modified: u64, attributes: u32) -> Self {
         let mut v = vec![0u8; 0x30];
         put64(&mut v, 0x08, modified);
+        put32(&mut v, 0x20, attributes);
         self.attrs.push(resident_attr(0x10, "", &v));
         self
     }

@@ -46,6 +46,8 @@ pub struct ParsedRecord {
     pub reparse_tag: Option<u32>,
     /// Last-write day from `$STANDARD_INFORMATION` (base records only).
     pub mtime: Option<std::num::NonZeroU32>,
+    /// The Win32 file attributes from `$STANDARD_INFORMATION` (base records only); 0 when absent.
+    pub attributes: u32,
 }
 
 impl ParsedRecord {
@@ -59,6 +61,7 @@ impl ParsedRecord {
         self.data_alloc = None;
         self.reparse_tag = None;
         self.mtime = None;
+        self.attributes = 0;
     }
 
     pub fn name(&self, e: &NameEntry) -> &[u16] {
@@ -244,6 +247,7 @@ fn parse_standard_information(a: &[u8], out: &mut ParsedRecord) -> Result<(), Pa
     }
     let v = resident_value(a)?;
     out.mtime = crate::age::day_of(u64_at(v, 0x08)?);
+    out.attributes = u32_at(v, 0x20).unwrap_or(0);
     Ok(())
 }
 
@@ -319,6 +323,14 @@ mod tests {
         assert_eq!(p.mtime, std::num::NonZeroU32::new(5));
         let (_, p) = parse(RecordBuilder::file().file_name(5, "b", 1).build());
         assert_eq!(p.mtime, None);
+    }
+
+    #[test]
+    fn standard_information_gives_the_file_attributes() {
+        let (_, p) = parse(RecordBuilder::file().standard_info_with(0, 0x6).file_name(5, "a", 1).build());
+        assert_eq!(p.attributes, 0x6);
+        let (_, p) = parse(RecordBuilder::file().file_name(5, "b", 1).build());
+        assert_eq!(p.attributes, 0);
     }
 
     #[test]

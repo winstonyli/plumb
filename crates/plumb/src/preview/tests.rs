@@ -9,7 +9,7 @@ fn far() -> Instant {
 }
 
 fn state(record: u64, parent: u64, name: &str, size: u64, is_dir: bool) -> FileState {
-    FileState { record, sequence: 1, parent, name: name.encode_utf16().collect(), size, is_dir, reparse: false, links: 1, mtime: None }
+    FileState { record, sequence: 1, parent, name: name.encode_utf16().collect(), size, is_dir, traits: plumb_core::NodeFlags::empty(), links: 1, mtime: None }
 }
 
 /// path -> (size, is_dir) for every node but the root's own name.

@@ -25,11 +25,10 @@ pub(crate) fn resolve(tree: &Tree, dir: &[u16]) -> Option<NodeId> {
     Some(cur)
 }
 
-/// The two flags that make a directory entry a different kind of thing.
-fn kind(is_dir: bool, reparse: bool) -> NodeFlags {
-    let mut f = NodeFlags::empty();
+/// The flags a directory entry gives its node: folder or file, and its traits.
+fn kind(is_dir: bool, traits: NodeFlags) -> NodeFlags {
+    let mut f = traits;
     f.set(NodeFlags::DIR, is_dir);
-    f.set(NodeFlags::REPARSE, reparse);
     f
 }
 
@@ -40,10 +39,14 @@ fn apply_one(tree: &mut Tree, l: &Listing) -> usize {
     let mask = NodeFlags::DIR | NodeFlags::REPARSE;
     let mut changes = 0;
     for e in entries {
-        let want = kind(e.is_dir, e.reparse);
+        let want = kind(e.is_dir, e.traits);
         let size = if e.is_dir { 0 } else { e.alloc };
         match have.remove(&fold(&e.name)) {
-            Some(id) if tree.flags[id] & mask == want => {
+            Some(id) if tree.flags[id] & mask == want & mask => {
+                if tree.flags[id] & NodeFlags::TRAITS != want & NodeFlags::TRAITS {
+                    tree.set_traits(id, want);
+                    changes += 1;
+                }
                 // A hard link the scan counted as 0 stays 0 (the file's other links hold its space).
                 let size = if tree.flags[id].contains(NodeFlags::HARDLINK) { 0 } else { size };
                 if tree.mtime[id] != e.mtime {

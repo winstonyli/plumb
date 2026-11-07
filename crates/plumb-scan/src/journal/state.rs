@@ -3,8 +3,9 @@
 //! reuse, repeated renames and directory moves all the same case.
 
 use super::usn::REF_MASK;
-use crate::merge::is_name_surrogate;
+use crate::merge::record_traits;
 use plumb_core::mft::{ParseError, ParsedRecord, parse_fixed_up_record};
+use plumb_core::NodeFlags;
 
 /// One file as it is now. Names follow the scanner's rule: of a hard-linked file's names, the one
 /// with the lowest (parent, name) is the one that carries the size.
@@ -17,8 +18,8 @@ pub struct FileState {
     /// Allocated bytes of the unnamed data stream; 0 for directories.
     pub size: u64,
     pub is_dir: bool,
-    /// A symlink or junction.
-    pub reparse: bool,
+    /// REPARSE (a symlink or junction), SYSTEM and CLOUD.
+    pub traits: NodeFlags,
     /// How many names the record has; more than 1 means hard links.
     pub links: u32,
     /// Last-write day (days since 1601); `None` if unknown.
@@ -54,7 +55,7 @@ pub fn file_state(record: u64, rec: &ParsedRecord) -> Option<FileState> {
         name: rec.name(first).to_vec(),
         size: if rec.is_dir { 0 } else { rec.data_alloc.unwrap_or(0) },
         is_dir: rec.is_dir,
-        reparse: is_name_surrogate(rec.reparse_tag),
+        traits: record_traits(rec),
         links: rec.names.len() as u32,
         mtime: rec.mtime,
     })
@@ -108,7 +109,7 @@ mod tests {
     #[test]
     fn a_plain_file() {
         let (s, needs) = live(seen(RecordBuilder::file().file_name(30, "a.txt", 1).data_nonresident(4096, 100), 31));
-        assert_eq!((s.record, s.parent, s.size, s.is_dir, s.reparse, s.links), (31, 30, 4096, false, false, 1));
+        assert_eq!((s.record, s.parent, s.size, s.is_dir, s.traits, s.links), (31, 30, 4096, false, NodeFlags::empty(), 1));
         assert_eq!(String::from_utf16_lossy(&s.name), "a.txt");
         assert!(!needs);
         assert_eq!(s.frn(), 31 | 1 << 48, "the record builder stamps sequence 1");
@@ -142,7 +143,7 @@ mod tests {
     #[test]
     fn symlinks_are_marked() {
         let (s, _) = live(seen(RecordBuilder::dir().file_name(5, "j", 1).reparse(0xA000_0003), 44));
-        assert!(s.reparse);
+        assert!(s.traits.contains(NodeFlags::REPARSE));
     }
 
     #[test]

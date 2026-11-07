@@ -1,5 +1,6 @@
 //! What a directory looked like when it was listed. Shared by the walker and the directory watch.
 
+use plumb_core::NodeFlags;
 use std::num::NonZeroU32;
 
 /// One directory entry. `alloc` is allocated bytes (0 for directories and for data that lives
@@ -9,8 +10,8 @@ pub struct Entry {
     pub name: Vec<u16>,
     pub alloc: u64,
     pub is_dir: bool,
-    /// A symlink or junction: listed, never followed.
-    pub reparse: bool,
+    /// REPARSE (a symlink or junction: listed, never followed), SYSTEM and CLOUD, as the entry reports them.
+    pub traits: NodeFlags,
     /// The file's id on its volume, the same for every hard link to it (the 128-bit id folded to 64 bits;
     /// NTFS ids fit in 64). Only meaningful for files.
     pub id: u64,

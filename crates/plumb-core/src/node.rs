@@ -6,6 +6,19 @@ use std::ops::{Index, IndexMut};
 #[repr(transparent)]
 pub struct NodeId(pub u32);
 
+impl NodeFlags {
+    /// SYSTEM and CLOUD, from a Win32 file-attribute word (hidden or system; offline, recall-on-open or
+    /// recall-on-data-access).
+    pub fn from_attributes(attrs: u32) -> NodeFlags {
+        const HIDDEN_OR_SYSTEM: u32 = 0x2 | 0x4;
+        const CLOUD: u32 = 0x1000 | 0x4_0000 | 0x40_0000;
+        let mut f = NodeFlags::empty();
+        f.set(NodeFlags::SYSTEM, attrs & HIDDEN_OR_SYSTEM != 0);
+        f.set(NodeFlags::CLOUD, attrs & CLOUD != 0);
+        f
+    }
+}
+
 impl NodeId {
     pub const NONE: NodeId = NodeId(u32::MAX);
 
@@ -42,6 +55,12 @@ bitflags! {
         const DENIED = 8;
         /// Removed after the scan; the slot stays so `NodeId`s never change.
         const DEAD = 16;
+        /// A hidden or system file or folder.
+        const SYSTEM = 32;
+        /// A cloud placeholder: its data is not on this disk until it is opened.
+        const CLOUD = 64;
+        /// What a scanner reads from the directory entry itself besides folder or file.
+        const TRAITS = Self::REPARSE.bits() | Self::SYSTEM.bits() | Self::CLOUD.bits();
     }
 }
 
@@ -55,6 +74,15 @@ mod tests {
         assert!(!NodeId(0).is_none());
         assert_eq!(std::mem::size_of::<NodeId>(), 4);
         assert_eq!(std::mem::size_of::<NodeFlags>(), 1);
+    }
+
+    #[test]
+    fn attributes_give_system_for_hidden_or_system_and_cloud_for_a_placeholder() {
+        assert_eq!(NodeFlags::from_attributes(0x20), NodeFlags::empty(), "archive only");
+        assert_eq!(NodeFlags::from_attributes(0x2), NodeFlags::SYSTEM);
+        assert_eq!(NodeFlags::from_attributes(0x4 | 0x20), NodeFlags::SYSTEM);
+        assert_eq!(NodeFlags::from_attributes(0x40_0000), NodeFlags::CLOUD);
+        assert_eq!(NodeFlags::from_attributes(0x1000 | 0x2), NodeFlags::SYSTEM | NodeFlags::CLOUD);
     }
 
     #[test]

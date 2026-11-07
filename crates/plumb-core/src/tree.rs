@@ -177,6 +177,12 @@ impl Tree {
         self.mtime[id] = m;
     }
 
+    /// Replaces the node's `TRAITS` flags (reparse, system, cloud) with those of `traits`.
+    pub fn set_traits(&mut self, id: NodeId, traits: NodeFlags) {
+        let f = &mut self.flags[id];
+        *f = (*f - NodeFlags::TRAITS) | (traits & NodeFlags::TRAITS);
+    }
+
     /// Makes `id` a folder (it can be expanded, and the map frames what is in it) or a file (one item in its
     /// parents' counts, a tile of its own). Ignored when it already is, or for a dead node.
     pub fn set_dir(&mut self, id: NodeId, dir: bool) {

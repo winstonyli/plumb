@@ -6,11 +6,11 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 fn file(name: &str, alloc: u64) -> Entry {
-    Entry { name: u(name), alloc, is_dir: false, reparse: false, id: 0, mtime: None }
+    Entry { name: u(name), alloc, is_dir: false, traits: plumb_core::NodeFlags::empty(), id: 0, mtime: None }
 }
 
 fn dir(name: &str) -> Entry {
-    Entry { name: u(name), alloc: 0, is_dir: true, reparse: false, id: 0, mtime: None }
+    Entry { name: u(name), alloc: 0, is_dir: true, traits: plumb_core::NodeFlags::empty(), id: 0, mtime: None }
 }
 
 fn listing(d: &str, entries: Vec<Entry>) -> Listing {

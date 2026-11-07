@@ -269,7 +269,7 @@ fn list_dirty(root: &[u16], dirs: HashMap<Vec<u16>, bool>, cluster: u64, buf: &m
             }
             let entries: Result<Vec<Entry>, ()> = list_dir(&abs(root, &d), buf, cluster);
             if deep && let Ok(es) = &entries {
-                stack.extend(es.iter().filter(|e| e.is_dir && !e.reparse).map(|e| rel_join(&d, &e.name)));
+                stack.extend(es.iter().filter(|e| e.is_dir && !e.traits.contains(plumb_core::NodeFlags::REPARSE)).map(|e| rel_join(&d, &e.name)));
             }
             out.push(Listing { dir: d, entries });
         }

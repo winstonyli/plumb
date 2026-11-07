@@ -16,11 +16,22 @@ pub fn is_name_surrogate(tag: Option<u32>) -> bool {
     matches!(tag, Some(REPARSE_TAG_MOUNT_POINT | REPARSE_TAG_SYMLINK))
 }
 
+/// What a record is besides folder or file: a name-surrogate reparse tag (symlink, junction), and the system and
+/// cloud attributes.
+pub fn record_traits(rec: &ParsedRecord) -> NodeFlags {
+    let mut t = NodeFlags::from_attributes(rec.attributes);
+    t.set(NodeFlags::REPARSE, is_name_surrogate(rec.reparse_tag));
+    t
+}
+
+// The per-record flag byte holds the record's traits at their `NodeFlags` bit positions (2, 32, 64), so the
+// private flags sit on the other bits.
 const F_SEEN: u8 = 1; // the base record was added
-const F_IN_USE: u8 = 2;
-const F_DIR: u8 = 4;
-const F_REPARSE: u8 = 8; // name-surrogate reparse tag (symlink, junction)
+const F_IN_USE: u8 = 4;
+const F_DIR: u8 = 8;
 const F_HAS_ALLOC: u8 = 16;
+const F_TRAITS: u8 = NodeFlags::TRAITS.bits();
+const _: () = assert!(F_TRAITS & (F_SEEN | F_IN_USE | F_DIR | F_HAS_ALLOC) == 0);
 
 struct NameRec {
     /// Record number of the file this name belongs to (the base record for extensions).
@@ -109,9 +120,7 @@ impl MftMerger {
             self.alloc[o] = a;
             gained = a;
         }
-        if is_name_surrogate(rec.reparse_tag) {
-            self.flags[o] |= F_REPARSE;
-        }
+        self.flags[o] |= record_traits(rec).bits();
         gained
     }
 
@@ -225,12 +234,9 @@ impl MftMerger {
                 last_owner = owner;
             }
             let is_dir = self.flags[o] & F_DIR != 0;
-            let mut flags = NodeFlags::empty();
+            let mut flags = NodeFlags::from_bits_truncate(self.flags[o] & F_TRAITS);
             if is_dir {
                 flags |= NodeFlags::DIR;
-            }
-            if self.flags[o] & F_REPARSE != 0 {
-                flags |= NodeFlags::REPARSE;
             }
             if !carries {
                 flags |= NodeFlags::HARDLINK;
@@ -433,6 +439,18 @@ mod tests {
         let (t, _) = build(m);
         assert!(t.flags[find(&t, "X:\\junction")].contains(NodeFlags::REPARSE));
         assert!(!t.flags[find(&t, "X:\\cloud")].contains(NodeFlags::REPARSE));
+    }
+
+    #[test]
+    fn hidden_system_and_cloud_attributes_reach_the_node_flags() {
+        let mut m = sample(&[0]);
+        feed(&mut m, 70, RecordBuilder::file().standard_info_with(0, 0x2).file_name(5, "hidden", 1).data_resident(10));
+        feed(&mut m, 71, RecordBuilder::file().standard_info_with(0, 0x40_0000).file_name(5, "placeholder", 1).data_resident(10));
+        feed(&mut m, 72, RecordBuilder::file().standard_info_with(0, 0x20).file_name(5, "plain", 1).data_resident(10));
+        let (t, _) = build(m);
+        assert_eq!(t.flags[find(&t, "X:\\hidden")] & NodeFlags::TRAITS, NodeFlags::SYSTEM);
+        assert_eq!(t.flags[find(&t, "X:\\placeholder")] & NodeFlags::TRAITS, NodeFlags::CLOUD);
+        assert_eq!(t.flags[find(&t, "X:\\plain")] & NodeFlags::TRAITS, NodeFlags::empty());
     }
 
     #[test]

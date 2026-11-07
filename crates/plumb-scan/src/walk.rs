@@ -138,8 +138,11 @@ pub(crate) fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec
             let dot = name == [b'.' as u16] || name == [b'.' as u16, b'.' as u16];
             if !dot {
                 let is_dir = e.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0;
-                let reparse = e.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
-                    && matches!(e.ReparsePointTag, IO_REPARSE_TAG_MOUNT_POINT | IO_REPARSE_TAG_SYMLINK);
+                let mut traits = NodeFlags::from_attributes(e.FileAttributes);
+                traits.set(
+                    NodeFlags::REPARSE,
+                    e.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 && matches!(e.ReparsePointTag, IO_REPARSE_TAG_MOUNT_POINT | IO_REPARSE_TAG_SYMLINK),
+                );
                 // Directories count as 0: the MFT scanner does not count index allocation either.
                 // Data stored inside the MFT record reports its length rounded to 8 bytes, which is
                 // never a whole number of clusters. It uses no clusters, so count it as 0 (as the
@@ -149,7 +152,7 @@ pub(crate) fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec
                 let id = e.FileId.Identifier;
                 let id = u64::from_le_bytes(id[..8].try_into().unwrap()) ^ u64::from_le_bytes(id[8..].try_into().unwrap());
                 let mtime = plumb_core::age::day_of(e.LastWriteTime as u64);
-                out.push(Entry { name, alloc, is_dir, reparse, id, mtime });
+                out.push(Entry { name, alloc, is_dir, traits, id, mtime });
             }
             if e.NextEntryOffset == 0 {
                 break;
@@ -229,12 +232,9 @@ impl Scanner for WalkScanner {
                     continue;
                 };
                 for e in entries {
-                    let mut flags = NodeFlags::empty();
+                    let mut flags = e.traits;
                     if e.is_dir {
                         flags |= NodeFlags::DIR;
-                    }
-                    if e.reparse {
-                        flags |= NodeFlags::REPARSE;
                     }
                     // A file seen before under another name is a hard link: it uses no further space.
                     let mut size = e.alloc;
@@ -251,7 +251,7 @@ impl Scanner for WalkScanner {
                         progress.files.fetch_add(1, Ordering::Relaxed);
                         progress.bytes.fetch_add(size, Ordering::Relaxed);
                     }
-                    if e.is_dir && !e.reparse {
+                    if e.is_dir && !e.traits.contains(NodeFlags::REPARSE) {
                         job_tx.send(Job { id, path: join(&done.path, &e.name) }).unwrap();
                         outstanding += 1;
                     }

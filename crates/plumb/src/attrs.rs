@@ -17,11 +17,15 @@ pub enum Attr {
     Link,
     /// A further hard link to a file already counted.
     Hardlink,
+    /// A hidden or system file or folder.
+    System,
+    /// A cloud placeholder: its data is not on this disk until it is opened.
+    Cloud,
 }
 
 impl Attr {
     /// Every attribute, in the order its pill is drawn, left to right.
-    pub const ALL: [Attr; 6] = [Attr::Denied, Attr::Protected, Attr::Suspended, Attr::Elevated, Attr::Link, Attr::Hardlink];
+    pub const ALL: [Attr; 8] = [Attr::Denied, Attr::Protected, Attr::Suspended, Attr::Elevated, Attr::Link, Attr::Hardlink, Attr::System, Attr::Cloud];
 
     /// The pill's text.
     pub fn word(self) -> &'static str {
@@ -32,6 +36,8 @@ impl Attr {
             Attr::Elevated => "elevated",
             Attr::Link => "link",
             Attr::Hardlink => "hardlink",
+            Attr::System => "system",
+            Attr::Cloud => "cloud",
         }
     }
 
@@ -44,6 +50,8 @@ impl Attr {
             Attr::Elevated => "runs as administrator; plumb needs administrator rights to end, suspend or resume it.",
             Attr::Link => "a junction or symbolic link; plumb does not follow it.",
             Attr::Hardlink => "a further hard link to a file already counted; its size is not counted again.",
+            Attr::System => "a hidden or system file or folder.",
+            Attr::Cloud => "a cloud placeholder: its data is not on this disk until it is opened, so it takes little or no space here.",
         }
     }
 }
@@ -86,7 +94,7 @@ impl Attrs {
 /// The attributes of row `id`. `procs` is the Processes view's per-process facts, `None` in the other views.
 pub fn of(tree: &Tree, id: NodeId, procs: Option<&HashMap<u32, ProcInfo>>) -> Attrs {
     let flags = tree.flags[id];
-    let mut a = Attrs::default().with(Attr::Denied, flags.contains(NodeFlags::DENIED)).with(Attr::Link, flags.contains(NodeFlags::REPARSE)).with(Attr::Hardlink, flags.contains(NodeFlags::HARDLINK));
+    let mut a = Attrs::default().with(Attr::Denied, flags.contains(NodeFlags::DENIED)).with(Attr::Link, flags.contains(NodeFlags::REPARSE)).with(Attr::Hardlink, flags.contains(NodeFlags::HARDLINK)).with(Attr::System, flags.contains(NodeFlags::SYSTEM)).with(Attr::Cloud, flags.contains(NodeFlags::CLOUD));
     if let Some(procs) = procs {
         let pid = tree.aux.get(id.idx()).map_or(0, |x| x[2]) as u32;
         let info = procs.get(&pid);
@@ -105,5 +113,12 @@ mod tests {
         assert_eq!(a.iter().collect::<Vec<_>>(), vec![Attr::Suspended, Attr::Hardlink]);
         assert_eq!(a.words(), "suspended, hardlink");
         assert!(Attrs::default().is_empty() && !a.is_empty());
+    }
+
+    #[test]
+    fn every_attribute_has_its_own_bit_in_the_set() {
+        assert!(Attr::ALL.len() <= 8, "Attrs is a u8");
+        let all = Attr::ALL.iter().fold(Attrs::default(), |a, &x| a.with(x, true));
+        assert_eq!(all.iter().count(), Attr::ALL.len());
     }
 }

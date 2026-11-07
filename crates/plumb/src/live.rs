@@ -112,9 +112,8 @@ impl Live {
     /// size differ. False if it could not be placed yet (moving it would put it inside itself,
     /// which happens when two folders swap places and their events arrive in the wrong order).
     fn upsert(&mut self, tree: &mut Tree, s: &FileState, parent: NodeId) -> bool {
-        let mut flags = NodeFlags::empty();
+        let mut flags = s.traits;
         flags.set(NodeFlags::DIR, s.is_dir);
-        flags.set(NodeFlags::REPARSE, s.reparse);
         flags.set(NodeFlags::HARDLINK, s.links > 1);
         let size = if s.is_dir { 0 } else { s.size };
         let record = s.record as usize;
@@ -132,6 +131,10 @@ impl Live {
                 }
                 if tree.mtime[id] != s.mtime {
                     tree.set_mtime(id, s.mtime);
+                    self.changes += 1;
+                }
+                if tree.flags[id] & NodeFlags::TRAITS != s.traits {
+                    tree.set_traits(id, s.traits);
                     self.changes += 1;
                 }
                 if tree.size[id] != size {
