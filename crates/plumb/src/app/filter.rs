@@ -132,7 +132,7 @@ impl App {
         match &f.installed {
             Some(i) => {
                 let n = i.keep.matches();
-                format!("{} {}", fmt::count(n as u64), if n == 1 { "match" } else { "matches" })
+                fmt::noun(n as u64, "match", "matches").to_string()
             }
             None => String::new(),
         }

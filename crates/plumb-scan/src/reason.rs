@@ -11,8 +11,11 @@ pub enum Reason {
 }
 
 impl Reason {
-    pub fn other(text: impl Into<String>) -> Self {
-        Reason::Other(text.into())
+    /// `text` is cleaned to run into a sentence: system messages end in a full stop and may hold line breaks, and the
+    /// dialogs add their own punctuation.
+    pub fn other(text: impl AsRef<str>) -> Self {
+        let words: Vec<&str> = text.as_ref().split_whitespace().collect();
+        Reason::Other(words.join(" ").trim_end_matches('.').to_string())
     }
 
     pub fn is_access_denied(&self) -> bool {
@@ -37,6 +40,7 @@ mod tests {
     fn a_reason_reads_as_its_words_and_only_access_denied_says_so() {
         assert_eq!(Reason::AccessDenied.to_string(), "access denied");
         assert_eq!(Reason::other("in use").to_string(), "in use");
+        assert_eq!(Reason::other("The file is in use.\r\n").to_string(), "The file is in use", "no full stop or line break to double up");
         assert!(Reason::AccessDenied.is_access_denied() && !Reason::other("access denied").is_access_denied());
     }
 }
