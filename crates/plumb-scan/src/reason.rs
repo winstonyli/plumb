@@ -11,11 +11,18 @@ pub enum Reason {
 }
 
 impl Reason {
-    /// `text` is cleaned to run into a sentence: system messages end in a full stop and may hold line breaks, and the
-    /// dialogs add their own punctuation.
+    /// `text` is cleaned to run into a sentence: system messages end in a full stop, may hold line breaks and start with a
+    /// capital (kept for an acronym like "DLL"), and the dialogs add their own punctuation and capital.
     pub fn other(text: impl AsRef<str>) -> Self {
         let words: Vec<&str> = text.as_ref().split_whitespace().collect();
-        Reason::Other(words.join(" ").trim_end_matches('.').to_string())
+        let text = words.join(" ");
+        let text = text.trim_end_matches('.');
+        let mut c = text.chars();
+        let lowered = match (c.next(), c.next()) {
+            (Some(a), Some(b)) if a.is_uppercase() && !b.is_uppercase() => format!("{}{}{}", a.to_lowercase(), b, c.as_str()),
+            _ => text.to_string(),
+        };
+        Reason::Other(lowered)
     }
 
     pub fn is_access_denied(&self) -> bool {
@@ -40,7 +47,9 @@ mod tests {
     fn a_reason_reads_as_its_words_and_only_access_denied_says_so() {
         assert_eq!(Reason::AccessDenied.to_string(), "access denied");
         assert_eq!(Reason::other("in use").to_string(), "in use");
-        assert_eq!(Reason::other("The file is in use.\r\n").to_string(), "The file is in use", "no full stop or line break to double up");
+        assert_eq!(Reason::other("The file is in use.\r\n").to_string(), "the file is in use", "no full stop or line break to double up, and no capital mid-line");
+        assert_eq!(Reason::other("DLL not found").to_string(), "DLL not found", "an acronym keeps its capitals");
+        assert_eq!(Reason::other("").to_string(), "");
         assert!(Reason::AccessDenied.is_access_denied() && !Reason::other("access denied").is_access_denied());
     }
 }
