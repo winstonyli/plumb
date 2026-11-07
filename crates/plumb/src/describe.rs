@@ -11,7 +11,8 @@ use std::fmt::Write as _;
 #[derive(Clone, Copy, Debug)]
 pub struct When {
     pub label: &'static str,
-    pub day: u32,
+    /// Unix seconds.
+    pub at: u32,
     pub now: u32,
 }
 
@@ -34,7 +35,7 @@ pub struct Description<'a> {
     pub attrs: Attrs,
 }
 
-/// A file or folder `id` of `tree`, whose size is `bytes`; `now` is today as a day count.
+/// A file or folder `id` of `tree`, whose size is `bytes`; `now` is the time now, in unix seconds.
 pub fn file(tree: &Tree, id: NodeId, bytes: u64, now: u32, attrs: Attrs) -> Description<'_> {
     Description {
         who: fmt::node_path(tree, id),
@@ -42,15 +43,15 @@ pub fn file(tree: &Tree, id: NodeId, bytes: u64, now: u32, attrs: Attrs) -> Desc
         size: fmt::size(bytes),
         scope: None,
         items: tree.flags[id].contains(NodeFlags::DIR).then(|| fmt::noun(tree.subtree_files[id] as u64, "item", "items")),
-        when: tree.mtime[id].map(|d| When { label: "modified", day: d.get(), now }),
+        when: tree.mtime[id].map(|d| When { label: "modified", at: d.get(), now }),
         numbers: None,
         exe: None,
         attrs,
     }
 }
 
-/// A process `id` of the Processes tree, whose size (`size`, counted in `metric`) is already worded; `now` is today as a
-/// local day count.
+/// A process `id` of the Processes tree, whose size (`size`, counted in `metric`) is already worded; `now` is the time now, in
+/// unix seconds.
 pub fn process<'a>(tree: &'a Tree, id: NodeId, size: Show<'static>, metric: &'static str, info: Option<&'a ProcInfo>, now: u32, attrs: Attrs) -> Description<'a> {
     let [cpu, io, pid] = tree.aux.get(id.idx()).copied().unwrap_or_default();
     Description {
@@ -59,7 +60,7 @@ pub fn process<'a>(tree: &'a Tree, id: NodeId, size: Show<'static>, metric: &'st
         size,
         scope: Some((metric, if tree.flags[id].contains(NodeFlags::DIR) { "this and its children" } else { "this process" })),
         items: None,
-        when: info.filter(|i| i.created > 0).map(|i| When { label: "started", day: fmt::local_day(i.created), now }),
+        when: info.and_then(|i| plumb_core::age::secs_of(i.created)).map(|at| When { label: "started", at: at.get(), now }),
         numbers: Some((cpu, io)),
         exe: info.and_then(|i| i.path.as_deref()),
         attrs,
@@ -107,7 +108,8 @@ impl Description<'_> {
             let _ = write!(out, ", {items}");
         }
         if let Some(w) = self.when {
-            let _ = write!(out, ", {} {}, {}", w.label, fmt::date(w.day), fmt::age(w.now, w.day));
+            let (day, now) = (fmt::local_day(w.at), fmt::local_day(w.now));
+            let _ = write!(out, ", {} {}, {}", w.label, fmt::date(day), fmt::age(now, day));
         }
         if let Some((cpu, io)) = self.numbers {
             let _ = write!(out, "; own CPU {}, I/O {}", fmt::tenths(cpu), fmt::rate(io));

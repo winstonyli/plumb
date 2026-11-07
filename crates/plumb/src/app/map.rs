@@ -62,7 +62,7 @@ impl App {
             treemap::layout(tree, root, rect, px)
         };
         self.map_classes = treemap::class_bytes(&self.map_tiles);
-        self.map_now = today();
+        self.map_now = plumb_core::age::now_secs();
         (self.map_key, self.map_dirty, self.map_hover) = (Some(key), false, None);
         self.map_gen += 1;
     }

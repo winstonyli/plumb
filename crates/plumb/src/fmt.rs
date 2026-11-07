@@ -188,10 +188,11 @@ pub fn fraction(part: u64, whole: u64) -> f32 {
     if whole == 0 { 0.0 } else { (part as f64 / whole as f64) as f32 }
 }
 
-/// The local calendar day (since 1601) of a FILETIME (100 ns since 1601, UTC), by the machine's time zone as set now.
-pub fn local_day(filetime: u64) -> u32 {
+/// The local calendar day (since 1601) of unix time `secs`, by the machine's time zone as set now.
+pub fn local_day(secs: u32) -> u32 {
     use windows::Win32::Foundation::FILETIME;
     use windows::Win32::Storage::FileSystem::FileTimeToLocalFileTime;
+    let filetime = plumb_core::age::filetime_of(secs);
     let utc = FILETIME { dwLowDateTime: filetime as u32, dwHighDateTime: (filetime >> 32) as u32 };
     let mut local = FILETIME::default();
     let ft = if unsafe { FileTimeToLocalFileTime(&utc, &mut local) }.is_ok() { (u64::from(local.dwHighDateTime) << 32) | u64::from(local.dwLowDateTime) } else { filetime };
@@ -246,12 +247,12 @@ mod tests {
 
     #[test]
     fn the_local_day_is_the_utc_day_moved_by_the_zone_and_the_same_for_two_instants_in_one_local_day() {
-        let day = DAY_TICKS;
-        let t = u64::from(UNIX_EPOCH_DAYS) * day + 12 * 36_000_000_000; // noon UTC on 1970-01-01
+        let day = 86_400;
+        let t = 12 * 3600; // noon UTC on 1970-01-01
         let d = i64::from(local_day(t)) - i64::from(UNIX_EPOCH_DAYS);
         assert!((-1..=1).contains(&d), "within a day of UTC, got {d}");
         // two instants an hour apart land on the same local day unless a local midnight lies between them
-        let (a, b) = (local_day(t), local_day(t + 36_000_000_000));
+        let (a, b) = (local_day(t), local_day(t + 3600));
         assert!(a == b || a + 1 == b);
         // one UTC day later is exactly one local day later (no DST step in 1970-01-01..02 for any zone rule applied today)
         assert_eq!(local_day(t + day), local_day(t) + 1);

@@ -100,10 +100,10 @@ mod tests {
     }
 
     #[test]
-    fn the_state_carries_the_last_write_day() {
-        let ft = 4 * plumb_core::age::DAY_TICKS;
+    fn the_state_carries_the_last_write_time() {
+        let ft = plumb_core::age::filetime_of(4_000_000);
         let (s, _) = live(seen(RecordBuilder::file().standard_info(ft).file_name(30, "a", 1).data_nonresident(4096, 1), 31));
-        assert_eq!(s.mtime, std::num::NonZeroU32::new(4));
+        assert_eq!(s.mtime, std::num::NonZeroU32::new(4_000_000));
     }
 
     #[test]

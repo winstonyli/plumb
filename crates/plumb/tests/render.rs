@@ -344,16 +344,16 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     assert!(dist(bar(bottom)) < dist(bar(top)), "the rows fade out downward");
 }
 
-/// Two same-class files, one written `age` days before `now`, the other today, in a map with the given `now`.
+/// Two same-class files, one written `old` days before `now`, the other just now, in a map with the given `now`.
 fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
     use plumb_core::treemap::{layout as map_layout, Kind};
     let gfx = Gfx::warp().expect("WARP device");
-    let now = 40_000u32;
+    let now = 2_000_000_000u32;
     let mut b = plumb_core::TreeBuilder::new();
     let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
     let a = b.push_str(root, "old.mp4", 600_000, plumb_core::NodeFlags::empty());
     let n = b.push_str(root, "new.mp4", 500_000, plumb_core::NodeFlags::empty());
-    b.set_mtime(a, old.and_then(std::num::NonZeroU32::new));
+    b.set_mtime(a, old.and_then(|days| std::num::NonZeroU32::new(now - days * 86_400)));
     b.set_mtime(n, std::num::NonZeroU32::new(now));
     let tree = b.finish().unwrap();
     let mut layout = Layout::new(W as f32, H as f32);
@@ -377,7 +377,7 @@ fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
 #[test]
 fn an_old_tile_is_paler_than_a_new_one_and_an_unknown_time_is_the_plain_class_colour() {
     for dark in [true, false] {
-        let (aged, [old, new], theme) = age_shot(dark, Some(40_000 - 4_000));
+        let (aged, [old, new], theme) = age_shot(dark, Some(4_000));
         let class = expect(theme.class[plumb_core::treemap::Class::Video.index()]);
         let near = |got: [i32; 3], want: [i32; 3]| got.iter().zip(want).all(|(x, y)| (x - y).abs() <= 2);
         assert!(near(rgb_at(&aged, new.0, new.1), class), "{dark}: written today = the class colour");

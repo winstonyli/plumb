@@ -84,7 +84,7 @@ impl ViewKind {
     /// The text of the last two columns for `id`; the second is `None` when the node has nothing to show there.
     pub fn last_two(self, tree: &Tree, id: NodeId) -> (fmt::Show<'static>, Option<fmt::Show<'static>>) {
         match self {
-            ViewKind::Disk => (fmt::count(tree.subtree_files[id] as u64), tree.mtime[id].map(|d| fmt::date(d.get()))),
+            ViewKind::Disk => (fmt::count(tree.subtree_files[id] as u64), tree.mtime[id].map(|d| fmt::date(fmt::local_day(d.get())))),
             ViewKind::Processes => {
                 let [cpu, io, _] = tree.aux.get(id.idx()).copied().unwrap_or_default();
                 (fmt::tenths(cpu), Some(fmt::rate(io)))
@@ -295,20 +295,6 @@ fn tile_tip(tree: &Tree, t: &Tile, now: u32, attrs: Attrs, out: &mut String) {
             Ok(())
         }
     };
-}
-
-/// Today as a day count since 1601-01-01.
-fn today() -> u32 {
-    plumb_core::age::day_from_unix(unix_secs())
-}
-
-fn unix_secs() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
-}
-
-/// Now as a FILETIME (100 ns since 1601-01-01, UTC).
-fn now_filetime() -> u64 {
-    (unix_secs() + u64::from(plumb_core::age::UNIX_EPOCH_DAYS) * 86_400) * 10_000_000
 }
 
 /// What the app holds for one view: `App::slot` for the one on screen, a parked copy for the
@@ -780,7 +766,7 @@ impl App {
         let attrs = self.row_attrs(id);
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]) as u32;
-            describe::process(tree, id, self.kind().size_text(self.slot.proc_metric, bytes), metric_noun(self.slot.proc_metric), self.slot.proc_info.get(&pid), fmt::local_day(now_filetime()), attrs)
+            describe::process(tree, id, self.kind().size_text(self.slot.proc_metric, bytes), metric_noun(self.slot.proc_metric), self.slot.proc_info.get(&pid), plumb_core::age::now_secs(), attrs)
         } else {
             describe::file(tree, id, bytes, self.map_now, attrs)
         }
@@ -1466,9 +1452,9 @@ mod tests {
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let f = b.push_str(r, "f", 5, plumb_core::NodeFlags::empty());
-        b.set_mtime(f, std::num::NonZeroU32::new(154_000));
+        b.set_mtime(f, std::num::NonZeroU32::new(1_700_000_000));
         let t = b.finish().unwrap();
-        assert_eq!(ViewKind::Disk.last_two(&t, f), (fmt::count(1), Some(fmt::date(154_000))));
+        assert_eq!(ViewKind::Disk.last_two(&t, f), (fmt::count(1), Some(fmt::date(fmt::local_day(1_700_000_000)))));
         assert_eq!(ViewKind::Disk.last_two(&t, r), (fmt::count(1), None), "no date, no fourth cell");
     }
 
@@ -2613,10 +2599,12 @@ Test GPU", status_str(&a, true))));
     fn a_tile_tip_says_when_the_file_was_last_written() {
         let mut tree = plumb_core::synth::flat_tree(3);
         let t = treemap::Tile { node: NodeId(1), rect: Rect::default(), depth: 0, class: treemap::Class::Other, kind: Kind::File, bytes: 2048, count: 1, mtime: None };
-        assert!(!tile_str(&tree, &t, 154_000).contains("modified"));
-        tree.set_mtime(NodeId(1), std::num::NonZeroU32::new(plumb_core::age::UNIX_EPOCH_DAYS + 19_791));
-        let tip = tile_str(&tree, &t, plumb_core::age::UNIX_EPOCH_DAYS + 19_791 + 766);
-        assert!(tip.ends_with(", modified 2024-03-09, 2.1 y ago"), "{tip}");
+        assert!(!tile_str(&tree, &t, 1_700_000_000).contains("modified"));
+        let written = 19_791 * 86_400 + 12 * 3600; // noon UTC on 2024-03-09
+        tree.set_mtime(NodeId(1), std::num::NonZeroU32::new(written));
+        let tip = tile_str(&tree, &t, written + 766 * 86_400);
+        let date = fmt::date(fmt::local_day(written));
+        assert!(tip.ends_with(&format!(", modified {date}, 2.1 y ago")), "{tip}");
     }
 
     #[test]

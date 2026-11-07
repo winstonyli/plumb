@@ -177,13 +177,13 @@ fn a_cancelled_walk_returns_cancelled_and_ends() {
 }
 
 #[test]
-fn files_carry_their_last_write_day() {
+fn files_carry_their_last_write_time() {
     let fx = fixture("mtime");
     let (t, _) = scan(&fx.0, 2);
     let f = (0..t.len() as u32).map(NodeId).find(|&i| t.path(i).ends_with("five.dat")).unwrap();
-    let today = plumb_core::age::day_from_unix(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
-    let day = t.mtime[f].expect("a freshly written file has a time").get();
-    assert!(day.abs_diff(today) <= 1, "{day} vs {today}");
+    let now = plumb_core::age::now_secs();
+    let at = t.mtime[f].expect("a freshly written file has a time").get();
+    assert!(at.abs_diff(now) <= 60, "{at} vs {now}");
 }
 
 #[test]

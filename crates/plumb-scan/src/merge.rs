@@ -315,13 +315,13 @@ mod tests {
     }
 
     #[test]
-    fn every_link_of_a_record_gets_its_last_write_day() {
-        use plumb_core::age::DAY_TICKS;
-        let nine = std::num::NonZeroU32::new(9);
+    fn every_link_of_a_record_gets_its_last_write_time() {
+        use plumb_core::age::filetime_of;
+        let nine = std::num::NonZeroU32::new(9_000_000);
         let mut m = MftMerger::new(100);
         feed(&mut m, 5, RecordBuilder::dir().file_name(5, ".", 1));
         feed(&mut m, 30, RecordBuilder::dir().file_name(5, "d", 1));
-        feed(&mut m, 31, RecordBuilder::file().standard_info(9 * DAY_TICKS).file_name(5, "a", 1).file_name(30, "b", 1).data_nonresident(4096, 100));
+        feed(&mut m, 31, RecordBuilder::file().standard_info(filetime_of(9_000_000)).file_name(5, "a", 1).file_name(30, "b", 1).data_nonresident(4096, 100));
         let (t, _) = build(m);
         let (a, b) = (find(&t, "X:\\a"), find(&t, "X:\\d\\b"));
         assert_eq!((t.mtime[a], t.mtime[b]), (nine, nine));

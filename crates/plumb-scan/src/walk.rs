@@ -151,7 +151,7 @@ pub(crate) fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec
                 let alloc = if is_dir || (cluster != 0 && !raw.is_multiple_of(cluster)) { 0 } else { raw };
                 let id = e.FileId.Identifier;
                 let id = u64::from_le_bytes(id[..8].try_into().unwrap()) ^ u64::from_le_bytes(id[8..].try_into().unwrap());
-                let mtime = plumb_core::age::day_of(e.LastWriteTime as u64);
+                let mtime = plumb_core::age::secs_of(e.LastWriteTime as u64);
                 out.push(Entry { name, alloc, is_dir, traits, id, mtime });
             }
             if e.NextEntryOffset == 0 {

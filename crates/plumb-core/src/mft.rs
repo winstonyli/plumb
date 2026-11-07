@@ -246,7 +246,7 @@ fn parse_standard_information(a: &[u8], out: &mut ParsedRecord) -> Result<(), Pa
         return Ok(()); // always resident; ignore anything else
     }
     let v = resident_value(a)?;
-    out.mtime = crate::age::day_of(u64_at(v, 0x08)?);
+    out.mtime = crate::age::secs_of(u64_at(v, 0x08)?);
     out.attributes = u32_at(v, 0x20).unwrap_or(0);
     Ok(())
 }
@@ -316,11 +316,11 @@ mod tests {
     }
 
     #[test]
-    fn standard_information_gives_the_last_write_day() {
-        let ft = 5 * crate::age::DAY_TICKS + 123;
+    fn standard_information_gives_the_last_write_time() {
+        let ft = crate::age::filetime_of(1_700_000_000) + 123;
         let (r, p) = parse(RecordBuilder::file().standard_info(ft).file_name(5, "a.txt", 1).data_resident(10).build());
         assert_eq!(r, Ok(()));
-        assert_eq!(p.mtime, std::num::NonZeroU32::new(5));
+        assert_eq!(p.mtime, std::num::NonZeroU32::new(1_700_000_000));
         let (_, p) = parse(RecordBuilder::file().file_name(5, "b", 1).build());
         assert_eq!(p.mtime, None);
     }
