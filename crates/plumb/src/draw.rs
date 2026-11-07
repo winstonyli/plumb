@@ -221,6 +221,8 @@ pub struct View<'a> {
     pub basket: &'a Basket,
     /// Rows live updates just changed: tinted while they fade.
     pub flash: &'a crate::app::Flash,
+    /// The Processes view's per-process facts (for the attribute pills); `None` in the other views.
+    pub procs: Option<&'a HashMap<u32, crate::app::ProcInfo>>,
 }
 
 /// The treemap pane's content: tiles from `plumb_core::treemap`, plus what is drawn over them.
@@ -1064,6 +1066,27 @@ impl Pen<'_> {
         }
     }
 
+    /// Draws the attribute pills right-aligned in a row's name `cell`, as many as leave `MIN_NAME` for the name; returns the
+    /// width they took (with the gap before them).
+    fn pills(&self, attrs: crate::attrs::Attrs, cell: Rect, t: &Theme) -> f32 {
+        const MIN_NAME: f32 = 96.0;
+        const PAD_X: f32 = 6.0;
+        const GAP: f32 = 4.0;
+        let mut right = cell.x + cell.w;
+        let h = (cell.h - 8.0).min(18.0);
+        for a in attrs.iter().rev() {
+            let w = self.painter.text_width(self.gfx, Role::Caption, a.word()) + 2.0 * PAD_X;
+            if right - w - GAP < cell.x + MIN_NAME {
+                break;
+            }
+            let pill = Rect { x: right - w, y: cell.y + (cell.h - h) / 2.0, w, h };
+            self.outline(pill, t.border);
+            self.text_as(Role::Caption, a.word(), Rect { x: pill.x + PAD_X, w: w - 2.0 * PAD_X, ..pill }, t.dim, false);
+            right -= w + GAP;
+        }
+        cell.x + cell.w - right
+    }
+
     fn rows(&self, s: &Scene, v: &View) {
         let t = &s.theme;
         let l = &s.layout;
@@ -1100,9 +1123,6 @@ impl Pen<'_> {
             name.clear();
             let _ = v.tree.write_name(id, &mut name);
             let found: Vec<_> = v.found.map(|m| m.find(&name).collect()).unwrap_or_default();
-            if v.tree.flags[id].contains(NodeFlags::DENIED) {
-                name.push_str("  (access denied)");
-            }
             let (nx, nw) = l.column(0);
             let indent = row.depth as f32 * INDENT;
             let ax = nx + 8.0 + indent;
@@ -1112,7 +1132,8 @@ impl Pen<'_> {
             if dir && v.tree.has_children(id) {
                 self.chevron(ax + 8.0, iy + 9.0, open);
             }
-            let cell = Rect { x: ax + 22.0, y: r.y, w: (nw - 16.0 - indent - 22.0).max(0.0), h: r.h };
+            let mut cell = Rect { x: ax + 22.0, y: r.y, w: (nw - 16.0 - indent - 22.0).max(0.0), h: r.h };
+            cell.w -= self.pills(crate::attrs::of(v.tree, id, v.procs), cell, t);
             for span in found {
                 // A tint behind each part the filter matched, clipped to the name's cell.
                 let x = cell.x + self.text_width(&name[..span.start]);

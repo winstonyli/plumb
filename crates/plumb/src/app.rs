@@ -7,6 +7,7 @@ mod filter;
 mod held;
 mod map;
 
+use crate::attrs::{self, Attrs};
 use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
@@ -731,6 +732,14 @@ impl App {
             let _ = write!(out, "\n{}", self.adapter);
             return Some(TipKey::Area(bar));
         }
+        if let Hit::Row(i) = self.layout.hit(x, y, self.views.len()) {
+            let (nx, nw) = self.layout.column(0);
+            let attrs = self.row_at(i).map(|id| self.row_attrs(id)).filter(|a| !a.is_empty() && x >= nx && x < nx + nw);
+            if let Some(attrs) = attrs {
+                out.push_str(&attrs.iter().map(|a| format!("{}: {}", a.word(), a.meaning())).collect::<Vec<_>>().join("\n"));
+                return Some(TipKey::Area(Rect { x: nx, w: nw, ..self.layout.row(i) }));
+            }
+        }
         let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.views.len()), Hit::Map))?)?;
         let tree = self.slot.tree.as_ref()?;
         if self.kind() == ViewKind::Processes { self.process_tip(tree, t, out) } else { tile_tip(tree, t, self.map_now, out) }
@@ -769,13 +778,14 @@ impl App {
                 out.push('\n');
                 out.push_str(path);
             }
-            if info.suspended {
-                out.push_str("\nsuspended");
-            }
             if info.created > 0 {
                 let (day, now) = (fmt::local_day(info.created), fmt::local_day(now_filetime()));
                 let _ = write!(out, "\nstarted {}, {}", fmt::date(day), fmt::age(now, day));
             }
+        }
+        let attrs = self.row_attrs(t.node);
+        if !attrs.is_empty() {
+            let _ = write!(out, "\n{}", attrs.words());
         }
     }
 
@@ -832,6 +842,11 @@ impl App {
             stack[before..].reverse();
         }
         Some(out)
+    }
+
+    /// The attributes of row `id` (`crate::attrs`).
+    pub fn row_attrs(&self, id: NodeId) -> Attrs {
+        self.slot.tree.as_ref().map(|t| attrs::of(t, id, (self.kind() == ViewKind::Processes).then_some(&self.slot.proc_info))).unwrap_or_default()
     }
 
     /// Everything the context menu of `id` offers.
@@ -1249,8 +1264,9 @@ impl App {
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]);
             let _ = write!(out, "{}  (PID {pid})  {}", fmt::node_name(tree, id), self.kind().size_text(self.slot.proc_metric, tree.subtree_size[id]));
-            if self.slot.proc_info.get(&(pid as u32)).is_some_and(|i| i.suspended) {
-                out.push_str("  suspended");
+            let attrs = self.row_attrs(id);
+            if !attrs.is_empty() {
+                let _ = write!(out, "  {}", attrs.words());
             }
             return true;
         }
@@ -1372,7 +1388,7 @@ impl App {
         let running = matches!(self.slot.scan, Scan::Running { .. });
         let count = self.filter_count();
         let view = match (&self.slot.tree, &self.slot.model) {
-            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.slot.scroll, partial: matches!(self.slot.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher(), basket: &self.slot.basket, flash: &self.slot.flash }),
+            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.slot.scroll, partial: matches!(self.slot.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher(), basket: &self.slot.basket, flash: &self.slot.flash, procs: (self.kind() == ViewKind::Processes).then_some(&self.slot.proc_info) }),
             _ => None,
         };
         let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
@@ -1779,7 +1795,7 @@ mod tests {
     fn suspend_is_offered_for_a_process_and_resume_once_every_thread_of_it_is_suspended() {
         let (mut a, id) = process_app();
         assert!(a.pause_target(id).is_none(), "not in the snapshot yet: no creation time to act by");
-        let info = |suspended| HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0, suspended })]);
+        let info = |suspended| HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 5, handles: 0, suspended })]);
         a.set_procs(2, info(false), (1, 1));
         assert_eq!(a.pause_target(id), Some((Victim { pid: 77, created: 5, name: "ping.exe".into() }, false)));
         a.set_procs(2, info(true), (1, 1));

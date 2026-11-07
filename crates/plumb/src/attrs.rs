@@ -1,0 +1,105 @@
+//! What a row can say about itself besides its name and numbers (denied, suspended, ...): one list per row, read by the
+//! row painter (pills), the row tooltip, the map tooltip and the status line, so an attribute is added in one place.
+use crate::app::ProcInfo;
+use plumb_core::{NodeFlags, NodeId, Tree};
+use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Attr {
+    /// A folder whose contents could not be read.
+    Denied,
+    /// A process plumb cannot open (another user's, or protected).
+    Protected,
+    Suspended,
+    /// A junction or symbolic link: not followed.
+    Link,
+    /// A further hard link to a file already counted.
+    Hardlink,
+}
+
+impl Attr {
+    /// Every attribute, in the order its pill is drawn, left to right.
+    pub const ALL: [Attr; 5] = [Attr::Denied, Attr::Protected, Attr::Suspended, Attr::Link, Attr::Hardlink];
+
+    /// The pill's text.
+    pub fn word(self) -> &'static str {
+        match self {
+            Attr::Denied => "denied",
+            Attr::Protected => "protected",
+            Attr::Suspended => "suspended",
+            Attr::Link => "link",
+            Attr::Hardlink => "hardlink",
+        }
+    }
+
+    /// One sentence for the tooltip.
+    pub fn meaning(self) -> &'static str {
+        match self {
+            Attr::Denied => "access denied: its contents could not be read.",
+            Attr::Protected => "plumb cannot open this process (another user's, or protected); run plumb as administrator to reach more.",
+            Attr::Suspended => "every thread is suspended; Resume process continues it.",
+            Attr::Link => "a junction or symbolic link; plumb does not follow it.",
+            Attr::Hardlink => "a further hard link to a file already counted; its size is not counted again.",
+        }
+    }
+}
+
+/// A set of attributes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Attrs(u8);
+
+impl Attrs {
+    fn bit(a: Attr) -> u8 {
+        1 << Attr::ALL.iter().position(|&x| x == a).unwrap_or(0)
+    }
+
+    fn with(mut self, a: Attr, on: bool) -> Self {
+        if on {
+            self.0 |= Self::bit(a);
+        }
+        self
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn contains(self, a: Attr) -> bool {
+        self.0 & Self::bit(a) != 0
+    }
+
+    /// The attributes in the order they are drawn.
+    pub fn iter(self) -> impl DoubleEndedIterator<Item = Attr> {
+        Attr::ALL.into_iter().filter(move |&a| self.contains(a))
+    }
+
+    /// "suspended, link": the words, for the status line.
+    pub fn words(self) -> String {
+        self.iter().map(Attr::word).collect::<Vec<_>>().join(", ")
+    }
+}
+
+/// The attributes of row `id`. `procs` is the Processes view's per-process facts, `None` in the other views.
+pub fn of(tree: &Tree, id: NodeId, procs: Option<&HashMap<u32, ProcInfo>>) -> Attrs {
+    let flags = tree.flags[id];
+    let mut a = Attrs::default().with(Attr::Denied, flags.contains(NodeFlags::DENIED)).with(Attr::Link, flags.contains(NodeFlags::REPARSE)).with(Attr::Hardlink, flags.contains(NodeFlags::HARDLINK));
+    if let Some(procs) = procs {
+        let pid = tree.aux.get(id.idx()).map_or(0, |x| x[2]) as u32;
+        let info = procs.get(&pid);
+        a = a.with(Attr::Suspended, info.is_some_and(|i| i.suspended)).with(Attr::Protected, pid > 0 && info.is_some_and(|i| i.path.is_none()));
+    }
+    a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_set_lists_its_attributes_in_pill_order() {
+        let a = Attrs::default().with(Attr::Hardlink, true).with(Attr::Suspended, true).with(Attr::Denied, false);
+        assert_eq!(a.iter().collect::<Vec<_>>(), vec![Attr::Suspended, Attr::Hardlink]);
+        assert_eq!(a.words(), "suspended, hardlink");
+        assert!(Attrs::default().is_empty() && !a.is_empty());
+    }
+}
