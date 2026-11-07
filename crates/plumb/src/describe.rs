@@ -173,5 +173,8 @@ mod tests {
         assert!(d.tip(false).ends_with("\nsystem, cloud"));
         let t = d.tip(true);
         assert!(t.contains("\nsystem: ") && t.contains("\ncloud: ") && !t.ends_with("system, cloud"), "{t}");
+        for a in Attr::ALL {
+            assert!(!a.meaning().contains(':'), "{}: the tooltip already puts a colon after the word: {}", a.word(), a.meaning());
+        }
     }
 }

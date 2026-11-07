@@ -44,14 +44,14 @@ impl Attr {
     /// One sentence for the tooltip.
     pub fn meaning(self) -> &'static str {
         match self {
-            Attr::Denied => "access denied: its contents could not be read.",
+            Attr::Denied => "its contents could not be read.",
             Attr::Protected => "plumb cannot open this process (another user's, or protected); run plumb as administrator to reach more.",
             Attr::Suspended => "every thread is suspended; Resume process continues it.",
             Attr::Elevated => "runs as administrator; plumb needs administrator rights to end, suspend or resume it.",
             Attr::Link => "a junction or symbolic link; plumb does not follow it.",
             Attr::Hardlink => "a further hard link to a file already counted; its size is not counted again.",
             Attr::System => "a hidden or system file or folder.",
-            Attr::Cloud => "a cloud placeholder: its data is not on this disk until it is opened, so it takes little or no space here.",
+            Attr::Cloud => "a cloud placeholder; its data is not on this disk until it is opened, so it takes little or no space here.",
         }
     }
 }
