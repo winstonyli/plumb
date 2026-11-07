@@ -1249,6 +1249,9 @@ impl App {
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]);
             let _ = write!(out, "{}  (PID {pid})  {}", fmt::node_name(tree, id), self.kind().size_text(self.slot.proc_metric, tree.subtree_size[id]));
+            if self.slot.proc_info.get(&(pid as u32)).is_some_and(|i| i.suspended) {
+                out.push_str("  suspended");
+            }
             return true;
         }
         if full {
@@ -1781,6 +1784,8 @@ mod tests {
         assert_eq!(a.pause_target(id), Some((Victim { pid: 77, created: 5, name: "ping.exe".into() }, false)));
         a.set_procs(2, info(true), (1, 1));
         assert!(a.pause_target(id).is_some_and(|t| t.1), "Resume is offered");
+        a.slot.model.as_mut().unwrap().select(id);
+        assert!(a.selection(true).unwrap().ends_with("  suspended"), "{:?}", a.selection(true));
         let root = a.slot.model.as_ref().unwrap().rows()[0].id;
         assert!(a.pause_target(root).is_none(), "the root is pid 0");
     }
