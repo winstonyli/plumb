@@ -72,6 +72,11 @@ impl Attrs {
         self
     }
 
+    #[cfg(test)]
+    pub fn of_list(list: &[Attr]) -> Self {
+        list.iter().fold(Self::default(), |a, &x| a.with(x, true))
+    }
+
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }

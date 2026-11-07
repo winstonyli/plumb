@@ -8,6 +8,7 @@ mod held;
 mod map;
 
 use crate::attrs::{self, Attrs};
+use crate::describe::{self, Description};
 use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
@@ -281,16 +282,13 @@ enum ButtonTip {
     Metric,
 }
 
-fn tile_tip(tree: &Tree, t: &Tile, now: u32, out: &mut String) {
+fn tile_tip(tree: &Tree, t: &Tile, now: u32, attrs: Attrs, out: &mut String) {
     let _ = match t.kind {
         Kind::Rest => write!(out, "{}, {}", fmt::noun(u64::from(t.count), "smaller item", "smaller items"), fmt::size(t.bytes)),
         Kind::Own => write!(out, "{} itself  ({})", fmt::node_path(tree, t.node), fmt::size(t.bytes)),
         _ => {
-            let _ = write!(out, "{}  ({}", fmt::node_path(tree, t.node), fmt::size(t.bytes));
-            if let Some(d) = tree.mtime[t.node] {
-                let _ = write!(out, ", modified {}, {}", fmt::date(d.get()), fmt::age(now, d.get()));
-            }
-            out.write_char(')')
+            describe::file(tree, t.node, t.bytes, now, attrs).write_tip(false, out);
+            Ok(())
         }
     };
 }
@@ -734,15 +732,15 @@ impl App {
         }
         if let Hit::Row(i) = self.layout.hit(x, y, self.views.len()) {
             let (nx, nw) = self.layout.column(0);
-            let attrs = self.row_at(i).map(|id| self.row_attrs(id)).filter(|a| !a.is_empty() && x >= nx && x < nx + nw);
-            if let Some(attrs) = attrs {
-                out.push_str(&attrs.iter().map(|a| format!("{}: {}", a.word(), a.meaning())).collect::<Vec<_>>().join("\n"));
+            let row = self.row_at(i).filter(|&id| x >= nx && x < nx + nw && !self.row_attrs(id).is_empty());
+            if let (Some(id), Some(tree)) = (row, self.slot.tree.as_ref()) {
+                self.describe_sized(tree, id, tree.subtree_size[id]).write_tip(true, out);
                 return Some(TipKey::Area(Rect { x: nx, w: nw, ..self.layout.row(i) }));
             }
         }
         let t = self.map_tiles.get(treemap::hit(&self.map_tiles, x, y).filter(|_| matches!(self.layout.hit(x, y, self.views.len()), Hit::Map))?)?;
         let tree = self.slot.tree.as_ref()?;
-        if self.kind() == ViewKind::Processes { self.process_tip(tree, t, out) } else { tile_tip(tree, t, self.map_now, out) }
+        if self.kind() == ViewKind::Processes { self.process_tip(tree, t, out) } else { tile_tip(tree, t, self.map_now, self.row_attrs(t.node), out) }
         Some(TipKey::Tile(t.node, t.kind))
     }
 
@@ -765,27 +763,22 @@ impl App {
             let _ = write!(out, ", {size}");
             return;
         }
-        let [cpu, io, pid] = tree.aux.get(t.node.idx()).copied().unwrap_or_default();
-        let name = fmt::node_name(tree, t.node);
         if t.kind == Kind::Own {
-            let _ = write!(out, "{name}  (PID {pid})\n{size} {metric} in the process itself");
+            let pid = tree.aux.get(t.node.idx()).map_or(0, |a| a[2]);
+            let _ = write!(out, "{}  (PID {pid})\n{size} {metric} in the process itself", fmt::node_name(tree, t.node));
             return;
         }
-        let scope = if tree.flags[t.node].contains(NodeFlags::DIR) { "this and its children" } else { "this process" };
-        let _ = write!(out, "{name}  (PID {pid})\n{size} {metric} in {scope}; own CPU {}, I/O {}", fmt::tenths(cpu), fmt::rate(io));
-        if let Some(info) = self.slot.proc_info.get(&(pid as u32)) {
-            if let Some(path) = &info.path {
-                out.push('\n');
-                out.push_str(path);
-            }
-            if info.created > 0 {
-                let (day, now) = (fmt::local_day(info.created), fmt::local_day(now_filetime()));
-                let _ = write!(out, "\nstarted {}, {}", fmt::date(day), fmt::age(now, day));
-            }
-        }
-        let attrs = self.row_attrs(t.node);
-        if !attrs.is_empty() {
-            let _ = write!(out, "\n{}", attrs.words());
+        self.describe_sized(tree, t.node, t.bytes).write_tip(false, out);
+    }
+
+    /// What the UI says about `id` (`crate::describe`), its size counted as `bytes`.
+    fn describe_sized<'a>(&'a self, tree: &'a Tree, id: NodeId, bytes: u64) -> Description<'a> {
+        let attrs = self.row_attrs(id);
+        if self.kind() == ViewKind::Processes {
+            let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]) as u32;
+            describe::process(tree, id, self.kind().size_text(self.slot.proc_metric, bytes), metric_noun(self.slot.proc_metric), self.slot.proc_info.get(&pid), fmt::local_day(now_filetime()), attrs)
+        } else {
+            describe::file(tree, id, bytes, self.map_now, attrs)
         }
     }
 
@@ -1264,25 +1257,7 @@ impl App {
     /// Writes [`App::selection`]; false (writing nothing) when no row is selected.
     fn write_selection(&self, full: bool, out: &mut String) -> bool {
         let (Some(tree), Some(id)) = (self.slot.tree.as_ref(), self.slot.model.as_ref().and_then(|m| m.selected())) else { return false };
-        if self.kind() == ViewKind::Processes {
-            let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]);
-            let _ = write!(out, "{}  (PID {pid})  {}", fmt::node_name(tree, id), self.kind().size_text(self.slot.proc_metric, tree.subtree_size[id]));
-            let attrs = self.row_attrs(id);
-            if !attrs.is_empty() {
-                let _ = write!(out, "  {}", attrs.words());
-            }
-            return true;
-        }
-        if full {
-            let _ = write!(out, "{}  (", fmt::node_path(tree, id));
-        }
-        let _ = write!(out, "{}", fmt::size(tree.subtree_size[id]));
-        if tree.flags[id].contains(NodeFlags::DIR) {
-            let _ = write!(out, ", {}", fmt::noun(tree.subtree_files[id] as u64, "item", "items"));
-        }
-        if full {
-            out.push(')');
-        }
+        self.describe_sized(tree, id, tree.subtree_size[id]).write_line(full, out);
         true
     }
 
@@ -1443,7 +1418,7 @@ mod tests {
 
     fn tile_str(tree: &Tree, t: &Tile, now: u32) -> String {
         let mut s = String::new();
-        tile_tip(tree, t, now, &mut s);
+        tile_tip(tree, t, now, Attrs::default(), &mut s);
         s
     }
 
@@ -2584,7 +2559,7 @@ Test GPU", status_str(&a, true))));
         assert!(!tile_str(&tree, &t, 154_000).contains("modified"));
         tree.set_mtime(NodeId(1), std::num::NonZeroU32::new(plumb_core::age::UNIX_EPOCH_DAYS + 19_791));
         let tip = tile_str(&tree, &t, plumb_core::age::UNIX_EPOCH_DAYS + 19_791 + 766);
-        assert!(tip.ends_with(", modified 2024-03-09, 2.1 y ago)"), "{tip}");
+        assert!(tip.ends_with(", modified 2024-03-09, 2.1 y ago"), "{tip}");
     }
 
     #[test]
