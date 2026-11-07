@@ -1352,8 +1352,13 @@ impl App {
     /// files can make it, and then the used space says nothing about what is left).
     pub fn unscanned(&self) -> Option<u64> {
         let Scan::Running { view, bytes, .. } = self.slot.scan else { return None };
-        let d = self.views.get(view)?;
-        d.total.saturating_sub(d.free).checked_sub(bytes)
+        self.used(view)?.checked_sub(bytes)
+    }
+
+    /// The used space of the disk view `view`'s drive; `None` for the processes view or a drive that reports no size.
+    fn used(&self, view: usize) -> Option<u64> {
+        let d = self.views.get(view).filter(|d| d.kind == ViewKind::Disk && d.total > 0)?;
+        Some(d.total.saturating_sub(d.free))
     }
 
     /// Builds the scene for `dark` and passes it to `f`; the scene borrows locals made here.
@@ -1366,7 +1371,7 @@ impl App {
         let running = matches!(self.slot.scan, Scan::Running { .. });
         let count = self.filter_count();
         let view = match (&self.slot.tree, &self.slot.model) {
-            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.slot.scroll, partial: matches!(self.slot.scan, Scan::Running { .. }), unscanned: self.unscanned(), hover: self.hover, found: self.filter_matcher(), basket: &self.slot.basket, flash: &self.slot.flash, procs: (self.kind() == ViewKind::Processes).then_some(&self.slot.proc_info) }),
+            (Some(tree), Some(model)) => Some(View { tree, model, scroll: self.slot.scroll, partial: matches!(self.slot.scan, Scan::Running { .. }), unscanned: self.unscanned(), used: self.active.and_then(|v| self.used(v)), hover: self.hover, found: self.filter_matcher(), basket: &self.slot.basket, flash: &self.slot.flash, procs: (self.kind() == ViewKind::Processes).then_some(&self.slot.proc_info) }),
             _ => None,
         };
         let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
@@ -2093,6 +2098,15 @@ mod tests {
         assert_eq!(a.unscanned(), Some(50));
         a.progress(1, 1, 751);
         assert_eq!(a.unscanned(), None, "the scan counted more than the view says is used");
+    }
+
+    #[test]
+    fn a_roots_share_is_of_the_drives_used_space_and_only_for_a_disk() {
+        let mut a = app();
+        assert_eq!(a.used(0), Some(750), "drive C: 1000 total, 250 free");
+        assert_eq!(a.used(99), None, "no such view");
+        a.views[0].total = 0;
+        assert_eq!(a.used(0), None, "a drive that reports no size");
     }
 
     #[test]

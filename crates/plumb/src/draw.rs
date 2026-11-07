@@ -213,6 +213,8 @@ pub struct View<'a> {
     /// While `partial`: bytes of the drive's used space the scan has not found yet, as far as the
     /// drive's used space says (`None` once the scan has counted more than that, when it says nothing).
     pub unscanned: Option<u64>,
+    /// The drive's used space: what the root's share is of (`None` when there is no drive, so the root is all of itself).
+    pub used: Option<u64>,
     /// The visible row under the mouse.
     pub hover: Option<usize>,
     /// The name filter's pattern: the part of a name it matched is highlighted.
@@ -1115,8 +1117,9 @@ impl Pen<'_> {
             }
             self.fill(Rect { x: r.x, y: r.y + r.h - 1.0, w: r.w, h: 1.0 }, t.panel); // hairline between rows
             let parent = v.tree.parent[id];
-            let denom = if parent.is_none() { v.tree.subtree_size[id] } else { v.tree.subtree_size[parent] };
-            let frac = fmt::fraction(v.tree.subtree_size[id], denom);
+            // A root is a share of the drive's used space (what the scan found against what is there), not of itself.
+            let denom = if parent.is_none() { v.used.unwrap_or(v.tree.subtree_size[id]) } else { v.tree.subtree_size[parent] };
+            let frac = fmt::fraction(v.tree.subtree_size[id], denom).min(1.0);
             let fg = if row.dim { t.dim } else { t.fg };
             let side = t.dim; // the item count recedes behind the name and the size
             let dir = v.tree.flags[id].contains(NodeFlags::DIR);
@@ -1148,11 +1151,11 @@ impl Pen<'_> {
             let (px, pw) = l.column(2);
             let (bx, bw) = (px + 4.0, pw - 8.0);
             self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
-            // While scanning, the share could still grow: at most to where all the unscanned bytes land in this row.
-            // (A root is already all of itself, so `high` never exceeds `frac` there and it gets no fade.)
+            // While scanning, the share could still grow: at most to where all the unscanned bytes land in this row
+            // (for a root, which they all do, to the whole drive).
             if let Some(rest) = v.unscanned.filter(|_| v.partial) {
                 let (s, p, rest) = (v.tree.subtree_size[id] as f64, denom as f64, rest as f64);
-                let high = (((s + rest) / (p + rest)) as f32).min(1.0);
+                let high = if parent.is_none() { 1.0 } else { (((s + rest) / (p + rest)) as f32).min(1.0) };
                 if high > frac {
                     self.fade(Rect { x: bx + bw * frac, y: r.y + 3.0, w: bw * (high - frac), h: r.h - 6.0 }, t.bound);
                 }
