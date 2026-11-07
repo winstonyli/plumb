@@ -11,6 +11,8 @@ pub enum Attr {
     /// A process plumb cannot open (another user's, or protected).
     Protected,
     Suspended,
+    /// A process running as administrator.
+    Elevated,
     /// A junction or symbolic link: not followed.
     Link,
     /// A further hard link to a file already counted.
@@ -19,7 +21,7 @@ pub enum Attr {
 
 impl Attr {
     /// Every attribute, in the order its pill is drawn, left to right.
-    pub const ALL: [Attr; 5] = [Attr::Denied, Attr::Protected, Attr::Suspended, Attr::Link, Attr::Hardlink];
+    pub const ALL: [Attr; 6] = [Attr::Denied, Attr::Protected, Attr::Suspended, Attr::Elevated, Attr::Link, Attr::Hardlink];
 
     /// The pill's text.
     pub fn word(self) -> &'static str {
@@ -27,6 +29,7 @@ impl Attr {
             Attr::Denied => "denied",
             Attr::Protected => "protected",
             Attr::Suspended => "suspended",
+            Attr::Elevated => "elevated",
             Attr::Link => "link",
             Attr::Hardlink => "hardlink",
         }
@@ -38,6 +41,7 @@ impl Attr {
             Attr::Denied => "access denied: its contents could not be read.",
             Attr::Protected => "plumb cannot open this process (another user's, or protected); run plumb as administrator to reach more.",
             Attr::Suspended => "every thread is suspended; Resume process continues it.",
+            Attr::Elevated => "runs as administrator; plumb needs administrator rights to end, suspend or resume it.",
             Attr::Link => "a junction or symbolic link; plumb does not follow it.",
             Attr::Hardlink => "a further hard link to a file already counted; its size is not counted again.",
         }
@@ -86,7 +90,7 @@ pub fn of(tree: &Tree, id: NodeId, procs: Option<&HashMap<u32, ProcInfo>>) -> At
     if let Some(procs) = procs {
         let pid = tree.aux.get(id.idx()).map_or(0, |x| x[2]) as u32;
         let info = procs.get(&pid);
-        a = a.with(Attr::Suspended, info.is_some_and(|i| i.suspended)).with(Attr::Protected, pid > 0 && info.is_some_and(|i| i.path.is_none()));
+        a = a.with(Attr::Suspended, info.is_some_and(|i| i.suspended)).with(Attr::Protected, pid > 0 && info.is_some_and(|i| i.path.is_none())).with(Attr::Elevated, info.is_some_and(|i| i.elevated));
     }
     a
 }

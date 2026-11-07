@@ -32,6 +32,8 @@ pub struct ProcEntry {
     pub handles: u32,
     /// Every thread is suspended (and there is at least one).
     pub suspended: bool,
+    /// Runs with an elevated (administrator) token; false too when the token cannot be read.
+    pub elevated: bool,
     /// `None` when the process cannot be opened (another user's, protected).
     pub path: Option<String>,
 }
@@ -44,12 +46,19 @@ fn u64_at(b: &[u8], off: usize) -> u64 {
 }
 
 pub(crate) fn image_path(pid: u32) -> Option<String> {
-    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    identity(pid).0
+}
+
+/// What does not change while a process runs: its executable's path (`None` when it cannot be opened) and whether its
+/// token is elevated.
+fn identity(pid: u32) -> (Option<String>, bool) {
+    let Ok(h) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else { return (None, false) };
     let mut buf = vec![0u16; 32768]; // the longest path Windows allows
     let mut n = buf.len() as u32;
     let ok = unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_FORMAT(0), PWSTR(buf.as_mut_ptr()), &mut n) }.is_ok();
+    let elevated = crate::volume::process_elevated(h);
     let _ = unsafe { CloseHandle(h) };
-    ok.then(|| String::from_utf16_lossy(&buf[..n as usize]))
+    (ok.then(|| String::from_utf16_lossy(&buf[..n as usize])), elevated)
 }
 
 const ACCESS_DENIED: &str = "access denied (protected or elevated process)";
@@ -86,24 +95,24 @@ pub fn pause(pid: u32, created: u64, resume: bool) -> Result<(), String> {
     })
 }
 
-/// Takes snapshots, remembering each process's path (and that it could not be had) so the lookup, which opens
-/// the process, is made once per process and not once per snapshot.
+/// Takes snapshots, remembering each process's path (and that it could not be had) and elevation so the lookup, which
+/// opens the process, is made once per process and not once per snapshot.
 #[derive(Default)]
 pub struct Snapshotter {
-    paths: std::collections::HashMap<(u32, u64), Option<String>>,
+    known: std::collections::HashMap<(u32, u64), (Option<String>, bool)>,
 }
 
 impl Snapshotter {
     pub fn take(&mut self) -> Result<Vec<ProcEntry>, ProcError> {
         let mut list = read()?;
-        let mut paths = std::collections::HashMap::with_capacity(list.len());
+        let mut known = std::collections::HashMap::with_capacity(list.len());
         for e in &mut list {
             let key = (e.pid, e.created);
-            let path = self.paths.remove(&key).unwrap_or_else(|| if e.pid == 0 { None } else { image_path(e.pid) });
-            e.path = path.clone();
-            paths.insert(key, path);
+            let id = self.known.remove(&key).unwrap_or_else(|| if e.pid == 0 { (None, false) } else { identity(e.pid) });
+            (e.path, e.elevated) = id.clone();
+            known.insert(key, id);
         }
-        self.paths = paths; // what has exited is forgotten
+        self.known = known; // what has exited is forgotten
         Ok(list)
     }
 }
@@ -144,6 +153,7 @@ fn read() -> Result<Vec<ProcEntry>, ProcError> {
             io_bytes: u64_at(e, 232) + u64_at(e, 240) + u64_at(e, 248),
             handles: u32::from_le_bytes(e[96..100].try_into().unwrap()),
             suspended,
+            elevated: false,
             path: None,
         });
         let next = u32::from_le_bytes(e[0..4].try_into().unwrap()) as usize;
@@ -186,6 +196,7 @@ mod tests {
         let state = || snapshot().unwrap().into_iter().find(|p| p.pid == child.id()).expect("child listed");
         let created = state().created;
         assert!(!state().suspended, "a running process is not suspended");
+        assert_eq!(state().elevated, crate::volume::is_elevated(), "a child runs with its parent's token");
         assert!(pause(child.id(), created + 1, false).unwrap_err().contains("different process"));
         pause(child.id(), created, false).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

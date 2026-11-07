@@ -21,9 +21,15 @@ use windows::core::PCWSTR;
 
 /// True if this process runs with an elevated (administrator) token.
 pub fn is_elevated() -> bool {
+    process_elevated(unsafe { GetCurrentProcess() })
+}
+
+/// True if `process` (opened with at least `PROCESS_QUERY_LIMITED_INFORMATION`) runs with an elevated token; false too
+/// when its token cannot be read.
+pub fn process_elevated(process: HANDLE) -> bool {
     unsafe {
         let mut token = HANDLE::default();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token).is_err() {
             return false;
         }
         let mut elevation = TOKEN_ELEVATION::default();

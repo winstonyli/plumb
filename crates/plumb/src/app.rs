@@ -132,6 +132,8 @@ pub struct ProcInfo {
     pub handles: u32,
     /// Every thread is suspended.
     pub suspended: bool,
+    /// Runs as administrator.
+    pub elevated: bool,
 }
 
 /// What a row's context menu offers (`App::row_menu`).
@@ -1632,7 +1634,7 @@ mod tests {
 
     /// One Processes snapshot as `set_procs` sees it: pid 77 with `handles` open handles.
     fn snapshot_with(a: &mut App, handles: u32) {
-        let info = HashMap::from([(77u32, ProcInfo { path: None, created: 5, handles, suspended: false })]);
+        let info = HashMap::from([(77u32, ProcInfo { path: None, created: 5, handles, suspended: false, elevated: false })]);
         a.set_procs(2, info, (16 << 30, 4 << 30));
     }
 
@@ -1784,7 +1786,7 @@ mod tests {
         a.slot.model.as_mut().unwrap().select(id);
         assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
         assert_eq!(a.menu_target(id).map(|t| t.1), Some(String::new()), "no executable known: a menu with no path");
-        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0, suspended: false })]), (1, 1));
+        a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0, suspended: false, elevated: false })]), (1, 1));
         let (raw, path, mark, who) = a.menu_target(id).unwrap();
         assert!(!who, "a process has no holders to ask about");
         assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));
@@ -1795,7 +1797,7 @@ mod tests {
     fn suspend_is_offered_for_a_process_and_resume_once_every_thread_of_it_is_suspended() {
         let (mut a, id) = process_app();
         assert!(a.pause_target(id).is_none(), "not in the snapshot yet: no creation time to act by");
-        let info = |suspended| HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 5, handles: 0, suspended })]);
+        let info = |suspended| HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 5, handles: 0, suspended, elevated: false })]);
         a.set_procs(2, info(false), (1, 1));
         assert_eq!(a.pause_target(id), Some((Victim { pid: 77, created: 5, name: "ping.exe".into() }, false)));
         a.set_procs(2, info(true), (1, 1));
@@ -1811,7 +1813,7 @@ mod tests {
         let (mut a, id) = process_app();
         let v = |pid, name: &str| Victim { pid, created: 5, name: name.into() };
         assert!(a.end_targets(id).is_none(), "the process is not in the snapshot yet: no creation time to end it by");
-        a.set_procs(2, HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0, suspended: false })]), (1, 1));
+        a.set_procs(2, HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0, suspended: false, elevated: false })]), (1, 1));
         assert_eq!(a.end_targets(id), Some(vec![v(77, "ping.exe")]));
         let root = a.slot.model.as_ref().unwrap().rows()[0].id;
         assert!(a.end_targets(root).is_none(), "the root is pid 0");
@@ -1833,7 +1835,7 @@ mod tests {
         procs.apply(&mut tree, &[s(77, 1, "a.exe"), s(78, 77, "b.exe"), s(79, 78, "c.exe"), s(80, 77, "d.exe"), s(90, 1, "other.exe")], 0);
         let top = tree.find(r"Processes\a.exe").expect("the top process");
         a.finish_scan(tree, "x".into());
-        let info = |pids: &[u32]| pids.iter().map(|&p| (p, ProcInfo { path: None, created: 5, handles: 0, suspended: false })).collect::<HashMap<_, _>>();
+        let info = |pids: &[u32]| pids.iter().map(|&p| (p, ProcInfo { path: None, created: 5, handles: 0, suspended: false, elevated: false })).collect::<HashMap<_, _>>();
         a.set_procs(2, info(&[77, 78, 79, 80, 90]), (1, 1));
         let pids = |a: &App| a.end_targets(top).unwrap().iter().map(|v| v.pid).collect::<Vec<_>>();
         let all = pids(&a);
