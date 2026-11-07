@@ -17,10 +17,33 @@ pub(super) const CMD_END_TREE: usize = 7;
 
 pub(super) const CMD_PAUSE: usize = 8;
 
+pub(super) const CMD_SUSPEND_TREE: usize = 9;
+
+pub(super) const CMD_RESUME_TREE: usize = 10;
+
+/// Suspends `list` (or, with `resume`, resumes it) one process after another, then reports what failed as one `Failure`.
+/// Called with no borrow held: each call goes to the system.
+pub(super) fn pause_all(list: Vec<crate::modal::Victim>, resume: bool) {
+    let failed: Vec<_> = list.iter().filter_map(|v| plumb_scan::procs::pause(v.pid, v.created, resume).err().map(|why| (v.clone(), why))).collect();
+    let (verb, past) = if resume { ("resume", "resumed") } else { ("suspend", "suspended") };
+    with(|w| {
+        if failed.is_empty() {
+            if let Some(p) = &w.run.procs {
+                p.kick();
+            }
+        } else {
+            let failure = process_failure(verb, past, &failed, list.len());
+            w.app.report(failure.outcome(""));
+            w.ask(Modal::process_failed(&failure));
+        }
+        w.invalidate();
+    });
+}
+
 /// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
 /// because `TrackPopupMenu` runs its own message loop.
 pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
-    let RowMenu { raw, path, mark, who, end, pause } = menu;
+    let RowMenu { raw, path, mark, who, end, pause, suspend_tree, resume_tree } = menu;
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let files = !path.is_empty(); // a process whose executable is unknown has none
@@ -41,6 +64,12 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
         }
         if let Some((_, suspended)) = &pause {
             let _ = AppendMenuW(menu, MF_STRING, CMD_PAUSE, if *suspended { w!("Resume process") } else { w!("Suspend process") });
+        }
+        for (cmd, verb, list) in [(CMD_SUSPEND_TREE, "Suspend", &suspend_tree), (CMD_RESUME_TREE, "Resume", &resume_tree)] {
+            if !list.is_empty() {
+                let text = wide(&format!("{verb} process tree ({})", list.len()));
+                let _ = AppendMenuW(menu, MF_STRING, cmd, PCWSTR(text.as_ptr()));
+            }
         }
         if files || end.is_some() || who {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -89,21 +118,11 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
             }
             CMD_PAUSE => {
                 if let Some((v, suspended)) = pause {
-                    let out = plumb_scan::procs::pause(v.pid, v.created, suspended);
-                    with(|w| {
-                        match out {
-                            Ok(()) => w.run.procs.as_ref().map_or((), |p| p.kick()),
-                            Err(why) => {
-                                let (verb, past) = if suspended { ("resume", "resumed") } else { ("suspend", "suspended") };
-                                let failure = process_failure(verb, past, &[(v.clone(), why)], 1);
-                                w.app.report(failure.outcome(""));
-                                w.ask(Modal::process_failed(&failure));
-                            }
-                        }
-                        w.invalidate();
-                    });
+                    pause_all(vec![v], suspended);
                 }
             }
+            CMD_SUSPEND_TREE => pause_all(suspend_tree, false),
+            CMD_RESUME_TREE => pause_all(resume_tree, true),
             CMD_MARK => {
                 with(|w| {
                     w.app.toggle_mark_path(&raw);

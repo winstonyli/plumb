@@ -151,6 +151,10 @@ pub struct RowMenu {
     pub end: Option<Vec<Victim>>,
     /// The process Suspend or Resume acts on, and whether it is suspended now.
     pub pause: Option<(Victim, bool)>,
+    /// What Suspend process tree acts on (the tree's processes not suspended) and Resume process tree (those suspended);
+    /// empty when the entry is not offered.
+    pub suspend_tree: Vec<Victim>,
+    pub resume_tree: Vec<Victim>,
 }
 
 /// The map class of a process by where its executable is: the Windows folder, Program Files, a user profile, or
@@ -818,10 +822,11 @@ impl App {
         Some((tree.path(id), fmt::node_path(tree, id).to_string(), self.mark_state(id), file))
     }
 
-    /// What "End process" in the context menu of `id` ends: the process first, then its descendants top-down, each with
+    /// The tree the context menu's process-tree entries of `id` act on (End, Suspend, Resume; the process alone is the
+    /// first): the process first, then its descendants top-down, each with
     /// the pid and creation time that identify it. Only in the Processes view, and not for the Idle and System processes
     /// (pids 0 and 4). A process missing from the last snapshot (no creation time) is left out.
-    pub fn end_targets(&self, id: NodeId) -> Option<Vec<Victim>> {
+    pub fn tree_targets(&self, id: NodeId) -> Option<Vec<Victim>> {
         let tree = self.slot.tree.as_ref()?;
         let victim = |n: NodeId| self.process_at(n);
         let first = victim(id)?;
@@ -845,7 +850,24 @@ impl App {
     /// Everything the context menu of `id` offers.
     pub fn row_menu(&self, id: NodeId) -> Option<RowMenu> {
         let (raw, path, mark, who) = self.menu_target(id)?;
-        Some(RowMenu { raw, path, mark, who, end: self.end_targets(id), pause: self.pause_target(id) })
+        let (suspend_tree, resume_tree) = self.pause_trees(id);
+        Some(RowMenu { raw, path, mark, who, end: self.tree_targets(id), pause: self.pause_target(id), suspend_tree, resume_tree })
+    }
+
+    /// The tree of `id` (`tree_targets`) as Suspend process tree and Resume process tree would act on it. Suspend acts on
+    /// the processes not suspended, so the system's suspension count does not nest. Resume acts on the whole tree, offered
+    /// once any member is suspended: resuming a running process does nothing, and a member such as a console host can stay
+    /// suspended without reading as suspended (its threads wait on something else), so resuming only those that read
+    /// suspended would leave it frozen. A side that is only the row itself is empty, the entry for the process alone
+    /// being the same action.
+    pub fn pause_trees(&self, id: NodeId) -> (Vec<Victim>, Vec<Victim>) {
+        let Some(all) = self.tree_targets(id) else { return Default::default() };
+        let row = all[0].pid;
+        let suspended = |v: &Victim| self.slot.proc_info.get(&v.pid).is_some_and(|i| i.suspended);
+        let resume = if all.iter().any(suspended) { all.clone() } else { Vec::new() };
+        let suspend: Vec<Victim> = all.into_iter().filter(|v| !suspended(v)).collect();
+        let more = |l: Vec<Victim>| if l.len() == 1 && l[0].pid == row { Vec::new() } else { l };
+        (more(suspend), more(resume))
     }
 
     /// The process a Processes row stands for, as the pid and creation time that identify it. `None` outside the
@@ -1791,11 +1813,11 @@ mod tests {
     fn end_process_is_offered_for_a_process_and_asks_before_it_acts() {
         let (mut a, id) = process_app();
         let v = |pid, name: &str| Victim { pid, created: 5, name: name.into() };
-        assert!(a.end_targets(id).is_none(), "the process is not in the snapshot yet: no creation time to end it by");
+        assert!(a.tree_targets(id).is_none(), "the process is not in the snapshot yet: no creation time to end it by");
         a.set_procs(2, HashMap::from([(77, ProcInfo { path: None, created: 5, handles: 0, suspended: false, elevated: false })]), (1, 1));
-        assert_eq!(a.end_targets(id), Some(vec![v(77, "ping.exe")]));
+        assert_eq!(a.tree_targets(id), Some(vec![v(77, "ping.exe")]));
         let root = a.slot.model.as_ref().unwrap().rows()[0].id;
-        assert!(a.end_targets(root).is_none(), "the root is pid 0");
+        assert!(a.tree_targets(root).is_none(), "the root is pid 0");
         a.ask(Modal::end(vec![v(77, "ping.exe")]));
         assert_eq!(a.answer(Pick::No), Effect::None);
         a.ask(Modal::end(vec![v(77, "ping.exe")]));
@@ -1816,7 +1838,7 @@ mod tests {
         a.finish_scan(tree, "x".into());
         let info = |pids: &[u32]| pids.iter().map(|&p| (p, ProcInfo { path: None, created: 5, handles: 0, suspended: false, elevated: false })).collect::<HashMap<_, _>>();
         a.set_procs(2, info(&[77, 78, 79, 80, 90]), (1, 1));
-        let pids = |a: &App| a.end_targets(top).unwrap().iter().map(|v| v.pid).collect::<Vec<_>>();
+        let pids = |a: &App| a.tree_targets(top).unwrap().iter().map(|v| v.pid).collect::<Vec<_>>();
         let all = pids(&a);
         assert_eq!(all[0], 77, "the process first");
         let at = |p: u32| all.iter().position(|&x| x == p).unwrap();
@@ -1827,6 +1849,30 @@ mod tests {
         let mut left_out = pids(&a);
         left_out.sort();
         assert_eq!(left_out, [77, 78, 80], "a descendant missing from the snapshot is left out");
+    }
+
+    #[test]
+    fn suspend_and_resume_tree_act_on_the_matching_processes_and_hide_when_they_would_repeat_the_row() {
+        use plumb_core::procs::{Metric, Procs, Sample};
+        let mut a = app();
+        a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
+        a.begin_scan(2);
+        let (mut procs, mut tree) = Procs::new(Metric::Memory);
+        let s = |pid, parent, name: &str| Sample { pid, parent, created: 5, name: name.into(), memory: 4096, private: 2048, cpu_100ns: 0, io_bytes: 0 };
+        procs.apply(&mut tree, &[s(77, 1, "a.exe"), s(78, 77, "b.exe"), s(79, 77, "c.exe")], 0);
+        let top = tree.find(r"Processes\a.exe").expect("the top process");
+        a.finish_scan(tree, "x".into());
+        let with = |a: &mut App, suspended: &[u32]| {
+            let info = [77, 78, 79].map(|p| (p, ProcInfo { path: None, created: 5, handles: 0, suspended: suspended.contains(&p), elevated: false }));
+            a.set_procs(2, info.into_iter().collect(), (1, 1));
+            let pids = |l: Vec<Victim>| { let mut p = l.iter().map(|v| v.pid).collect::<Vec<_>>(); p.sort(); p };
+            let (suspend, resume) = a.pause_trees(top);
+            (pids(suspend), pids(resume))
+        };
+        assert_eq!(with(&mut a, &[]), (vec![77, 78, 79], vec![]), "nothing suspended: Suspend acts on all three");
+        assert_eq!(with(&mut a, &[78]), (vec![77, 79], vec![77, 78, 79]), "a mixed tree offers both: Suspend on the running ones, Resume on all");
+        assert_eq!(with(&mut a, &[77, 78, 79]), (vec![], vec![77, 78, 79]), "all suspended: Resume acts on all three");
+        assert_eq!(with(&mut a, &[77]), (vec![78, 79], vec![77, 78, 79]), "the row suspended, its children not: both are offered");
     }
 
     #[test]

@@ -639,9 +639,9 @@ pub fn selftest_processes() -> Result<String> {
         // End process: the confirmation is answered with a real click, and the process goes.
         let mut victim = std::process::Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().map_err(|e| fail(e.to_string()))?;
         let vpid = victim.id();
-        wait("the victim listed with its creation time", 10, &|w| node(w, vpid).is_some_and(|n| w.app.end_targets(n).is_some()))?;
+        wait("the victim listed with its creation time", 10, &|w| node(w, vpid).is_some_and(|n| w.app.tree_targets(n).is_some()))?;
         with(|w| {
-            if let Some(list) = node(w, vpid).and_then(|n| w.app.end_targets(n)) {
+            if let Some(list) = node(w, vpid).and_then(|n| w.app.tree_targets(n)) {
                 w.ask(crate::modal::Modal::end(list));
             }
         });
@@ -654,9 +654,24 @@ pub fn selftest_processes() -> Result<String> {
         // End process tree: a shell and the program it runs go together, shell first.
         let mut shell = std::process::Command::new("cmd").args(["/c", "ping -n 60 127.0.0.1 >nul"]).spawn().map_err(|e| fail(e.to_string()))?;
         let spid = shell.id();
-        wait("the shell with a child to end", 10, &|w| node(w, spid).is_some_and(|n| w.app.end_targets(n).is_some_and(|l| l.len() >= 2)))?;
+        wait("the shell with a child to end", 10, &|w| node(w, spid).is_some_and(|n| w.app.tree_targets(n).is_some_and(|l| l.len() >= 2)))?;
+        // Suspend process tree, then Resume process tree: both processes report suspended, then running again.
+        let tree_pids = with(|w| node(w, spid).and_then(|n| w.app.tree_targets(n)).unwrap_or_default()).unwrap_or_default();
+        let paused = |pids: &[u32], on: bool| {
+            let pids = pids.to_vec();
+            move |w: &mut Win| pids.iter().all(|p| w.app.slot.proc_info.get(p).is_some_and(|i| i.suspended == on))
+        };
+        let pids: Vec<u32> = tree_pids.iter().filter(|v| !v.name.eq_ignore_ascii_case("conhost.exe")).map(|v| v.pid).collect(); // a console host never reads as suspended
+        menu::pause_all(tree_pids.clone(), false);
+        wait("the shell and its child suspended", 10, &paused(&pids, true))?;
+        let (_, resume) = with(|w| node(w, spid).map(|n| w.app.pause_trees(n)).unwrap_or_default()).unwrap_or_default();
+        if resume.len() != tree_pids.len() {
+            return Err(fail(format!("Resume process tree would act on {} of the {} processes", resume.len(), tree_pids.len())));
+        }
+        menu::pause_all(resume, true);
+        wait("the shell and its child running again", 10, &paused(&pids, false))?;
         let pids = with(|w| {
-            let list = node(w, spid).and_then(|n| w.app.end_targets(n)).unwrap_or_default();
+            let list = node(w, spid).and_then(|n| w.app.tree_targets(n)).unwrap_or_default();
             let pids: Vec<u32> = list.iter().map(|v| v.pid).collect();
             w.ask(crate::modal::Modal::end(list));
             pids
