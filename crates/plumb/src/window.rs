@@ -1137,15 +1137,34 @@ fn once_per_press(vk: u16, ctrl: bool) -> bool {
     [VK_DELETE.0, VK_RETURN.0, VK_F5.0, VK_BACK.0].contains(&vk) || (ctrl && vk == b'A' as u16)
 }
 
+/// Client pixels of a row's bottom-left corner: where the keyboard's context menu opens. `r` is in DIPs below the title bar's `inset`.
+fn menu_anchor(r: crate::layout::Rect, dpi: f32, inset: f32) -> (i32, i32) {
+    let k = dpi / 96.0;
+    ((r.x * k) as i32, ((r.y + r.h + inset) * k) as i32)
+}
+
+/// Shift+F10 is the keyboard's context menu; any other F10 combination is Windows' (the menu bar, the system menu).
+fn is_key_menu_chord(vk: usize, shift: bool) -> bool {
+    vk == VK_F10.0 as usize && shift
+}
+
+/// The button that starts a drag: the physical left one, or the right one when the buttons are swapped.
+fn primary_button(swapped: bool) -> windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY {
+    if swapped { VK_RBUTTON } else { VK_LBUTTON }
+}
+
+/// What the drag timer sends: the pointer's place while the button is down, `Release` once it is up (a release over another
+/// window sends no `WM_LBUTTONUP`). Nothing when the button is down but the pointer can't be read.
+fn drag_step(down: bool, at: Option<(f32, f32)>) -> Option<Input> {
+    if down { at.map(|(x, y)| Input::Drag(x, y)) } else { Some(Input::Release) }
+}
+
 /// Opens the context menu of the focus row from the keyboard (Apps key, Shift+F10), at that row's left edge.
 fn key_menu(hwnd: HWND) {
     let Some((e, at)) = with(|w| {
         w.last_input = Instant::now();
         let e = w.app.handle(Input::ContextMenu);
-        let at = w.app.focus_row_rect().map_or((0, 0), |r| {
-            let k = w.dpi / 96.0;
-            ((r.x * k) as i32, ((r.y + r.h + w.inset) * k) as i32)
-        });
+        let at = w.app.focus_row_rect().map_or((0, 0), |r| menu_anchor(r, w.dpi, w.inset));
         w.invalidate();
         (e, at)
     }) else {
@@ -1475,7 +1494,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         // F10 is a system key, so Shift+F10, the keyboard's context menu, arrives here. Every other Alt or F10 combination is
         // Windows': it falls through to `DefWindowProc`.
-        WM_SYSKEYDOWN if wp.0 == VK_F10.0 as usize && unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0 => {
+        WM_SYSKEYDOWN if is_key_menu_chord(wp.0, unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0) => {
             if lp.0 & (1 << 30) == 0 {
                 key_menu(hwnd);
             }
@@ -1486,16 +1505,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             // button let go after the window lost the capture sends no WM_LBUTTONUP, so end the drag here.
             // The asynchronous state: this thread's own input state never sees a release over another window. It is
             // physical, so with the buttons swapped the primary button is the right one.
-            let primary = if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 { VK_RBUTTON } else { VK_LBUTTON };
-            if unsafe { GetAsyncKeyState(primary.0 as i32) } < 0 {
-                let mut p = POINT::default();
-                if unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(hwnd, &mut p).as_bool() } {
-                    if let Some((x, y)) = with(|w| (p.x as f32 * 96.0 / w.dpi, p.y as f32 * 96.0 / w.dpi - w.inset)) {
-                        send(hwnd, Input::Drag(x, y));
-                    }
-                }
+            let primary = primary_button(unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0);
+            let down = unsafe { GetAsyncKeyState(primary.0 as i32) } < 0;
+            let mut p = POINT::default();
+            let at = if unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(hwnd, &mut p).as_bool() } {
+                with(|w| (p.x as f32 * 96.0 / w.dpi, p.y as f32 * 96.0 / w.dpi - w.inset))
             } else {
-                send(hwnd, Input::Release);
+                None
+            };
+            if let Some(input) = drag_step(down, at) {
+                send(hwnd, input);
             }
             LRESULT(0)
         }
@@ -1715,6 +1734,32 @@ pub use selftest::run_selftest;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_keyboard_menu_opens_at_the_rows_bottom_left_at_every_scale() {
+        let r = crate::layout::Rect { x: 10.0, y: 100.0, w: 300.0, h: 20.0 };
+        assert_eq!(menu_anchor(r, 96.0, 40.0), (10, 160));
+        assert_eq!(menu_anchor(r, 120.0, 40.0), (12, 200)); // 125%
+        assert_eq!(menu_anchor(r, 144.0, 40.0), (15, 240)); // 150%
+    }
+
+    #[test]
+    fn only_shift_f10_is_the_keyboard_menu() {
+        assert!(is_key_menu_chord(VK_F10.0 as usize, true));
+        assert!(!is_key_menu_chord(VK_F10.0 as usize, false));
+        assert!(!is_key_menu_chord(VK_F5.0 as usize, true));
+        assert!(!is_key_menu_chord(0x73, true)); // F4 (Alt+F4) stays Windows
+    }
+
+    #[test]
+    fn a_drag_follows_the_primary_button_and_ends_when_it_is_up() {
+        assert_eq!(primary_button(false), VK_LBUTTON);
+        assert_eq!(primary_button(true), VK_RBUTTON);
+        assert!(matches!(drag_step(true, Some((1.0, 2.0))), Some(Input::Drag(x, y)) if x == 1.0 && y == 2.0));
+        assert!(drag_step(true, None).is_none());
+        assert!(matches!(drag_step(false, Some((1.0, 2.0))), Some(Input::Release)));
+        assert!(matches!(drag_step(false, None), Some(Input::Release)));
+    }
 
     #[test]
     fn a_run_names_every_field_the_swap_moves() {

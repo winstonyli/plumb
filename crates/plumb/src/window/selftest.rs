@@ -1,4 +1,4 @@
-//! Hidden-window end-to-end checks driven through the real message loop: `--selftest`, `--selftest-watch`, `--selftest-delete`, `--selftest-processes`, `--selftest-tooltip`, `--selftest-live`.
+//! Hidden-window end-to-end checks driven through the real message loop: `--selftest`, `--selftest-watch`, `--selftest-delete`, `--selftest-processes`, `--selftest-tooltip`, `--selftest-keys`, `--selftest-live`.
 use super::*;
 
 /// Pumps window messages until `cond` holds; errors after `secs`.
@@ -881,6 +881,94 @@ fn process_cpu() -> Duration {
     Duration::from_nanos(t(k) + t(u))
 }
 
+/// Keys through the real window procedure, posted as messages so nothing leaves the hidden window: a held Backspace acts once on the
+/// list and repeats in the filter box; Alt+Space still reaches Windows for the system menu. Run it with
+/// `plumb --selftest-keys`.
+pub fn selftest_keys() -> Result<String> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use windows::Win32::Foundation::E_FAIL;
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_SPACE;
+    /// Counted by the hook on the window's `WM_SYSCOMMAND`: what `DefWindowProc` makes of Alt+Space (`SC_KEYMENU`).
+    static KEYMENU: AtomicU32 = AtomicU32::new(0);
+    
+    unsafe extern "system" fn watch_syscommand(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        let m = unsafe { &*(lp.0 as *const CWPSTRUCT) };
+        if code >= 0 && m.message == WM_SYSCOMMAND {
+            match (m.wParam.0 & 0xFFF0) as u32 {
+                SC_KEYMENU => KEYMENU.fetch_add(1, Ordering::SeqCst),
+                _ => 0,
+            };
+        }
+        unsafe { CallNextHookEx(None, code, wp, lp) }
+    }
+    let fail = |m: String| windows::core::Error::new(E_FAIL, m);
+    let key = |hwnd: HWND, vk: u16, repeat: bool| unsafe {
+        SendMessageW(hwnd, WM_KEYDOWN, Some(WPARAM(vk as usize)), Some(LPARAM(1 | if repeat { 1 << 30 } else { 0 })));
+    };
+    let dir = std::env::temp_dir().join(format!("plumb-selftest-keys-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).ok();
+    std::fs::write(dir.join("sub").join("f.bin"), vec![1u8; 1000]).ok();
+    let hwnd = create_window()?;
+    let win = Win::new(hwnd, crate::drives::list())?;
+    STATE.with(|s| *s.borrow_mut() = Some(win));
+    with(|w| w.spawn_scan(0, dir.to_string_lossy().into_owned(), false));
+    pump_until("the scan", 30, &|w| matches!(w.app.slot.scan, crate::app::Scan::Idle | crate::app::Scan::Failed(_)))?;
+    // The list: focus the deepest row, then Backspace (select the parent) held and pressed.
+    let deepest = with(|w| {
+        let (Some(t), Some(m)) = (w.app.slot.tree.as_ref(), w.app.slot.model.as_mut()) else { return None };
+        for _ in 0..2 {
+            if let Some(id) = m.rows().iter().map(|r| r.id).find(|&id| m.is_expandable(t, id) && !m.is_expanded(id)) {
+                m.expand(t, id);
+            }
+        }
+        let last = m.rows().last()?.id;
+        m.select(last);
+        Some(last)
+    })
+    .flatten();
+    let focus = || with(|w| w.app.slot.model.as_ref().and_then(|m| m.selected())).flatten();
+    key(hwnd, VK_BACK.0, true);
+    if focus() != deepest {
+        return Err(fail("a held Backspace on the list moved the selection".into()));
+    }
+    key(hwnd, VK_BACK.0, false);
+    if focus() == deepest {
+        return Err(fail("a pressed Backspace on the list did nothing".into()));
+    }
+    // The filter box: a held Backspace deletes a character on every repeat.
+    with(|w| {
+        w.app.handle(Input::Find);
+        for c in "bin".chars() {
+            w.app.handle(Input::Edit(Edit::Char(c)));
+        }
+    });
+    key(hwnd, VK_BACK.0, true);
+    key(hwnd, VK_BACK.0, true);
+    let text = with(|w| w.app.filter_ui().text.clone());
+    if text.as_deref() != Some("b") {
+        return Err(fail(format!("two held Backspaces in the filter box should leave \"b\", got {text:?}")));
+    }
+    with(|w| w.app.handle(Input::Escape));
+    // Alt+Space still reaches `DefWindowProc`, which asks for the system menu with `SC_KEYMENU`. (A hidden window opens no menu, so
+    // the request is the proof.) F10 on its own is the same request; Shift+F10 is plumb's.
+    let alt = LPARAM(1 << 29);
+    unsafe {
+        let hook = SetWindowsHookExW(WH_CALLWNDPROC, Some(watch_syscommand), None, GetCurrentThreadId())?;
+        SendMessageW(hwnd, WM_SYSKEYDOWN, Some(WPARAM(VK_SPACE.0 as usize)), Some(alt));
+        SendMessageW(hwnd, WM_SYSCHAR, Some(WPARAM(' ' as usize)), Some(alt)); // what TranslateMessage adds
+        let _ = UnhookWindowsHookEx(hook);
+    }
+    if KEYMENU.load(Ordering::SeqCst) == 0 {
+        return Err(fail("Alt+Space never asked for the system menu".into()));
+    }
+    unsafe { DestroyWindow(hwnd)? };
+    STATE.with(|s| *s.borrow_mut() = None);
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok("held Backspace once on the list, repeating in the box; Alt+Space asks for the system menu".into())
+}
+
 /// The checks above by command-line flag; add a new one here and `main` runs it.
 type Selftest = (&'static str, fn() -> Result<String>);
 
@@ -890,6 +978,7 @@ const SELFTESTS: &[Selftest] = &[
     ("--selftest-delete", selftest_delete),
     ("--selftest-processes", selftest_processes),
     ("--selftest-tooltip", selftest_tooltip),
+    ("--selftest-keys", selftest_keys),
     ("--selftest-live", selftest_live),
 ];
 

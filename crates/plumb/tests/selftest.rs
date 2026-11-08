@@ -23,3 +23,13 @@ fn commit_dialogs_delete_only_the_marked_items() {
     assert!(out.status.success(), "{:?}\n{stdout}\n{}", out.status, String::from_utf8_lossy(&out.stderr));
     assert!(stdout.contains("selftest-delete ok"), "{stdout}");
 }
+
+/// Runs `--selftest-keys`: posts keys to the hidden window; nothing is shown.
+#[test]
+#[ignore = "creates a hidden window"]
+fn held_keys_and_system_keys_go_where_they_should() {
+    let out = Command::new(env!("CARGO_BIN_EXE_plumb")).arg("--selftest-keys").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{:?}\n{stdout}\n{}", out.status, String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("selftest-keys ok"), "{stdout}");
+}
