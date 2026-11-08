@@ -48,11 +48,13 @@ in an action.
 `picked: Vec<u64>` (bitset over node indices, the `expanded` pattern), `picked_n: usize` (set bits, kept by every
 method that writes `picked`), `anchor: Option<NodeId>`.
 
-No invariant ties `picked` to the focus or to the visible rows. `targets()` walks `rows` and tests bits, so a hidden
-or vanished id never acts, and an unpicked focus (after Ctrl+click off) is allowed. Nothing prunes `picked` on
-collapse, filter, sort or rescan; a hidden pick reappears when its folder reopens. The one cleanup: when `set_filter`
-or `refresh` leaves the focus `None`, `picked` is cleared. Cost of `targets()` and of `picked_count()` is O(rows),
-paid only when `picked_n > 1` (the status line and menu read the count each paint).
+Invariant: `picked` holds only ids that have a row, so `picked_n` is the visible count and `targets()` needs no
+visibility test. The focus may be unpicked (after Ctrl+click off). `collapse` clears the bits of the rows it drains
+(O(drained)); `rebuild` (filter, sort, refresh) keeps only ids that still have a row, skipped when `picked_n == 0`
+(it already walks all rows). When `set_filter` or `refresh` moves the focus to an ancestor (or clears it), they do the
+same to the set: `picked = {focus}`, or empty with no focus, so actions follow the focus as they do today. `select(id)`
+of a hidden id (`reveal` under a filter) leaves `picked_n == 1` with no row; accepted, as the focus is hidden then too.
+Cost: `targets()` is O(rows) per action; the status line and menu read `picked_n`, O(1).
 
 | Method | Effect |
 |---|---|
@@ -61,7 +63,7 @@ paid only when `picked_n > 1` (the status line and menu read the count each pain
 | `toggle_pick(id)` | flip `id`; `selected = anchor = id`. Picking when nothing is picked first picks the focus, so Ctrl+click on a fresh list keeps the row you were on |
 | `select_all()` | `picked =` every row; focus and anchor unchanged (focus `None`: the first row); no-op on an empty list |
 | `targets() -> Vec<NodeId>` | picked rows in row order |
-| `picked_count()` | `targets().len()`, short-cut to 0 or 1 from `picked_n` |
+| `picked_count()` | `picked_n` |
 | `is_picked(id)` | for drawing |
 | `handle_key(tree, key, page, extend)` | as today for the focus; with `extend`, Up/Down/PageUp/PageDown/Home/End end in `extend_to(new focus)` instead of `select`. Left/Right behave as plain (they `select`, dropping a set) |
 | `select_parent()` | `select(parent row)` if the focus has a parent with a row (Backspace) |
@@ -78,7 +80,7 @@ pub struct Mods { pub shift: bool, pub ctrl: bool }
 
 `Input::Click(x, y, Mods)` and `Input::Key(Key, Mods)`. `DoubleClick` stays as is: when Shift or Ctrl is down the
 window sends `Click` instead (a quick Ctrl+click pair arrives as `WM_LBUTTONDBLCLK` and must not expand the folder).
-Tests pass `Mods::default()` (50 `Click` and 12 `Key` call sites, plus the modal patterns at `app.rs` ~961, ~985,
+Tests pass `Mods::default()` (50 `Input::Click(` and 12 `Input::Key(` hits across the crate, plus the modal patterns at `app.rs` ~961, ~985,
 ~1019, ~1033). New inputs: `Input::Refresh`, `Input::ContextMenu`. Ctrl+A reuses `Edit::SelectAll` and Backspace
 `Edit::Backspace`. The outcome-reset list at `app.rs:1019` gains `Refresh` and `ContextMenu`.
 
@@ -88,30 +90,43 @@ Tests pass `Mods::default()` (50 `Click` and 12 `Key` call sites, plus the modal
 | Shift+click | `extend_to(id)` |
 | Ctrl+click | `toggle_pick(id)` |
 | folder icon | opens or closes and selects as today; modifiers ignored |
-| press on a row (plain, Shift, or the second press of a plain double-click), then drag | `extend_to(row under the pointer)`, clamped to the rows on screen and the last row. A Ctrl press does not start a drag (it would replace the earlier picks). Past the top or bottom edge the list scrolls 1 to 5 rows per tick by the distance beyond it. State `App.row_drag: bool`, cleared on `Release`. A window timer (about 40 ms, registered with the others, running between press and release) replays `Input::Drag` at the last pointer position so a held pointer keeps scrolling; when `GetKeyState(VK_LBUTTON) >= 0` (capture lost, no `WM_LBUTTONUP`) it sends `Input::Release` and stops |
+| press on a row (plain or Shift; not Ctrl, and not the second press of a double-click, which has already toggled the folder), then drag | `extend_to(row under the pointer)`, clamped to the rows on screen and the last row. Past the top or bottom edge the list scrolls 1 to 5 rows per tick by the distance beyond it. State `App.row_drag: bool`, set by the press and cleared on `Release`. After each `Click` the window reads `app.row_drag` and arms a timer (about 40 ms, registered with the others) when it is set; `Release` and the timer's own check disarm it. The timer replays `Input::Drag` at the last pointer position so a held pointer keeps scrolling; when `GetKeyState(VK_LBUTTON) >= 0` (capture lost, no `WM_LBUTTONUP`) it sends `Input::Release` and stops |
 | Shift+Up/Down/PgUp/PgDn/Home/End | `handle_key` with `extend` |
 | Ctrl+A, filter not focused | `select_all()` (guarded like the existing `Edit::Delete if !focus` arm) |
 | right-click on a picked row | selection and focus kept, menu for the set; on an unpicked row: `select(id)`, then the menu |
-| Del, filter not focused | over the topmost targets (those with no picked ancestor, so `select_all` then Del marks the roots, not every row): if all are marked, unmark them; otherwise mark each not yet marked. Refused rows are skipped; the status line says how many and the first reason |
+| Del, filter not focused | `mark_selected()` (below) |
 | Ctrl+C, list focused | non-empty paths of `targets()`, one per line (`\r\n`) |
 | Enter, filter not focused | toggles the focus row open or closed |
 | Backspace, filter not focused | `select_parent()` |
 | F5 | no tree: `Effect::Scan(active)`; a tree and nothing cancelable: `Effect::Rescan(active)` (in the Processes view this only kicks the sampler, `window.rs:671`); a view not active or a scan running: nothing |
-| Shift+F10, Apps key | `WM_KEYDOWN` emits `Input::ContextMenu`; the app scrolls the focus row into view and returns `Effect::Menu(focus)`; the window places the menu at the row's left edge, converting the app's dip rectangle (an accessor `focus_row_rect()`) to client pixels with `dpi` and `inset` as the mouse path does, then `context_menu`'s `ClientToScreen` |
+| Shift+F10, Apps key | the Apps key arrives as `WM_KEYDOWN`, Shift+F10 as `WM_SYSKEYDOWN` (F10 is a system key; the new arm handles only Shift+F10 and passes every other Alt/F10 combination to `DefWindowProc`); both emit `Input::ContextMenu`; the app scrolls the focus row into view and returns `Effect::Menu(focus)`; the window places the menu at the row's left edge, converting the app's dip rectangle (an accessor `focus_row_rect()`) to client pixels with `dpi` and `inset` as the mouse path does, then `context_menu`'s `ClientToScreen` |
 
 The key-repeat guard that exists for Del (`lp` bit 30, `window.rs:1429`) extends to Enter, F5, Ctrl+A and Backspace
 (repeat would flip a folder, queue rescans). Filter-box shortcuts keep priority: with the box focused, Shift+Left /
 Right / Home / End select text (existing branch), Ctrl+A selects the box text, Enter and Backspace act in the box.
 
+### Set-wide mark and copy (`select.rs`)
+
+`mark_selected()` serves Del and the menu's Mark/Unmark entry. Over the **topmost** targets (no picked ancestor, so
+`select_all` then Del marks the roots, not every row), a target counts as marked if `basket.covers(path)` (itself or
+an ancestor is marked). If every topmost target is marked, it unmarks: it removes the exact mark of every picked row.
+Otherwise it marks each topmost target not already covered. Refused rows are skipped; the status line says how many
+and the first reason. One case stays as is and is reported ("n still covered by a marked folder"): a target covered
+only by a marked ancestor that is not picked has no mark of its own to remove.
+
+Copy (Ctrl+C and the menu's Copy paths) takes the non-empty paths of all of `targets()`, nested ones included, one per
+line (`
+`).
+
 ### Menu over a set
 
-`RowMenu` holds `raws: Vec<String>` and `paths: Vec<String>` (length 1 for a single row, replacing `raw`/`path`), so
-there is one shape, not a set variant. `row_menu(id)` reads the model: if `id` is picked and `picked_count() > 1` it
-builds the menu from `targets()`. With `raws.len() > 1` the window offers only **Mark/Unmark selected (n)**
-(`MarkState` aggregated: Unmark if all topmost are marked, Mark if any can be, otherwise Refused with the first
-reason) and **Copy paths (n)** (empty paths skipped; not offered when all are empty, as in the Processes view).
-Open, Reveal, Who is using this, Properties and the process commands stay single-row. A single selection builds
-today's menu. `Effect::Menu(NodeId)` is unchanged.
+`RowMenu` keeps `raw` (the single row's tree path; empty for a set) and replaces `path` with `paths: Vec<String>`
+(the file-system paths to reveal and copy), and gains `count: usize`. `row_menu(id)` reads the model: if `id` is
+picked and `picked_count() > 1` it builds the set form. With `count > 1` the window offers only **Mark selected** or
+**Unmark selected** (`MarkState` aggregated over the topmost targets: Unmark if all are covered, Mark if any can be
+marked, otherwise Refused with the first reason; the entry calls `mark_selected()`) and **Copy paths (n)** (n =
+`count`; not offered when every path is empty, as in the Processes view). Open, Reveal, Who is using this, Properties
+and the process commands stay single-row. A single selection builds today's menu. `Effect::Menu(NodeId)` is unchanged.
 
 ### Drawing and status
 
@@ -128,16 +143,16 @@ End/Suspend over a set, header column menu, Ctrl+wheel, a size total for a set. 
 
 - **Adds:** `rows/pick.rs`, `app/select.rs`, `Mods`, the picked set, two input variants.
 - **Replaces, deleting the old form:** `toggle_mark_selected` (-> set-wide Del in `select.rs`), `Window::selected_path`
-  (-> set-wide copy), `RowMenu.raw/path` (-> `raws/paths`), the `selected`-only highlight in `draw.rs`.
+  (-> set-wide copy), `RowMenu.path` (-> `paths`, plus `count`), the `selected`-only highlight in `draw.rs`.
 - **Tripwire:** `app.rs` grows only by `Input` and delegations; behaviour lives in `app/select.rs`. `key_input` gains
   arms for F5/Apps/Shift+F10; if it grows past a screen it splits first.
 
 ## Checks
 
 - Core (`rows/pick.rs`): extend in both directions, from no anchor, with a stale anchor; toggle on, off, and from
-  nothing picked; `select_all` (empty list, no focus); hidden picks stay out of `targets()` and return on reopen;
-  focus `None` clears the set; `handle_key` with `extend` per key; Left/Right drop a set; `select_parent`.
-- App (`select.rs`): each gesture row; Del all-marked / mixed / with a refused row / over nested picks; Ctrl+A with and
+  nothing picked; `select_all` (empty list, no focus); collapse and filter drop hidden picks, `picked_n` stays exact; focus moved to an ancestor yields `{focus}`;
+  focus `None` empties the set; `handle_key` with `extend` per key; Left/Right drop a set; `select_parent`.
+- App (`select.rs`): each gesture row; Del all-marked / mixed / with a refused row / over nested picks / a target covered by an unpicked marked ancestor; Ctrl+A with and
   without filter focus; Ctrl+click is never an expand; drag past an edge scrolls and extends; Ctrl press starts no
   drag; right-click on picked vs unpicked; F5 per case; Enter and Backspace guarded by filter focus; `Click` with
   Shift on the focus row does not fire the held-pane "again".
@@ -147,7 +162,6 @@ End/Suspend over a set, header column menu, Ctrl+wheel, a size total for a set. 
 
 ## Risks
 
-- `targets()` over millions of rows after `select_all`: one O(rows) walk per action, not per paint (the paint reads
-  `picked_n`).
+- `targets()` over millions of rows after `select_all`: one O(rows) walk per action, not per paint (paints read `picked_n`).
 - A timer left running when capture is lost is handled by the `VK_LBUTTON` check above.
 - `Window::selected_path` and `row_menu` change shape together; both are covered by the tests above.
