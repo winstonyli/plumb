@@ -67,6 +67,50 @@ impl App {
         }
     }
 
+    /// Enter on the list: opens or closes the focus row's folder.
+    pub(super) fn toggle_focus_row(&mut self) {
+        if let (Some(t), Some(m)) = (&self.slot.tree, &mut self.slot.model)
+            && let Some(id) = m.selected()
+        {
+            m.toggle(t, id);
+            self.set_scroll(self.slot.scroll);
+        }
+    }
+
+    /// Backspace on the list: selects the parent folder.
+    pub(super) fn select_parent_row(&mut self) {
+        if let (Some(t), Some(m)) = (&self.slot.tree, &mut self.slot.model) {
+            m.select_parent(t);
+            let s = m.scroll_to_selected(self.slot.scroll, self.layout.rows_visible());
+            self.set_scroll(s);
+        }
+    }
+
+    /// F5: no tree (never scanned, cancelled, failed) scans the shown view; a tree rescans it in the background; a scan in
+    /// flight, or no view shown, does nothing. In the Processes view a rescan only wakes the sampler.
+    pub(super) fn refresh_key(&mut self) -> Effect {
+        match self.active {
+            Some(i) if !self.cancelable() => if self.slot.tree.is_none() { Effect::Scan(i) } else { Effect::Rescan(i) },
+            _ => Effect::None,
+        }
+    }
+
+    /// Shift+F10 / the Apps key: scrolls the focus row into view and asks for its menu.
+    pub(super) fn context_menu_key(&mut self) -> Effect {
+        let vis = self.layout.rows_visible();
+        let Some(m) = &self.slot.model else { return Effect::None };
+        let (Some(id), Some(_)) = (m.selected(), m.selected_index()) else { return Effect::None };
+        let s = m.scroll_to_selected(self.slot.scroll, vis);
+        self.set_scroll(s);
+        Effect::Menu(id)
+    }
+
+    /// Where the focus row is on screen (client DIPs), if it is.
+    pub fn focus_row_rect(&self) -> Option<Rect> {
+        let i = self.slot.model.as_ref()?.selected_index()?.checked_sub(self.slot.scroll)?;
+        (i < self.layout.rows_visible()).then(|| self.layout.row(i))
+    }
+
     /// Ctrl+A with the list focused.
     pub(super) fn select_all_rows(&mut self) {
         if let Some(m) = &mut self.slot.model {
@@ -416,5 +460,66 @@ mod tests {
         a.handle(Input::Edit(Edit::SelectAll));
         let all = a.copy_text().unwrap();
         assert_eq!(all.split("\r\n").count(), 9, "nested rows are copied too");
+    }
+
+    #[test]
+    fn enter_opens_and_closes_the_focus_folder_and_the_box_keeps_its_own_enter() {
+        let mut a = app_h(600.0);
+        let docs = at(&a, "docs");
+        press(&mut a, docs, NONE);
+        a.handle(Input::Enter);
+        assert!(!names(&a).contains(&"notes.txt".to_string()), "closed");
+        a.handle(Input::Enter);
+        assert!(names(&a).contains(&"notes.txt".to_string()), "open again");
+        a.handle(Input::Find);
+        a.handle(Input::Edit(Edit::Char('x')));
+        a.handle(Input::Enter); // moves focus to the list, on the first row
+        assert!(!a.filter_ui().focus, "Enter left the box");
+        assert_eq!(focus(&a), names(&a).first().cloned());
+    }
+
+    #[test]
+    fn backspace_selects_the_parent_and_the_box_keeps_its_own_backspace() {
+        let mut a = app_h(600.0);
+        let more = at(&a, "more.txt");
+        press(&mut a, more, NONE);
+        a.handle(Input::Edit(Edit::Backspace));
+        assert_eq!(focus(&a).as_deref(), Some("deep"));
+        assert_eq!(picked(&a), ["deep"]);
+        a.handle(Input::Find);
+        a.handle(Input::Edit(Edit::Char('q')));
+        a.handle(Input::Edit(Edit::Backspace));
+        assert_eq!(focus(&a).as_deref(), Some("deep"), "Backspace in the box edits its text");
+        assert_eq!(a.filter_ui().text, "");
+    }
+
+    #[test]
+    fn f5_scans_when_there_is_no_tree_rescans_with_one_and_waits_for_a_running_scan() {
+        let mut a = app_h(600.0);
+        a.active = Some(0);
+        assert_eq!(a.handle(Input::Refresh), Effect::Rescan(0));
+        a.slot.scan = Scan::Refreshing;
+        assert_eq!(a.handle(Input::Refresh), Effect::None, "a scan is already running");
+        a.slot.scan = Scan::Idle;
+        a.fail_scan("boom".into());
+        assert_eq!(a.handle(Input::Refresh), Effect::Scan(0), "no tree: F5 scans again");
+        a.active = None;
+        assert_eq!(a.handle(Input::Refresh), Effect::None, "no view shown");
+    }
+
+    #[test]
+    fn the_context_menu_key_opens_the_focus_row_menu_and_brings_the_row_into_view() {
+        let views = vec![ViewInfo { root: "C:\\".into(), total: 1000, free: 500, kind: ViewKind::Disk }];
+        let mut empty = App::new(Layout::new(800.0, 200.0), views, "test".into());
+        assert_eq!(empty.handle(Input::ContextMenu), Effect::None, "no tree, nothing focused");
+        let mut a = app_h(200.0);
+        press(&mut a, 0, NONE);
+        key(&mut a, Key::End, NONE);
+        a.slot.scroll = 0; // the focus is off screen
+        let want = a.slot.model.as_ref().unwrap().selected().unwrap();
+        assert_eq!(a.handle(Input::ContextMenu), Effect::Menu(want));
+        let r = a.focus_row_rect().expect("the row was scrolled into view");
+        let area = a.layout.rows_area();
+        assert!(r.y >= area.y && r.y + r.h <= area.y + area.h + 0.5, "{r:?} within {area:?}");
     }
 }

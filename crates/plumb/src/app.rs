@@ -250,6 +250,10 @@ pub enum Input {
     Hover(f32, f32),
     /// Ctrl+M or the status bar button: show or hide the map pane.
     ToggleMap,
+    /// F5: scan the shown view again.
+    Refresh,
+    /// Shift+F10 or the Apps key: the context menu of the focus row.
+    ContextMenu,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1037,7 +1041,7 @@ impl App {
         self.layout.basket = self.basket_active();
         self.layout.metric = self.kind() == ViewKind::Processes;
         self.layout.held = self.kind() == ViewKind::Processes;
-        if self.modal().is_none() && matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(..) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
+        if self.modal().is_none() && matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(..) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find | Input::Refresh | Input::ContextMenu) {
             self.outcome = Outcome::default();
         }
         if self.modal().is_some() && !matches!(input, Input::Resize(..) | Input::Release) {
@@ -1060,6 +1064,11 @@ impl App {
             }
             Input::Edit(Edit::Delete) if !self.slot.filter.ui.focus => self.mark_selected(),
             Input::Edit(Edit::SelectAll) if !self.slot.filter.ui.focus => self.select_all_rows(),
+            Input::Enter if self.slot.filter.ui.focus => self.filter_enter(),
+            Input::Enter => self.toggle_focus_row(),
+            Input::Edit(Edit::Backspace) if !self.slot.filter.ui.focus => self.select_parent_row(),
+            Input::Refresh => return self.refresh_key(),
+            Input::ContextMenu => return self.context_menu_key(),
             Input::Edit(e) => return self.filter_edit(e),
             Input::Find => {
                 self.slot.filter.ui.focus = true;
@@ -1070,7 +1079,6 @@ impl App {
                 let e = self.filter_escape();
                 return if !used && self.cancelable() { Effect::Cancel } else { e };
             }
-            Input::Enter => self.filter_enter(),
             Input::Tab => self.slot.filter.ui.focus = !self.slot.filter.ui.focus,
             Input::Hover(x, y) => {
                 self.hover = match self.layout.hit(x, y, self.views.len()) {
