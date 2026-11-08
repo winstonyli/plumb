@@ -64,8 +64,8 @@ use windows::Win32::UI::Input::Ime::{
     CFS_POINT, COMPOSITIONFORM, GCS_COMPSTR, GCS_RESULTSTR, IME_COMPOSITION_STRING,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
-    VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
+    GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_APPS, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F10,
+    VK_F5, VK_HOME, VK_LBUTTON, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -94,6 +94,9 @@ const TIMER_PREVIEW: usize = 4;
 const TIMER_HELD: usize = 5;
 const TIMER_FLASH: usize = 6;
 const FLASH_TICK_MS: u32 = 50;
+const TIMER_DRAG: usize = 7;
+/// While a drag over rows is held: how often the pointer's position is replayed, so a pointer resting past an edge keeps scrolling.
+const DRAG_TICK_MS: u32 = 40;
 const HELD_SETTLE_MS: u32 = 300;
 /// How long one handle may take to name before it is skipped.
 const HELD_PER_HANDLE: Duration = Duration::from_millis(500);
@@ -188,8 +191,8 @@ struct Win {
     parked: Vec<Option<View>>,
     /// Counts view switches, to find the least recently used.
     clock: u64,
-    /// Which of the progress, preview, live and flash timers are running.
-    timers: [bool; 4],
+    /// Which of the progress, preview, live, flash and drag-scroll timers are running.
+    timers: [bool; 5],
     /// A parked view is swapped in for one operation (`in_slot`): timers and the filter stay as they are.
     borrowed: bool,
     /// The window is not the foreground one (`WM_ACTIVATE`): the Processes poller slows down.
@@ -333,7 +336,7 @@ impl Win {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, run: Run::default(),
             policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
-            parked: Vec::new(), clock: 0, timers: [false; 4], borrowed: false, background: false,
+            parked: Vec::new(), clock: 0, timers: [false; 5], borrowed: false, background: false,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
         win.apply_title_theme();
@@ -448,7 +451,7 @@ impl Win {
             return;
         }
         let at = self.filter_byte(x);
-        let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+        let shift = mods_now().shift;
         self.app.handle(Input::Edit(if double { Edit::Word(at) } else { Edit::Place { at, extend: shift } }));
         self.filter_drag = true;
         self.invalidate();
@@ -632,7 +635,7 @@ impl Win {
         self.app.marks = marks;
     }
 
-    /// Starts and stops the progress, preview, live and flash timers to match the view on screen.
+    /// Starts and stops the progress, preview, live, flash and drag-scroll timers to match the view on screen.
     fn sync_timers(&mut self) {
         if self.borrowed {
             return;
@@ -642,6 +645,7 @@ impl Win {
             (TIMER_PREVIEW, self.run.preview.is_some() || self.parked.iter().flatten().any(|d| d.run.preview.is_some()), PREVIEW_TICK_MS),
             (TIMER_LIVE, self.run.watch.as_ref().is_some_and(|w| w.armed), REPAINT.as_millis() as u32),
             (TIMER_FLASH, self.app.flashing(), FLASH_TICK_MS),
+            (TIMER_DRAG, self.app.row_dragging(), DRAG_TICK_MS),
         ];
         for (i, (id, on, ms)) in want.into_iter().enumerate() {
             if self.timers[i] != on {
@@ -1039,6 +1043,7 @@ fn dispatch(hwnd: HWND, l: LPARAM, make: impl FnOnce(f32, f32) -> Input) {
         let (x, y) = w.dip(l);
         w.last_input = Instant::now();
         let e = w.app.handle(make(x, y));
+        w.sync_timers();
         w.invalidate();
         (e, ())
     }) else {
@@ -1052,6 +1057,7 @@ fn send(hwnd: HWND, input: Input) {
     let Some(e) = with(|w| {
         w.last_input = Instant::now();
         let e = w.app.handle(input);
+        w.sync_timers();
         w.invalidate();
         e
     }) else {
@@ -1121,8 +1127,31 @@ fn key_input(vk: u16, mods: Mods, hwnd: HWND) -> Option<Input> {
         x if x == VK_RETURN.0 => Input::Enter,
         x if x == VK_ESCAPE.0 => Input::Escape,
         x if x == VK_TAB.0 => Input::Tab,
+        x if x == VK_F5.0 => Input::Refresh,
         x => Input::Key(key_of(x)?, mods),
     })
+}
+
+/// Keys that act once per press: a held key must not flip a mark or a folder, or queue a rescan, on every repeat.
+fn once_per_press(vk: u16, ctrl: bool) -> bool {
+    [VK_DELETE.0, VK_RETURN.0, VK_F5.0, VK_BACK.0].contains(&vk) || (ctrl && vk == b'A' as u16)
+}
+
+/// Opens the context menu of the focus row from the keyboard (Apps key, Shift+F10), at that row's left edge.
+fn key_menu(hwnd: HWND) {
+    let Some((e, at)) = with(|w| {
+        w.last_input = Instant::now();
+        let e = w.app.handle(Input::ContextMenu);
+        let at = w.app.focus_row_rect().map_or((0, 0), |r| {
+            let k = w.dpi / 96.0;
+            ((r.x * k) as i32, ((r.y + r.h + w.inset) * k) as i32)
+        });
+        w.invalidate();
+        (e, at)
+    }) else {
+        return;
+    };
+    effect(hwnd, e, at);
 }
 
 /// The Shift and Ctrl keys as they are now.
@@ -1260,7 +1289,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_LBUTTONDBLCLK => {
             unsafe { SetCapture(hwnd) };
-            dispatch(hwnd, lp, Input::DoubleClick);
+            let mods = mods_now();
+            if mods.shift || mods.ctrl {
+                // Two quick presses with Shift or Ctrl held are two selections; they must not open the folder.
+                dispatch(hwnd, lp, |x, y| Input::Click(x, y, mods));
+            } else {
+                dispatch(hwnd, lp, Input::DoubleClick);
+            }
             with(|w| w.filter_press(lp, true));
             LRESULT(0)
         }
@@ -1406,8 +1441,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(0)
         }
         WM_KEYDOWN => {
-            let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
-            let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+            let Mods { shift, ctrl } = mods_now();
             let in_box = with(|w| w.app.filter_ui().focus).unwrap_or(false);
             let picked = with(|w| w.app.filter_ui().selected_text().map(str::to_owned)).flatten();
             let motion = match key_of(wp.0 as u16) {
@@ -1428,10 +1462,37 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
             } else if let (true, true, Some(to)) = (shift, in_box, motion) {
                 send(hwnd, Input::Edit(Edit::Move { to, extend: true }));
-            } else if wp.0 == VK_DELETE.0 as usize && lp.0 & (1 << 30) != 0 && !in_box {
-                // Holding Del must not flip the mark on every repeat.
+            } else if lp.0 & (1 << 30) != 0 && !in_box && once_per_press(wp.0 as u16, ctrl) {
+                // A held Del, Enter, F5, Backspace or Ctrl+A acts once, not on every repeat.
+            } else if wp.0 == VK_APPS.0 as usize {
+                if lp.0 & (1 << 30) == 0 {
+                    key_menu(hwnd);
+                }
             } else if let Some(input) = key_input(wp.0 as u16, Mods { shift, ctrl }, hwnd) {
                 send(hwnd, input);
+            }
+            LRESULT(0)
+        }
+        // F10 is a system key, so Shift+F10, the keyboard's context menu, arrives here. Every other Alt or F10 combination is
+        // Windows': it falls through to `DefWindowProc`.
+        WM_SYSKEYDOWN if wp.0 == VK_F10.0 as usize && unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0 => {
+            if lp.0 & (1 << 30) == 0 {
+                key_menu(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_DRAG => {
+            // The button is down on a row: replay the pointer's position, so holding it past an edge keeps scrolling. A
+            // button let go after the window lost the capture sends no WM_LBUTTONUP, so end the drag here.
+            if unsafe { GetKeyState(VK_LBUTTON.0 as i32) } < 0 {
+                let mut p = POINT::default();
+                if unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(hwnd, &mut p).as_bool() } {
+                    if let Some((x, y)) = with(|w| (p.x as f32 * 96.0 / w.dpi, p.y as f32 * 96.0 / w.dpi - w.inset)) {
+                        send(hwnd, Input::Drag(x, y));
+                    }
+                }
+            } else {
+                send(hwnd, Input::Release);
             }
             LRESULT(0)
         }
