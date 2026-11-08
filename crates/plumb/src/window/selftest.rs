@@ -510,12 +510,31 @@ pub fn selftest_delete() -> Result<String> {
     out
 }
 
+/// The middle value of each colour channel over `points` of `dc`. This machine's display path was seen adding noise of
+/// up to about 0x18 a channel (a median read 9 low) to a read-back, even of a flat fill, so one pixel cannot be compared exactly.
+fn median(dc: windows::Win32::Graphics::Gdi::HDC, points: impl Iterator<Item = (i32, i32)>) -> u32 {
+    let mut channels = [Vec::new(), Vec::new(), Vec::new()];
+    for (x, y) in points {
+        let c = unsafe { windows::Win32::Graphics::Gdi::GetPixel(dc, x, y) }.0;
+        (0..3).for_each(|i| channels[i].push((c >> (8 * i)) & 0xff));
+    }
+    channels.iter_mut().enumerate().fold(0, |acc, (i, v)| {
+        v.sort_unstable();
+        acc | (v.get(v.len() / 2).copied().unwrap_or(0) << (8 * i))
+    })
+}
+
+/// Whether two colours agree within the noise `median` leaves, far less than the gap between any two theme colours.
+fn near(a: u32, b: u32) -> bool {
+    (0..3).all(|i| ((a >> (8 * i)) & 0xff).abs_diff((b >> (8 * i)) & 0xff) <= 0x20)
+}
+
 /// The tooltip's colours in both themes: the control reports the theme's panel and text colours, and paints its
 /// background with the panel colour (printed offscreen, never shown). Run it with `plumb --selftest-tooltip`.
 pub fn selftest_tooltip() -> Result<String> {
     use windows::Win32::Foundation::E_FAIL;
     use windows::Win32::Graphics::Gdi::{
-        CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetDC, GetPixel, ReleaseDC, SelectObject,
+        CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetDC, ReleaseDC, SelectObject,
     };    use windows::Win32::UI::Controls::{
         TTF_ABSOLUTE, TTF_TRACK, TTM_DELTOOLW, TTM_GETTIPBKCOLOR, TTM_GETTIPTEXTCOLOR, TTM_TRACKACTIVATE, TTM_TRACKPOSITION,
     };
@@ -554,8 +573,12 @@ pub fn selftest_tooltip() -> Result<String> {
             SendMessageW(w.tooltip, WM_PRINT, Some(WPARAM(dc.0 as usize)), Some(LPARAM((PRF_CLIENT | PRF_ERASEBKGND) as isize)));
             SendMessageW(w.tooltip, TTM_TRACKACTIVATE, Some(WPARAM(0)), Some(at));
             SendMessageW(w.tooltip, TTM_DELTOOLW, None, Some(at));
-            let pixel = GetPixel(dc, 2, 2).0; // inside the frame, above the text
-            let frame = GetPixel(dc, 0, 0).0;            SelectObject(dc, old);
+            let mut rc = windows::Win32::Foundation::RECT::default();
+            let _ = GetClientRect(w.tooltip, &mut rc);
+            let iw = rc.right.max(12);
+            let pixel = median(dc, (4..iw - 4).step_by(2).flat_map(|x| (2..4).map(move |y| (x, y)))); // the padding above the text
+            let frame = median(dc, (4..iw - 4).step_by(2).map(|x| (x, 0)));
+            SelectObject(dc, old);
             let _ = DeleteObject(bmp.into());
             let _ = DeleteObject(sentinel.into());
             let _ = DeleteDC(dc);
@@ -569,11 +592,11 @@ pub fn selftest_tooltip() -> Result<String> {
         if bk != panel || text != fg {
             return Err(fail(format!("{name}: tooltip reports background {bk:06x} / text {text:06x}, want {panel:06x} / {fg:06x}")));
         }
-        if pixel != panel {
+        if !near(pixel, panel) {
             return Err(fail(format!("{name}: tooltip paints {pixel:06x} inside its frame, want {panel:06x}")));
         }
         let border = crate::draw::colorref(theme.border);
-        if frame != border {
+        if !near(frame, border) {
             return Err(fail(format!("{name}: tooltip frames itself {frame:06x}, want the theme's border {border:06x}")));
         }
         seen.push(format!("{name} {panel:06x}/{fg:06x} frame {border:06x}"));
