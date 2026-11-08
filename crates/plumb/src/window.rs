@@ -912,11 +912,6 @@ impl Win {
         m.fit(w, h, &|s| self.painter.text_width(&self.gfx, Role::Caption, s));
         self.app.ask(m);
     }
-
-    fn selected_path(&self) -> Option<String> {
-        let id = self.app.slot.model.as_ref()?.selected()?;
-        self.app.menu_target(id).map(|t| t.1).filter(|p| !p.is_empty())
-    }
 }
 
 /// The status line after a scan; `found` is the share (tenths of a percent) of the drive's used space the scan accounted for.
@@ -1428,8 +1423,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     send(hwnd, Input::Edit(Edit::Backspace));
                 }
             } else if ctrl && wp.0 == 'C' as usize {
-                if let Some(Some(p)) = with(|w| w.selected_path()) {
-                    copy_to_clipboard(hwnd, &p);
+                if let Some(Some(text)) = with(|w| w.app.copy_text()) {
+                    copy_to_clipboard(hwnd, &text);
                 }
             } else if let (true, true, Some(to)) = (shift, in_box, motion) {
                 send(hwnd, Input::Edit(Edit::Move { to, extend: true }));

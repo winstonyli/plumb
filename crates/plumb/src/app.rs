@@ -812,12 +812,22 @@ impl App {
     pub fn menu_target(&self, id: NodeId) -> Option<(String, String, MarkState, bool)> {
         let tree = self.slot.tree.as_ref()?;
         if self.kind() == ViewKind::Processes {
-            let pid = tree.aux.get(id.idx())?[2] as u32;
-            let path = self.slot.proc_info.get(&pid).and_then(|i| i.path.clone()).unwrap_or_default();
-            return Some((String::new(), path, self.mark_state(id), false));
+            tree.aux.get(id.idx())?;
+            return Some((String::new(), self.fs_path(id), self.mark_state(id), false));
         }
         let file = !tree.flags[id].contains(NodeFlags::DIR);
-        Some((tree.path(id), fmt::node_path(tree, id).to_string(), self.mark_state(id), file))
+        Some((tree.path(id), self.fs_path(id), self.mark_state(id), file))
+    }
+
+    /// The file system path of row `id` (what Reveal and Copy path use); empty when it is not known (a process whose
+    /// executable cannot be read).
+    pub fn fs_path(&self, id: NodeId) -> String {
+        let Some(tree) = self.slot.tree.as_ref() else { return String::new() };
+        if self.kind() == ViewKind::Processes {
+            let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2] as u32);
+            return self.slot.proc_info.get(&pid).and_then(|i| i.path.clone()).unwrap_or_default();
+        }
+        fmt::node_path(tree, id).to_string()
     }
 
     /// The tree the context menu's process-tree entries of `id` act on (End, Suspend, Resume; the process alone is the
@@ -1048,7 +1058,7 @@ impl App {
                 }
                 self.move_focus(k, mods);
             }
-            Input::Edit(Edit::Delete) if !self.slot.filter.ui.focus => self.toggle_mark_selected(),
+            Input::Edit(Edit::Delete) if !self.slot.filter.ui.focus => self.mark_selected(),
             Input::Edit(Edit::SelectAll) if !self.slot.filter.ui.focus => self.select_all_rows(),
             Input::Edit(e) => return self.filter_edit(e),
             Input::Find => {

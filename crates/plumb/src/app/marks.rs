@@ -91,12 +91,6 @@ impl App {
         }
     }
 
-    pub(super) fn toggle_mark_selected(&mut self) {
-        if let Some(id) = self.slot.model.as_ref().and_then(|m| m.selected()) {
-            self.toggle_mark(id);
-        }
-    }
-
     /// Rebuilds what the chip and the tiles show when the marks, the tree or the tiles changed.
     pub(super) fn refresh_basket(&mut self) {
         let Some(tree) = &self.slot.tree else {

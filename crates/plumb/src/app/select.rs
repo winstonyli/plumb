@@ -73,6 +73,71 @@ impl App {
             m.select_all();
         }
     }
+
+    /// The picked rows that have no picked ancestor, in row order: what Del and the set menu act on, so that Ctrl+A then Del
+    /// marks the roots and not every row under them.
+    pub(super) fn topmost(&self) -> Vec<NodeId> {
+        let (Some(t), Some(m)) = (&self.slot.tree, &self.slot.model) else { return Vec::new() };
+        let covered = |id: NodeId| {
+            let mut p = t.parent[id];
+            while !p.is_none() {
+                if m.is_picked(p) {
+                    return true;
+                }
+                p = t.parent[p];
+            }
+            false
+        };
+        m.targets().into_iter().filter(|&id| !covered(id)).collect()
+    }
+
+    /// Del (and the menu's Mark selected): over the topmost picked rows, if each is marked exactly (the test `mark_state`
+    /// uses) it unmarks the exact mark of every picked row; otherwise it marks each not yet marked. Rows that cannot be
+    /// marked are skipped and the status line says how many and why.
+    pub fn mark_selected(&mut self) {
+        let Some(tree) = self.slot.tree.as_ref() else { return };
+        let top = self.topmost();
+        if top.is_empty() {
+            return;
+        }
+        let marked: Vec<bool> = top.iter().map(|&id| self.slot.basket.contains(&tree.path(id))).collect();
+        if marked.iter().all(|&m| m) {
+            let exact: Vec<String> = self.slot.model.as_ref().map(|m| m.targets()).unwrap_or_default().into_iter().map(|id| tree.path(id)).filter(|p| self.slot.basket.contains(p)).collect();
+            for p in &exact {
+                self.slot.basket.toggle(p);
+            }
+            self.basket_rev += 1;
+            return;
+        }
+        let (mut todo, mut refused) = (Vec::new(), Vec::new());
+        for (&id, _) in top.iter().zip(&marked).filter(|(_, m)| !**m) {
+            match self.mark_state(id) {
+                MarkState::Refused(why) => refused.push(why),
+                _ => todo.push(tree.path(id)),
+            }
+        }
+        for p in &todo {
+            self.slot.basket.toggle(p);
+        }
+        if !todo.is_empty() {
+            self.basket_rev += 1;
+        }
+        if let Some(why) = refused.first() {
+            self.outcome = Outcome::problem(if todo.is_empty() && refused.len() == 1 {
+                format!("cannot mark: {why}")
+            } else {
+                format!("{} not marked: {why}", refused.len())
+            });
+        }
+    }
+
+    /// The file system paths of the picked rows, nested ones included, one per line (CRLF), for the clipboard; `None`
+    /// when there are none to copy.
+    pub fn copy_text(&self) -> Option<String> {
+        let m = self.slot.model.as_ref()?;
+        let paths: Vec<String> = m.targets().into_iter().map(|id| self.fs_path(id)).filter(|p| !p.is_empty()).collect();
+        (!paths.is_empty()).then(|| paths.join("\r\n"))
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +329,92 @@ mod tests {
         assert_eq!(picked(&a), ["main.rs", "deep", "more.txt"], "the set survives a right-click on one of its rows");
         a.handle(Input::RightClick(150.0, row_y(docs)));
         assert_eq!(picked(&a), ["docs"], "an unpicked row becomes the selection");
+    }
+
+    fn status_str(a: &App, full: bool) -> String {
+        let mut s = String::new();
+        a.write_status(full, true, true, &mut s);
+        s
+    }
+
+    #[test]
+    fn del_marks_every_picked_row_then_unmarks_them_all() {
+        let mut a = app_h(600.0);
+        let (notes, todo) = (at(&a, "notes.txt"), at(&a, "todo.md"));
+        press(&mut a, notes, NONE);
+        press(&mut a, todo, SHIFT);
+        a.handle(Input::Edit(Edit::Delete));
+        assert_eq!(a.basket().len(), 2);
+        a.handle(Input::Edit(Edit::Delete));
+        assert!(a.basket().is_empty(), "all marked: Del unmarks");
+    }
+
+    #[test]
+    fn del_over_a_mix_marks_the_rows_not_yet_marked() {
+        let mut a = app_h(600.0);
+        let (notes, todo) = (at(&a, "notes.txt"), at(&a, "todo.md"));
+        press(&mut a, notes, NONE);
+        a.handle(Input::Edit(Edit::Delete)); // notes marked
+        press(&mut a, todo, SHIFT); // picks notes and todo
+        a.handle(Input::Edit(Edit::Delete));
+        assert_eq!(a.basket().len(), 2, "todo was marked, notes kept its mark");
+    }
+
+    #[test]
+    fn del_over_nested_picks_marks_only_the_topmost() {
+        let mut a = app_h(600.0);
+        let (src, deep) = (at(&a, "src"), at(&a, "more.txt"));
+        press(&mut a, src, NONE);
+        press(&mut a, deep, SHIFT); // src, main.rs, deep, more.txt
+        a.handle(Input::Edit(Edit::Delete));
+        assert_eq!(a.basket().len(), 1);
+        let src_id = a.slot.model.as_ref().unwrap().rows()[src].id;
+        assert!(a.basket().contains(&a.slot.tree.as_ref().unwrap().path(src_id)));
+    }
+
+    #[test]
+    fn del_marks_a_child_of_a_marked_folder_as_it_always_did() {
+        let mut a = app_h(600.0);
+        let (src, main) = (at(&a, "src"), at(&a, "main.rs"));
+        press(&mut a, src, NONE);
+        a.handle(Input::Edit(Edit::Delete));
+        press(&mut a, main, NONE);
+        a.handle(Input::Edit(Edit::Delete));
+        assert_eq!(a.basket().len(), 2);
+    }
+
+    #[test]
+    fn a_refused_row_is_skipped_and_the_status_line_says_why() {
+        let mut a = app_h(600.0);
+        press(&mut a, 0, NONE); // the drive root
+        a.handle(Input::Edit(Edit::Delete));
+        assert!(a.basket().is_empty());
+        assert!(status_str(&a, true).starts_with("cannot mark: it is a drive root"), "{}", status_str(&a, true));
+        a.handle(Input::Edit(Edit::SelectAll)); // everything, root included: the root covers all, and is refused
+        a.handle(Input::Edit(Edit::Delete));
+        assert!(a.basket().is_empty(), "Ctrl+A then Del at a drive root marks nothing");
+        let (notes, todo) = (at(&a, "notes.txt"), at(&a, "todo.md"));
+        press(&mut a, notes, NONE);
+        press(&mut a, todo, SHIFT);
+        a.slot.scan = Scan::Refreshing; // marks are refused while a scan runs
+        a.handle(Input::Edit(Edit::Delete));
+        assert!(a.basket().is_empty());
+        assert!(status_str(&a, true).starts_with("2 not marked: the drive is being scanned"), "{}", status_str(&a, true));
+    }
+
+    #[test]
+    fn copy_text_lists_the_paths_of_every_picked_row_one_per_line() {
+        let mut a = app_h(600.0);
+        let (notes, todo) = (at(&a, "notes.txt"), at(&a, "todo.md"));
+        press(&mut a, notes, NONE);
+        press(&mut a, todo, SHIFT);
+        let m = a.slot.model.as_ref().unwrap();
+        let want: Vec<String> = m.targets().into_iter().map(|id| a.fs_path(id)).collect();
+        assert_eq!(want.len(), 2);
+        assert!(want.iter().all(|p| p.ends_with(".txt") || p.ends_with(".md")), "{want:?}");
+        assert_eq!(a.copy_text(), Some(want.join("\r\n")));
+        a.handle(Input::Edit(Edit::SelectAll));
+        let all = a.copy_text().unwrap();
+        assert_eq!(all.split("\r\n").count(), 9, "nested rows are copied too");
     }
 }
