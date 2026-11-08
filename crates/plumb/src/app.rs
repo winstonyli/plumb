@@ -6,13 +6,14 @@ mod marks;
 mod filter;
 mod held;
 mod map;
+mod select;
 
 use crate::attrs::{self, Attrs};
 use crate::describe::{self, Description};
 use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H};
+use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H, ROW_H};
 use crate::modal::{Ask, Modal, Pick, Victim};
 use crate::outcome::Outcome;
 use crate::restore::Snapshot;
@@ -401,6 +402,8 @@ pub struct App {
     pub map_hover: Option<usize>,
     /// While dragging the divider: the pointer x and the pane width at the start.
     map_drag: Option<(f32, f32)>,
+    /// The left button went down on a row and is still down: moving the pointer extends the selection (`drag_select`).
+    row_drag: bool,
     /// The files the selected process holds (see `held_sync`).
     held: Held,
     /// Bumped when the marks change or the shown view's basket is swapped.
@@ -424,7 +427,7 @@ impl App {
         Self {
             layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), slot: Slot::default(),
             can_elevate: false, accent: None, sort: (1, true), grab: None, col_drag: None,
-            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None,
+            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None, row_drag: false,
             held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, outcome: Outcome::default(), stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
@@ -1037,19 +1040,16 @@ impl App {
             }
             Input::Wheel(rows, x, y) if self.layout.held && self.layout.held_pane().contains(x, y) => self.held_scroll(rows),
             Input::Wheel(rows, ..) => self.set_scroll((self.slot.scroll as i64 + rows as i64).max(0) as usize),
-            Input::Key(k, _) => {
+            Input::Key(k, mods) => {
                 if self.slot.filter.ui.focus
                     && let Some(e) = filter::edit_for_key(k)
                 {
                     return self.filter_edit(e);
                 }
-                if let (Some(t), Some(m)) = (&self.slot.tree, &mut self.slot.model) {
-                    m.handle_key(t, k, self.layout.rows_visible().max(1), false);
-                    let s = m.scroll_to_selected(self.slot.scroll, self.layout.rows_visible());
-                    self.set_scroll(s);
-                }
+                self.move_focus(k, mods);
             }
             Input::Edit(Edit::Delete) if !self.slot.filter.ui.focus => self.toggle_mark_selected(),
+            Input::Edit(Edit::SelectAll) if !self.slot.filter.ui.focus => self.select_all_rows(),
             Input::Edit(e) => return self.filter_edit(e),
             Input::Find => {
                 self.slot.filter.ui.focus = true;
@@ -1075,7 +1075,7 @@ impl App {
                 self.map_hover = if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map) { treemap::hit(&self.map_tiles, x, y) } else { None };
             }
             Input::ToggleMap => self.layout.map_on = !self.layout.map_on,
-            Input::Click(x, y, _) => return self.click(x, y),
+            Input::Click(x, y, mods) => return self.click(x, y, mods),
             // Windows sends the second press of a quick pair as a double-click instead of a click, so
             // anywhere but a row it must act as a click, or the second press of a header, button or
             // scrollbar would be lost.
@@ -1090,10 +1090,10 @@ impl App {
                     return Effect::None;
                 }
                 let Hit::Row(i) = self.layout.hit(x, y, self.views.len()) else {
-                    return self.click(x, y);
+                    return self.click(x, y, Mods::default());
                 };
                 if self.icon_at(i, x).is_some() {
-                    return self.click(x, y);
+                    return self.click(x, y, Mods::default());
                 }
                 if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.slot.tree, &mut self.slot.model) {
                     m.select(id);
@@ -1105,7 +1105,9 @@ impl App {
                 if let Hit::Row(i) = self.layout.hit(x, y, self.views.len())
                     && let (Some(id), Some(m)) = (self.row_at(i), &mut self.slot.model)
                 {
-                    m.select(id);
+                    if !(m.is_picked(id) && m.picked_count() > 1) {
+                        m.select(id);
+                    }
                     return Effect::Menu(id);
                 } else if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map)
                     && let Some(id) = treemap::hit(&self.map_tiles, x, y).and_then(|i| self.select_from_map(i))
@@ -1122,9 +1124,12 @@ impl App {
                     self.set_scroll(s);
                 } else if let Some((x0, w0)) = self.map_drag {
                     self.layout.set_map_w(w0 + x0 - x);
+                } else if self.row_drag {
+                    self.drag_select(y);
                 }
             }
             Input::Release => {
+                self.row_drag = false;
                 self.pressed = false;
                 self.grab = None;
                 self.col_drag = None;
@@ -1147,7 +1152,7 @@ impl App {
         self.map_dirty = true;
     }
 
-    fn click(&mut self, x: f32, y: f32) -> Effect {
+    fn click(&mut self, x: f32, y: f32, mods: Mods) -> Effect {
         self.pressed = self.hot.is_some_and(|r| r.contains(x, y));
         if self.can_elevate && self.layout.admin_button().contains(x, y) {
             return Effect::Elevate;
@@ -1197,21 +1202,7 @@ impl App {
                     self.select_from_map(i);
                 }
             }
-            Hit::Row(i) => {
-                let folder = self.icon_at(i, x);
-                let mut again = false;
-                if let (Some(id), Some(t), Some(m)) = (self.row_at(i), &self.slot.tree, &mut self.slot.model) {
-                    again = folder.is_none() && m.selected() == Some(id);
-                    m.select(id);
-                    if folder.is_some() {
-                        m.toggle(t, id);
-                        self.set_scroll(self.slot.scroll);
-                    }
-                }
-                if again {
-                    self.held_mark_stale();
-                }
-            }
+            Hit::Row(i) => self.click_row(i, x, mods),
             Hit::Scrollbar => {
                 let total = self.total_rows();
                 match self.layout.thumb(total, self.slot.scroll) {
