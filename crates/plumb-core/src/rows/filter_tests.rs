@@ -163,3 +163,21 @@ fn update_keep_then_refresh_equals_a_fresh_filter() {
     assert_eq!(ids(&m), ids(&fresh));
     assert!(ids(&m).contains(&new.0));
 }
+
+#[test]
+fn a_filter_drops_the_picks_it_hides() {
+    let t = sample();
+    let mut m = RowModel::new(&t);
+    m.expand(&t, NodeId(0));
+    m.expand(&t, NodeId(1));
+    m.select(NodeId(2));
+    m.toggle_pick(NodeId(3)); // 2 and 3 picked; focus 3
+    m.set_filter(&t, Some(keep(&t, "f2")));
+    assert_eq!((m.targets(), m.picked_count()), (vec![NodeId(3)], 1), "f1 is hidden, so its pick went");
+    m.select(NodeId(0));
+    m.set_filter(&t, None);
+    m.select(NodeId(0));
+    m.extend_to(NodeId(6));
+    m.set_filter(&t, Some(keep(&t, "f")));
+    assert_eq!((m.selected(), m.targets()), (Some(NodeId(0)), vec![NodeId(0)]), "the focus was hidden: the set follows it to its ancestor");
+}

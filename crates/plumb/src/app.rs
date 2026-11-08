@@ -1036,7 +1036,7 @@ impl App {
                     return self.filter_edit(e);
                 }
                 if let (Some(t), Some(m)) = (&self.slot.tree, &mut self.slot.model) {
-                    m.handle_key(t, k, self.layout.rows_visible().max(1));
+                    m.handle_key(t, k, self.layout.rows_visible().max(1), false);
                     let s = m.scroll_to_selected(self.slot.scroll, self.layout.rows_visible());
                     self.set_scroll(s);
                 }

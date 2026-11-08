@@ -5,6 +5,7 @@ use crate::tree::Tree;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
+mod pick;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortKey {
@@ -43,6 +44,12 @@ pub struct RowModel {
     expanded: Vec<u64>,
     rows: Vec<Row>,
     selected: Option<NodeId>,
+    /// The rows picked with Shift or Ctrl (see `pick.rs`); `selected` is the focus, within them or beside them.
+    picked: Vec<u64>,
+    /// Set bits in `picked`; every method that writes `picked` keeps it exact.
+    picked_n: usize,
+    /// Where a Shift extension starts.
+    anchor: Option<NodeId>,
     key: SortKey,
     desc: bool,
     /// Sorted child lists, keyed by parent (`NodeId::NONE` is the list of roots).
@@ -71,6 +78,9 @@ impl RowModel {
             expanded: vec![0; tree.len().div_ceil(64)],
             rows: Vec::new(),
             selected: None,
+            picked: Vec::new(),
+            picked_n: 0,
+            anchor: None,
             key: SortKey::Size,
             desc: true,
             cache: HashMap::new(),
@@ -88,10 +98,6 @@ impl RowModel {
 
     pub fn selected(&self) -> Option<NodeId> {
         self.selected
-    }
-
-    pub fn select(&mut self, id: NodeId) {
-        self.selected = Some(id);
     }
 
     /// Selects `id` and opens every folder above it, top first, so its row exists. (A name filter can
@@ -141,6 +147,7 @@ impl RowModel {
         }
         self.filter = keep;
         self.rebuild(tree);
+        let before = self.selected;
         while let Some(s) = self.selected {
             if self.row_index(s).is_some() {
                 break;
@@ -148,6 +155,7 @@ impl RowModel {
             let p = tree.parent[s];
             self.selected = (!p.is_none()).then_some(p);
         }
+        self.follow_focus(before);
     }
 
     /// Swaps in a rebuilt keep set for the filter that is already active, without rebuilding the
@@ -267,6 +275,7 @@ impl RowModel {
         let mut rows = Vec::new();
         self.push_children(tree, NodeId::NONE, 0, &mut rows);
         self.rows = rows;
+        self.prune_picks();
     }
 
     pub fn expand(&mut self, tree: &Tree, id: NodeId) {
@@ -293,7 +302,9 @@ impl RowModel {
                 .iter()
                 .position(|r| r.depth <= depth)
                 .map_or(self.rows.len(), |p| i + 1 + p);
-            self.rows.drain(i + 1..end);
+            for r in self.rows.drain(i + 1..end) {
+                pick::unpick(&mut self.picked, &mut self.picked_n, r.id);
+            }
         }
     }
 
@@ -305,13 +316,15 @@ impl RowModel {
         }
     }
 
-    /// Moves the selection. `page` is the number of rows PageUp/PageDown move.
-    pub fn handle_key(&mut self, tree: &Tree, key: Key, page: usize) {
+    /// Moves the focus. `page` is the number of rows PageUp/PageDown move. With `extend`, the keys that move to another
+    /// row (not Left and Right, which open and close folders) extend the picked range to the new focus instead of
+    /// picking only it.
+    pub fn handle_key(&mut self, tree: &Tree, key: Key, page: usize, extend: bool) {
         if self.rows.is_empty() {
             return;
         }
         let Some(cur) = self.selected_index() else {
-            self.selected = Some(self.rows[0].id);
+            self.select(self.rows[0].id);
             return;
         };
         let last = self.rows.len() - 1;
@@ -343,7 +356,12 @@ impl RowModel {
                 }
             }
         };
-        self.selected = Some(self.rows[target].id);
+        let to = self.rows[target].id;
+        if extend && !matches!(key, Key::Left | Key::Right) {
+            self.extend_to(to);
+        } else {
+            self.select(to);
+        }
     }
 
     /// Brings the rows up to date after tree mutations; it consumes the tree's `take_touched()` list.
@@ -366,6 +384,7 @@ impl RowModel {
             self.expanded.resize(words, 0);
         }
         self.rebuild(tree);
+        let before = self.selected;
         while let Some(s) = self.selected {
             if self.row_index(s).is_some() {
                 break;
@@ -373,6 +392,7 @@ impl RowModel {
             let p = tree.parent[s];
             self.selected = (!p.is_none()).then_some(p);
         }
+        self.follow_focus(before);
         let new = match (self.selected_index(), anchor) {
             (Some(i), Some((id, row))) if Some(id) == self.selected => (i as isize - row).max(0) as usize,
             _ => scroll,
@@ -578,26 +598,26 @@ mod tests {
     fn keys_move_expand_and_collapse() {
         let t = sample();
         let mut m = RowModel::new(&t);
-        m.handle_key(&t, Key::Down, 10); // nothing selected: selects first row
+        m.handle_key(&t, Key::Down, 10, false); // nothing selected: selects first row
         assert_eq!(m.selected(), Some(NodeId(0)));
-        m.handle_key(&t, Key::Right, 10); // expands C:
+        m.handle_key(&t, Key::Right, 10, false); // expands C:
         assert_eq!(ids(&m), vec![0, 1, 4, 6]);
-        m.handle_key(&t, Key::Right, 10); // moves to first child
+        m.handle_key(&t, Key::Right, 10, false); // moves to first child
         assert_eq!(m.selected(), Some(NodeId(1)));
-        m.handle_key(&t, Key::Left, 10); // child is collapsed: goes to parent
+        m.handle_key(&t, Key::Left, 10, false); // child is collapsed: goes to parent
         assert_eq!(m.selected(), Some(NodeId(0)));
-        m.handle_key(&t, Key::Left, 10); // collapses C:
+        m.handle_key(&t, Key::Left, 10, false); // collapses C:
         assert_eq!(ids(&m), vec![0]);
-        m.handle_key(&t, Key::Right, 10);
-        m.handle_key(&t, Key::End, 10);
+        m.handle_key(&t, Key::Right, 10, false);
+        m.handle_key(&t, Key::End, 10, false);
         assert_eq!(m.selected(), Some(NodeId(6)));
-        m.handle_key(&t, Key::PageUp, 2);
+        m.handle_key(&t, Key::PageUp, 2, false);
         assert_eq!(m.selected(), Some(NodeId(1)));
-        m.handle_key(&t, Key::Home, 10);
+        m.handle_key(&t, Key::Home, 10, false);
         assert_eq!(m.selected(), Some(NodeId(0)));
-        m.handle_key(&t, Key::PageDown, 100);
+        m.handle_key(&t, Key::PageDown, 100, false);
         assert_eq!(m.selected(), Some(NodeId(6)));
-        m.handle_key(&t, Key::Up, 10);
+        m.handle_key(&t, Key::Up, 10, false);
         assert_eq!(m.selected(), Some(NodeId(4)));
     }
 
@@ -646,3 +666,6 @@ mod refresh_tests;
 
 #[cfg(test)]
 mod filter_tests;
+
+#[cfg(test)]
+mod pick_tests;
