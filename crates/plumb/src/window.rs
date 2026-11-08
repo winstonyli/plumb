@@ -704,7 +704,7 @@ impl Win {
         }
         self.run.background = background;
         if background {
-            self.app.slot.refreshing = true;
+            self.app.slot.scan = crate::app::Scan::Refreshing;
         } else {
             self.drop_watch();
             self.app.begin_scan(view);
@@ -842,7 +842,9 @@ impl Win {
         } else {
             p.paced.mark(a.changes > 0);
         }
-        self.app.slot.preview_paused = p.paused();
+        if let crate::app::Scan::Running { paused, .. } = &mut self.app.slot.scan {
+            *paused = p.paused();
+        }
         if p.paced.due(Instant::now()) {
             let t0 = Instant::now();
             self.app.refresh_rows();
@@ -887,7 +889,9 @@ impl Win {
             }
             Err(e) if background => {
                 self.drop_pending();
-                self.app.slot.refreshing = false;
+                if self.app.slot.refreshing() {
+                    self.app.slot.scan = crate::app::Scan::Idle;
+                }
                 self.app.set_live(LiveStatus::Stale(format!("the rescan failed: {e}")));
             }
             Err(e) => {

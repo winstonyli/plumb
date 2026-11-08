@@ -199,7 +199,10 @@ impl ViewInfo {
 pub enum Scan {
     #[default]
     Idle,
-    Running { view: usize, dirs: u64, files: u64, bytes: u64 },
+    /// A first scan, its partial tree on screen; `paused` once the preview stopped following the scan.
+    Running { view: usize, dirs: u64, files: u64, bytes: u64, paused: bool },
+    /// A background rescan: the old tree stays on screen until the new one is ready.
+    Refreshing,
     /// The user stopped the scan; there is no tree.
     Cancelled,
     Failed(String),
@@ -309,10 +312,6 @@ pub struct Slot {
     /// One line about the last finished scan (files, time, skipped records); empty before any.
     pub summary: String,
     pub live: LiveStatus,
-    /// A background rescan is running while the old tree stays on screen.
-    pub refreshing: bool,
-    /// The partial tree stopped following the scan; the status line says so.
-    pub preview_paused: bool,
     filter: filter::Filter,
     pub basket: Basket,
     /// Rows that live updates just changed, tinted while they fade.
@@ -335,6 +334,11 @@ impl Slot {
     /// The tree a kept view's running scan builds (its rows are made when the view comes back).
     pub fn tree_mut(&mut self) -> &mut Option<Tree> {
         &mut self.tree
+    }
+
+    /// A background rescan is running while the old tree stays on screen.
+    pub fn refreshing(&self) -> bool {
+        matches!(self.scan, Scan::Refreshing)
     }
 
     pub fn scan(&self) -> &Scan {
@@ -494,9 +498,7 @@ impl App {
         self.slot.flash.clear();
         self.slot.summary.clear();
         self.set_live(LiveStatus::Off);
-        self.slot.refreshing = false;
-        self.slot.preview_paused = false;
-        self.slot.scan = Scan::Running { view, dirs: 0, files: 0, bytes: 0 };
+        self.slot.scan = Scan::Running { view, dirs: 0, files: 0, bytes: 0, paused: false };
     }
 
     pub fn progress(&mut self, d: u64, f: u64, b: u64) {
@@ -516,13 +518,11 @@ impl App {
         model
     }
 
-    /// After an install that ends a scan or a rescan: nothing is running, no preview is paused, live is off.
+    /// After an install that ends a scan or a rescan: nothing is running, live is off.
     fn settle(&mut self, summary: String) {
         self.slot.flash.clear();
         self.slot.summary = summary;
         self.slot.scan = Scan::Idle;
-        self.slot.refreshing = false;
-        self.slot.preview_paused = false;
         self.set_live(LiveStatus::Off);
     }
 
@@ -615,26 +615,27 @@ impl App {
 
     /// A scan is in flight (a first scan, or a background rescan).
     pub fn cancelable(&self) -> bool {
-        self.slot.refreshing || matches!(self.slot.scan, Scan::Running { .. })
+        matches!(self.slot.scan, Scan::Running { .. } | Scan::Refreshing)
     }
 
     /// The user cancelled the scan in flight. A first scan leaves no tree; a background rescan
     /// leaves the old one on screen.
     pub fn cancel_scan(&mut self) {
-        if matches!(self.slot.scan, Scan::Running { .. }) {
-            self.slot.tree = None;
-            self.slot.model = None;
-            self.slot.preview_paused = false;
-            self.slot.scan = Scan::Cancelled;
-            self.map_reset();
+        match self.slot.scan {
+            Scan::Running { .. } => {
+                self.slot.tree = None;
+                self.slot.model = None;
+                self.slot.scan = Scan::Cancelled;
+                self.map_reset();
+            }
+            Scan::Refreshing => self.slot.scan = Scan::Idle,
+            _ => {}
         }
-        self.slot.refreshing = false;
     }
 
     pub fn fail_scan(&mut self, msg: String) {
         self.slot.tree = None;
         self.slot.model = None;
-        self.slot.preview_paused = false;
         self.slot.scan = Scan::Failed(msg);
         self.map_reset();
     }
@@ -1166,7 +1167,7 @@ impl App {
             // Picking another view mid-scan cancels the scan in flight; the same view does nothing.
             Hit::Chip(i) if !(matches!(self.slot.scan, Scan::Running { .. }) && self.active == Some(i)) => return Effect::Scan(i),
             Hit::Rescan => {
-                if let Some(i) = self.active.filter(|_| !self.slot.refreshing && !matches!(self.slot.scan, Scan::Running { .. })) {
+                if let Some(i) = self.active.filter(|_| !self.cancelable()) {
                     return Effect::Rescan(i);
                 }
             }
@@ -1240,9 +1241,9 @@ impl App {
 
     fn write_message(&self, out: &mut String) {
         match &self.slot.scan {
-            Scan::Idle => out.push_str("No drive selected\nSelect a drive above to scan it."),
+            Scan::Idle | Scan::Refreshing => out.push_str("No drive selected\nSelect a drive above to scan it."),
             Scan::Running { view, .. } if self.views[*view].kind == ViewKind::Processes => out.push_str("Reading processes\u{2026}"),
-            Scan::Running { view, dirs, files, bytes } => {
+            Scan::Running { view, dirs, files, bytes, .. } => {
                 let _ = write!(
                     out,
                     "Scanning {}  {}, {}, {}",
@@ -1308,9 +1309,9 @@ impl App {
         }
         sep(out);
         match &self.slot.scan {
-            Scan::Running { .. } => {
+            Scan::Running { paused, .. } => {
                 self.write_message(out);
-                if self.slot.preview_paused {
+                if *paused {
                     out.push_str("   (preview paused)");
                 }
             }
@@ -1339,7 +1340,7 @@ impl App {
                 out.push_str("live updates stopped");
             }
         }
-        if self.slot.refreshing {
+        if self.slot.refreshing() {
             sep(out);
             out.push_str("refreshing\u{2026}");
         }
@@ -1952,17 +1953,17 @@ mod tests {
     fn switching_drives_keeps_each_drives_tree_selection_and_scan_apart() {
         let mut a = scanned();
         let sel = a.slot.model.as_ref().and_then(|m| m.selected());
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         let mut away = Slot::default();
         a.switch_slot(&mut away);
-        assert!(a.slot.tree.is_none() && a.slot.model.is_none() && !a.cancelable() && !a.slot.refreshing);
+        assert!(a.slot.tree.is_none() && a.slot.model.is_none() && !a.cancelable() && !a.slot.refreshing());
         assert!(away.has_tree());
         a.begin_scan(1);
         assert!(matches!(a.slot.scan, Scan::Running { view: 1, .. }) && a.cancelable());
         let mut other = Slot::default();
         a.switch_slot(&mut other); // the running scan goes away, then the first view comes back
         a.switch_slot(&mut away);
-        assert!(a.slot.tree.is_some() && a.slot.refreshing && a.cancelable());
+        assert!(a.slot.tree.is_some() && a.slot.refreshing() && a.cancelable());
         assert_eq!(a.slot.model.as_ref().and_then(|m| m.selected()), sel);
         assert!(matches!(other.scan, Scan::Running { view: 1, .. }) && !other.has_tree());
     }
@@ -1986,12 +1987,24 @@ mod tests {
     }
 
     #[test]
+    fn a_first_scan_replaces_a_rescan_and_a_cancel_ends_either() {
+        let mut a = scanned();
+        a.slot.scan = Scan::Refreshing;
+        a.begin_scan(1);
+        assert!(matches!(a.slot.scan, Scan::Running { view: 1, paused: false, .. }) && !a.slot.refreshing() && a.cancelable());
+        a.cancel_scan();
+        assert!(matches!(a.slot.scan, Scan::Cancelled) && !a.cancelable() && a.slot.tree.is_none());
+        a.cancel_scan();
+        assert!(matches!(a.slot.scan, Scan::Cancelled), "cancelling nothing changes nothing");
+    }
+
+    #[test]
     fn cancelling_a_background_rescan_keeps_the_tree() {
         let mut a = scanned();
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         assert!(a.cancelable());
         a.cancel_scan();
-        assert!(a.slot.tree.is_some() && !a.slot.refreshing && matches!(a.slot.scan, Scan::Idle));
+        assert!(a.slot.tree.is_some() && !a.slot.refreshing() && matches!(a.slot.scan, Scan::Idle));
     }
 
     #[test]
@@ -2287,7 +2300,7 @@ mod tests {
         assert_eq!(a.banner().unwrap(), "live updates stopped: the journal is off; the tree may be out of date");
         let b = a.layout.rescan_button();
         assert_eq!(a.handle(Input::Click(b.x + 2.0, b.y + 2.0)), Effect::Rescan(0));
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         assert_eq!(a.handle(Input::Click(b.x + 2.0, b.y + 2.0)), Effect::None);
         a.handle(Input::Resize(900.0, 700.0));
         assert!(a.layout.banner, "a resize keeps the banner");
@@ -2338,7 +2351,7 @@ mod tests {
         a.set_live(LiveStatus::On { last: None });
         assert_eq!(status_tail(&a), "done   |   live");
         a.live_changed("12:03:41".into());
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         assert_eq!(status_tail(&a), "done   |   live, last change 12:03:41   |   refreshing\u{2026}");
         a.set_live(LiveStatus::Stale("x".into()));
         a.live_changed("12:04:00".into());
@@ -2378,13 +2391,15 @@ Test GPU", status_str(&a, true))));
     }
 
     #[test]
-    fn finishing_a_scan_clears_every_scan_flag() {
+    fn finishing_a_rescan_leaves_nothing_running() {
         let mut a = scanned();
-        a.slot.refreshing = true;
-        a.slot.preview_paused = true;
+        a.slot.scan = Scan::Refreshing;
+        if let Scan::Running { paused, .. } = &mut a.slot.scan {
+            *paused = true;
+        }
         a.set_live(LiveStatus::On { last: None });
         a.finish_scan(kary_builder(10, 3).finish().unwrap(), "done".into());
-        assert!(matches!(a.slot.scan, Scan::Idle) && !a.slot.refreshing && !a.slot.preview_paused);
+        assert!(matches!(a.slot.scan, Scan::Idle));
         assert!(a.slot.live == LiveStatus::Off && a.slot.summary == "done");
     }
 
@@ -2393,10 +2408,12 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         a.begin_scan(0);
         a.slot.summary = "kept".into();
-        a.slot.preview_paused = true;
+        if let Scan::Running { paused, .. } = &mut a.slot.scan {
+            *paused = true;
+        }
         a.slot.tree = Some(kary_builder(10, 3).finish().unwrap());
         a.preview_installed();
-        assert!(matches!(a.slot.scan, Scan::Running { .. }) && a.slot.preview_paused && a.slot.summary == "kept");
+        assert!(matches!(a.slot.scan, Scan::Running { paused: true, .. }) && a.slot.summary == "kept");
         assert!(a.slot.model.as_ref().and_then(|m| m.selected()).is_some());
     }
 
@@ -2405,9 +2422,9 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         a.slot.tree = None;
         a.slot.model = None;
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         a.swap_tree(kary_builder(10, 3).finish().unwrap(), "again".into());
-        assert!(matches!(a.slot.scan, Scan::Idle) && !a.slot.refreshing && a.slot.summary == "again");
+        assert!(matches!(a.slot.scan, Scan::Idle) && !a.slot.refreshing() && a.slot.summary == "again");
         assert!(a.slot.model.is_some());
     }
 
@@ -2423,14 +2440,14 @@ Test GPU", status_str(&a, true))));
         m.select(kid);
         a.slot.scroll = 0;
         let path = a.slot.tree.as_ref().unwrap().path(kid);
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         a.swap_tree(kary_builder(300, 3).finish().unwrap(), "again".into());
         let (t, m) = (a.slot.tree.as_ref().unwrap(), a.slot.model.as_ref().unwrap());
         assert_eq!(t.path(m.selected().unwrap()), path);
         assert_eq!(a.sort(), (0, false));
         assert!(m.is_expanded(m.rows()[1].id));
         assert_eq!(a.slot.summary, "again");
-        assert!(!a.slot.refreshing);
+        assert!(!a.slot.refreshing());
     }
 
     #[test]
@@ -2725,7 +2742,7 @@ Test GPU", status_str(&a, true))));
         a.handle(Input::Click(5.0, a.layout.header().y + 5.0)); // any click clears the notice
         assert!(!status_str(&a, true).starts_with("cannot mark"));
         let (file, ..) = picks(&a);
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         assert_eq!(a.mark_state(file), MarkState::Refused("the drive is being scanned"));
     }
 
@@ -2733,22 +2750,22 @@ Test GPU", status_str(&a, true))));
     fn a_slot_swaps_whole_and_the_query_text_stays() {
         let mut a = scanned();
         a.slot.scroll = 7;
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         a.slot.summary = "mine".into();
         a.slot.filter.ui.text = "query".into();
         let mut other = Slot { summary: "theirs".into(), ..Slot::default() };
         a.swap_slot(&mut other);
         assert!(a.slot.tree.is_none() && a.slot.model.is_none(), "the other view has no tree");
-        assert_eq!((a.slot.refreshing, a.slot.summary.as_str()), (false, "theirs"));
+        assert_eq!((a.slot.refreshing(), a.slot.summary.as_str()), (false, "theirs"));
         assert_eq!(a.slot.filter.ui.text, "query", "the query text belongs to the window, not the view");
-        assert_eq!((other.scroll, other.refreshing, other.summary.as_str()), (7, true, "mine"));
+        assert_eq!((other.scroll, other.refreshing(), other.summary.as_str()), (7, true, "mine"));
         assert!(other.filter.ui.text.is_empty());
         a.swap_slot(&mut other);
         assert!(a.slot.tree.is_some() && a.slot.model.is_some());
-        assert_eq!((a.slot.refreshing, a.slot.summary.as_str()), (true, "mine"));
+        assert_eq!((a.slot.refreshing(), a.slot.summary.as_str()), (true, "mine"));
         assert_eq!(a.slot.filter.ui.text, "query");
         // Naming every field means a new one fails to compile until this test covers it.
-        let Slot { tree: _, model: _, scroll: _, scan: _, summary: _, live: _, refreshing: _, preview_paused: _, filter: _, basket: _, flash: _, proc_info: _, proc_metric: _ } = &a.slot;
+        let Slot { tree: _, model: _, scroll: _, scan: _, summary: _, live: _, filter: _, basket: _, flash: _, proc_info: _, proc_metric: _ } = &a.slot;
     }
 
     #[test]
@@ -2829,9 +2846,9 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         let (file, ..) = picks(&a);
         a.toggle_mark(file);
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         assert!(a.commit_request().is_none());
-        a.slot.refreshing = false;
+        a.slot.scan = Scan::Idle;
         assert!(a.commit_request().is_some());
         a.set_deleting(true);
         assert!(a.commit_request().is_none(), "one delete at a time");
@@ -3053,7 +3070,7 @@ Test GPU", status_str(&a, true))));
         assert!(a.deleting());
         assert!(!a.begin_delete(), "one at a time");
         a.set_deleting(false);
-        a.slot.refreshing = true;
+        a.slot.scan = Scan::Refreshing;
         assert!(!a.begin_delete());
         assert!(status_str(&a, true).starts_with("cannot delete: the drive is being scanned"));    }
 }
