@@ -1,6 +1,6 @@
 //! The Win32 window: message loop, swapchain, input translation, scan thread, context menu.
 //! All state lives on the UI thread in `STATE`; the scan and journal threads only report through channels.
-use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, RowMenu, Slot, TipKey, ViewKind};
+use crate::app::{App, ViewInfo, Effect, Input, LiveStatus, MarkState, Mods, RowMenu, Slot, TipKey, ViewKind};
 use crate::modal::{process_failure, Modal};
 use crate::outcome::Failure;
 use crate::trash;
@@ -1110,8 +1110,8 @@ fn ime_string(hwnd: HWND, which: IME_COMPOSITION_STRING, flags: IME_COMPOSITION_
 }
 
 /// The app input a key press stands for. Ctrl+C is handled by the caller.
-fn key_input(vk: u16, ctrl: bool, hwnd: HWND) -> Option<Input> {
-    if ctrl {
+fn key_input(vk: u16, mods: Mods, hwnd: HWND) -> Option<Input> {
+    if mods.ctrl {
         match vk {
             v if v == b'F' as u16 => return Some(Input::Find),
             v if v == b'M' as u16 => return Some(Input::ToggleMap),
@@ -1126,8 +1126,14 @@ fn key_input(vk: u16, ctrl: bool, hwnd: HWND) -> Option<Input> {
         x if x == VK_RETURN.0 => Input::Enter,
         x if x == VK_ESCAPE.0 => Input::Escape,
         x if x == VK_TAB.0 => Input::Tab,
-        x => Input::Key(key_of(x)?),
+        x => Input::Key(key_of(x)?, mods),
     })
+}
+
+/// The Shift and Ctrl keys as they are now.
+fn mods_now() -> Mods {
+    let down = |vk: i32| unsafe { GetKeyState(vk) } < 0;
+    Mods { shift: down(VK_SHIFT.0 as i32), ctrl: down(VK_CONTROL.0 as i32) }
 }
 
 fn key_of(vk: u16) -> Option<Key> {
@@ -1252,7 +1258,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_LBUTTONDOWN => {
             unsafe { SetCapture(hwnd) };
-            dispatch(hwnd, lp, Input::Click);
+            let mods = mods_now();
+            dispatch(hwnd, lp, |x, y| Input::Click(x, y, mods));
             with(|w| w.filter_press(lp, false));
             LRESULT(0)
         }
@@ -1428,7 +1435,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 send(hwnd, Input::Edit(Edit::Move { to, extend: true }));
             } else if wp.0 == VK_DELETE.0 as usize && lp.0 & (1 << 30) != 0 && !in_box {
                 // Holding Del must not flip the mark on every repeat.
-            } else if let Some(input) = key_input(wp.0 as u16, ctrl, hwnd) {
+            } else if let Some(input) = key_input(wp.0 as u16, Mods { shift, ctrl }, hwnd) {
                 send(hwnd, input);
             }
             LRESULT(0)

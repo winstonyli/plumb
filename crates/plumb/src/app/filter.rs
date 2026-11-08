@@ -410,7 +410,7 @@ mod tests {
         run(&mut a);
         let shown = names(&a);
         let r = a.layout.filter_regex();
-        assert_eq!(a.handle(Input::Click(r.x + 2.0, r.y + 2.0)), Effect::Filter); // regex on, "txt" still valid
+        assert_eq!(a.handle(Input::Click(r.x + 2.0, r.y + 2.0, Default::default())), Effect::Filter); // regex on, "txt" still valid
         a.handle(Input::Edit(Edit::Char('('))); // "txt(" is not
         assert!(a.start_filter().is_none());
         assert_eq!(a.filter_count(), "invalid pattern");
@@ -431,7 +431,7 @@ mod tests {
         assert!(names(&a).is_empty(), "with no match even the root is hidden");
         assert_eq!(a.slot.model.as_ref().unwrap().selected(), None);
         let r = a.layout.filter_regex();
-        assert_eq!(a.handle(Input::Click(r.x + 2.0, r.y + 2.0)), Effect::Filter);
+        assert_eq!(a.handle(Input::Click(r.x + 2.0, r.y + 2.0, Default::default())), Effect::Filter);
         run(&mut a);
         assert_eq!(a.filter_count(), "2 matches"); // t, any character, t: "txt" in both names
     }
@@ -440,11 +440,11 @@ mod tests {
     fn the_clear_button_empties_the_box() {
         let mut a = app();
         let c = a.layout.filter_clear();
-        assert_eq!(a.handle(Input::Click(c.x + 2.0, c.y + 2.0)), Effect::None);
+        assert_eq!(a.handle(Input::Click(c.x + 2.0, c.y + 2.0, Default::default())), Effect::None);
         assert!(a.filter_ui().focus);
         type_text(&mut a, "txt");
         run(&mut a);
-        assert_eq!(a.handle(Input::Click(c.x + 2.0, c.y + 2.0)), Effect::None);
+        assert_eq!(a.handle(Input::Click(c.x + 2.0, c.y + 2.0, Default::default())), Effect::None);
         assert_eq!((a.filter_ui().text.as_str(), a.filter_installed()), ("", false));
         assert_eq!(names(&a).len(), 4);
     }
@@ -523,16 +523,16 @@ mod tests {
         a.handle(Input::Edit(Edit::Char('z'))); // not focused: ignored
         assert_eq!(a.filter_ui().text, "");
         let b = a.layout.filter_box();
-        a.handle(Input::Click(b.x + 10.0, b.y + 5.0));
+        a.handle(Input::Click(b.x + 10.0, b.y + 5.0, Default::default()));
         assert!(a.filter_ui().focus);
         a.handle(Input::Edit(Edit::Char('a')));
         a.handle(Input::Edit(Edit::Char('b')));
-        a.handle(Input::Key(Key::Left));
+        a.handle(Input::Key(Key::Left, Default::default()));
         assert_eq!(a.filter_ui().caret, 1);
         assert_eq!(a.slot.model.as_ref().unwrap().selected(), root, "Left edited the box, not the tree");
-        a.handle(Input::Key(Key::Down));
+        a.handle(Input::Key(Key::Down, Default::default()));
         assert_ne!(a.slot.model.as_ref().unwrap().selected(), root, "Down still moves the tree selection");
-        a.handle(Input::Click(20.0, row_y(1)));
+        a.handle(Input::Click(20.0, row_y(1), Default::default()));
         assert!(!a.filter_ui().focus);
         a.handle(Input::Edit(Edit::Char('z')));
         assert_eq!(a.filter_ui().text, "ab");
@@ -546,7 +546,7 @@ mod tests {
         let b = a.layout.filter_box();
         assert!(a.over_filter_box(b.x + 20.0, b.y + 5.0) && !a.over_filter_box(b.x - 20.0, b.y + 5.0));
         assert!(a.filter_origin() > b.x && a.filter_origin() < b.x + b.w);
-        a.handle(Input::Click(b.x + 20.0, b.y + 5.0));
+        a.handle(Input::Click(b.x + 20.0, b.y + 5.0, Default::default()));
         assert!(a.filter_ui().focus);
         a.handle(Input::Edit(Edit::Place { at: 2, extend: false }));
         a.handle(Input::Edit(Edit::Place { at: 6, extend: true }));
@@ -568,7 +568,7 @@ mod tests {
         assert!(a.filter_ui().focus && a.filter_ui().selection() == Some((0, 2)));
         a.handle(Input::Edit(Edit::Char('q')));
         assert_eq!(a.filter_ui().text, "q");
-        a.handle(Input::Key(Key::Down)); // move the selection off the first row
+        a.handle(Input::Key(Key::Down, Default::default())); // move the selection off the first row
         a.handle(Input::Enter);
         assert!(!a.filter_ui().focus);
         let m = a.slot.model.as_ref().unwrap();
@@ -583,7 +583,7 @@ mod tests {
         let mut a = app();
         type_text(&mut a, "txt");
         run(&mut a);
-        a.handle(Input::Click(5.0, PICKER_H + 2.0)); // sort by Name ascending
+        a.handle(Input::Click(5.0, PICKER_H + 2.0, Default::default())); // sort by Name ascending
         assert_eq!(names(&a), ["C:", "docs", "notes.txt", "src", "deep", "more.txt"]);
     }
 }

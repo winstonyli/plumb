@@ -319,7 +319,7 @@ pub fn selftest_watch() -> Result<String> {
 fn press(hwnd: HWND, pick: crate::modal::Pick) -> Result<()> {
     pump_until("a modal with that button", 15, &|w| w.app.modal_button(pick).is_some())?;
     if let Some(Some(r)) = with(|w| w.app.modal_button(pick)) {
-        send(hwnd, crate::app::Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0));
+        send(hwnd, crate::app::Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0, Default::default()));
     }
     Ok(())
 }

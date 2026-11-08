@@ -219,13 +219,21 @@ pub enum LiveStatus {
     Stale(String),
 }
 
+/// The modifier keys held when a click or a key arrived, read by the window at that moment: a flag kept in `App` would
+/// have to survive key-up, focus loss and Alt-Tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mods {
+    pub shift: bool,
+    pub ctrl: bool,
+}
+
 pub enum Input {
-    Click(f32, f32),
+    Click(f32, f32, Mods),
     DoubleClick(f32, f32),
     RightClick(f32, f32),
     /// Rows to scroll (positive is down) with the pointer at this x and y: over the Files held pane it scrolls that.
     Wheel(i32, f32, f32),
-    Key(Key),
+    Key(Key, Mods),
     /// Mouse moved with the left button held, at this x and y.
     Drag(f32, f32),
     Release,
@@ -958,7 +966,7 @@ impl App {
                 self.hot = g.button_at(x, y).map(|i| g.buttons[i]);
                 Effect::None
             }
-            Input::Click(x, y) | Input::DoubleClick(x, y) => match pick_at(m, x, y) {
+            Input::Click(x, y, _) | Input::DoubleClick(x, y) => match pick_at(m, x, y) {
                 Some(p) => self.answer(p),
                 // The scrim cancels, except while a delete runs: a stray click must not decide to close the window.
                 None if !g.panel.contains(x, y) && m.ask != Ask::Close => {
@@ -979,11 +987,11 @@ impl App {
                 m.step(true);
                 Effect::None
             }
-            Input::Key(Key::Left | Key::Up) => {
+            Input::Key(Key::Left | Key::Up, _) => {
                 m.step(false);
                 Effect::None
             }
-            Input::Key(Key::Right | Key::Down) => {
+            Input::Key(Key::Right | Key::Down, _) => {
                 m.step(true);
                 Effect::None
             }
@@ -1016,7 +1024,7 @@ impl App {
         self.layout.basket = self.basket_active();
         self.layout.metric = self.kind() == ViewKind::Processes;
         self.layout.held = self.kind() == ViewKind::Processes;
-        if self.modal().is_none() && matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(_) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
+        if self.modal().is_none() && matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(..) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find) {
             self.outcome = Outcome::default();
         }
         if self.modal().is_some() && !matches!(input, Input::Resize(..) | Input::Release) {
@@ -1029,7 +1037,7 @@ impl App {
             }
             Input::Wheel(rows, x, y) if self.layout.held && self.layout.held_pane().contains(x, y) => self.held_scroll(rows),
             Input::Wheel(rows, ..) => self.set_scroll((self.slot.scroll as i64 + rows as i64).max(0) as usize),
-            Input::Key(k) => {
+            Input::Key(k, _) => {
                 if self.slot.filter.ui.focus
                     && let Some(e) = filter::edit_for_key(k)
                 {
@@ -1067,7 +1075,7 @@ impl App {
                 self.map_hover = if matches!(self.layout.hit(x, y, self.views.len()), Hit::Map) { treemap::hit(&self.map_tiles, x, y) } else { None };
             }
             Input::ToggleMap => self.layout.map_on = !self.layout.map_on,
-            Input::Click(x, y) => return self.click(x, y),
+            Input::Click(x, y, _) => return self.click(x, y),
             // Windows sends the second press of a quick pair as a double-click instead of a click, so
             // anywhere but a row it must act as a click, or the second press of a header, button or
             // scrollbar would be lost.
@@ -1492,7 +1500,7 @@ mod tests {
         a.layout.map_on = true;
         let click = |a: &mut App| {
             let b = a.layout.with_metric(true).metric_button();
-            a.handle(Input::Click(b.x + 5.0, b.y + 5.0))
+            a.handle(Input::Click(b.x + 5.0, b.y + 5.0, Default::default()))
         };
         assert_eq!(a.slot.proc_metric, Metric::Memory);
         assert_eq!(click(&mut a), Effect::Metric(Metric::Private));
@@ -1900,7 +1908,7 @@ mod tests {
         let labels: Vec<usize> = a.chips().iter().map(|c| c.label.chars().count()).collect();
         assert_eq!(w, vec![(labels[0] as f32 * 7.0 + 16.0).ceil(), (labels[1] as f32 * 7.0 + 16.0).ceil()]);
         assert!(w[1] > w[0], "a longer label gets a wider chip");
-        assert_eq!(a.handle(Input::Click(a.layout.chip(1).x + 2.0, 10.0)), Effect::Scan(1), "the wide chip is clickable along its width");
+        assert_eq!(a.handle(Input::Click(a.layout.chip(1).x + 2.0, 10.0, Default::default())), Effect::Scan(1), "the wide chip is clickable along its width");
     }
 
     #[test]
@@ -1927,10 +1935,10 @@ mod tests {
     #[test]
     fn clicking_a_chip_requests_a_scan_and_another_drive_replaces_one_in_flight() {
         let mut a = app();
-        assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0)), Effect::Scan(1));
+        assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0, Default::default())), Effect::Scan(1));
         a.begin_scan(1);
-        assert_eq!(a.handle(Input::Click(10.0, 10.0)), Effect::Scan(0), "another view replaces the scan");
-        assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0)), Effect::None, "the same view is left alone");
+        assert_eq!(a.handle(Input::Click(10.0, 10.0, Default::default())), Effect::Scan(0), "another view replaces the scan");
+        assert_eq!(a.handle(Input::Click(10.0 + CHIP_W + CHIP_GAP, 10.0, Default::default())), Effect::None, "the same view is left alone");
     }
 
     #[test]
@@ -1939,7 +1947,7 @@ mod tests {
         assert_eq!(a.handle(Input::Escape), Effect::None);
         a.begin_scan(0);
         let b = a.layout.with_cancel(true).cancel_button();
-        assert_eq!(a.handle(Input::Click(b.x + 5.0, b.y + 5.0)), Effect::Cancel);
+        assert_eq!(a.handle(Input::Click(b.x + 5.0, b.y + 5.0, Default::default())), Effect::Cancel);
         assert_eq!(a.handle(Input::Escape), Effect::Cancel);
         // Esc that clears the filter does not cancel.
         a.slot.filter.ui.focus = true;
@@ -2012,9 +2020,9 @@ mod tests {
         let mut a = app();
         let b = a.layout.admin_button();
         let (x, y) = (b.x + 5.0, b.y + 5.0);
-        assert_eq!(a.handle(Input::Click(x, y)), Effect::None);
+        assert_eq!(a.handle(Input::Click(x, y, Default::default())), Effect::None);
         a.can_elevate = true;
-        assert_eq!(a.handle(Input::Click(x, y)), Effect::Elevate);
+        assert_eq!(a.handle(Input::Click(x, y, Default::default())), Effect::Elevate);
     }
 
     #[test]
@@ -2089,7 +2097,7 @@ mod tests {
     fn click_selects_and_double_click_toggles() {
         let mut a = scanned();
         let before = a.slot.model.as_ref().unwrap().rows().len();
-        a.handle(Input::Click(20.0, row_y(1)));
+        a.handle(Input::Click(20.0, row_y(1), Default::default()));
         let id = a.slot.model.as_ref().unwrap().rows()[1].id;
         assert_eq!(a.slot.model.as_ref().unwrap().selected(), Some(id));
         a.handle(Input::DoubleClick(20.0, row_y(1)));
@@ -2104,12 +2112,12 @@ mod tests {
         let before = a.slot.model.as_ref().unwrap().rows().len();
         let depth = a.slot.model.as_ref().unwrap().rows()[1].depth as f32;
         let icon_x = a.layout.column(0).0 + 8.0 + depth * INDENT + 4.0;
-        a.handle(Input::Click(icon_x, row_y(1)));
+        a.handle(Input::Click(icon_x, row_y(1), Default::default()));
         let opened = a.slot.model.as_ref().unwrap().rows().len();
         assert!(opened > before, "one click on the icon opens the folder");
         a.handle(Input::DoubleClick(icon_x, row_y(1)));
         assert_eq!(a.slot.model.as_ref().unwrap().rows().len(), before, "the second press of a pair toggles again");
-        a.handle(Input::Click(icon_x + 200.0, row_y(1)));
+        a.handle(Input::Click(icon_x + 200.0, row_y(1), Default::default()));
         assert_eq!(a.slot.model.as_ref().unwrap().rows().len(), before, "a click on the name only selects");
     }
 
@@ -2120,7 +2128,7 @@ mod tests {
         let x = a.layout.column(1).0;
         let w = a.layout.column(1).1;
         assert!(a.over_divider(x, y));
-        a.handle(Input::Click(x, y));
+        a.handle(Input::Click(x, y, Default::default()));
         a.handle(Input::Drag(x - 30.0, y));
         assert_eq!(a.layout.column(1).1, w + 30.0);
         assert!(a.over_divider(0.0, 0.0), "while dragging the cursor stays a resize cursor");
@@ -2185,12 +2193,12 @@ mod tests {
         let chip = a.layout.chip(0);
         let (x, y) = (chip.x + 5.0, chip.y + 5.0);
         a.handle(Input::Hover(x, y));
-        a.handle(Input::Click(x, y));
+        a.handle(Input::Click(x, y, Default::default()));
         assert!(a.pressed);
         a.handle(Input::Release);
         assert!(!a.pressed);
         a.handle(Input::Hover(5.0, a.layout.rows_area().y + 5.0));
-        a.handle(Input::Click(5.0, a.layout.rows_area().y + 5.0));
+        a.handle(Input::Click(5.0, a.layout.rows_area().y + 5.0, Default::default()));
         assert!(!a.pressed, "nothing under the pointer to press");
     }
 
@@ -2214,7 +2222,7 @@ mod tests {
         let h = a.layout.column(1).0 + 20.0;
         let y = a.layout.header().y + 4.0;
         let first = a.sort;
-        a.handle(Input::Click(h, y));
+        a.handle(Input::Click(h, y, Default::default()));
         let once = a.sort;
         a.handle(Input::DoubleClick(h, y));
         assert_ne!(first, once);
@@ -2245,9 +2253,9 @@ mod tests {
         assert_eq!(a.slot.scroll, n - vis);
         a.handle(Input::Wheel(-10_000, 5.0, 100.0));
         assert_eq!(a.slot.scroll, 0);
-        a.handle(Input::Key(Key::End));
+        a.handle(Input::Key(Key::End, Default::default()));
         assert_eq!(a.slot.scroll, n - vis);
-        a.handle(Input::Key(Key::Home));
+        a.handle(Input::Key(Key::Home, Default::default()));
         assert_eq!(a.slot.scroll, 0);
     }
 
@@ -2257,10 +2265,10 @@ mod tests {
         let name = |a: &App, i: usize| a.slot.tree.as_ref().unwrap().name_string(a.slot.model.as_ref().unwrap().rows()[i].id);
         let hy = PICKER_H + 2.0;
         assert_eq!(a.sort(), (1, true)); // default: Size descending
-        a.handle(Input::Click(5.0, hy));
+        a.handle(Input::Click(5.0, hy, Default::default()));
         assert_eq!(a.sort(), (0, false)); // Name ascending
         let first = name(&a, 1);
-        a.handle(Input::Click(5.0, hy));
+        a.handle(Input::Click(5.0, hy, Default::default()));
         assert_eq!(a.sort(), (0, true)); // Name descending
         assert_ne!(name(&a, 1), first);
     }
@@ -2278,7 +2286,7 @@ mod tests {
         let th = a.layout.thumb(total, 0).unwrap();
         a.handle(Input::Hover(795.0, th.y + 2.0));
         assert_eq!(a.with_scene(false, |s| (s.hot, s.pressed)), (Some(th), false), "the thumb lights up under the pointer");
-        a.handle(Input::Click(795.0, th.y + 2.0));
+        a.handle(Input::Click(795.0, th.y + 2.0, Default::default()));
         assert!(a.with_scene(false, |s| s.pressed), "and is pressed while dragged");
         a.handle(Input::Drag(795.0, th.y + 2.0 + 100.0));
         assert!(a.slot.scroll > 0);
@@ -2299,9 +2307,9 @@ mod tests {
         assert!(a.layout.banner && a.layout.rows_visible() < rows);
         assert_eq!(a.banner().unwrap(), "live updates stopped: the journal is off; the tree may be out of date");
         let b = a.layout.rescan_button();
-        assert_eq!(a.handle(Input::Click(b.x + 2.0, b.y + 2.0)), Effect::Rescan(0));
+        assert_eq!(a.handle(Input::Click(b.x + 2.0, b.y + 2.0, Default::default())), Effect::Rescan(0));
         a.slot.scan = Scan::Refreshing;
-        assert_eq!(a.handle(Input::Click(b.x + 2.0, b.y + 2.0)), Effect::None);
+        assert_eq!(a.handle(Input::Click(b.x + 2.0, b.y + 2.0, Default::default())), Effect::None);
         a.handle(Input::Resize(900.0, 700.0));
         assert!(a.layout.banner, "a resize keeps the banner");
         a.set_live(LiveStatus::Off);
@@ -2431,7 +2439,7 @@ Test GPU", status_str(&a, true))));
     #[test]
     fn a_rescanned_tree_keeps_sort_expansion_selection_and_screen_row() {
         let mut a = scanned();
-        a.handle(Input::Click(5.0, PICKER_H + 2.0)); // sort by Name ascending
+        a.handle(Input::Click(5.0, PICKER_H + 2.0, Default::default())); // sort by Name ascending
         let t = a.slot.tree.as_ref().unwrap();
         let m = a.slot.model.as_mut().unwrap();
         let first = m.rows()[1].id;
@@ -2505,14 +2513,14 @@ Test GPU", status_str(&a, true))));
     fn the_map_follows_the_trees_selection_and_ignores_its_own_clicks() {
         let mut a = with_map();
         assert_eq!(a.map_root, Some(NodeId(0)));
-        a.handle(Input::Click(20.0, row_y(1)));
+        a.handle(Input::Click(20.0, row_y(1), Default::default()));
         a.update_map(1.0); // the hook that notices the selection moved
         let sel = a.slot.model.as_ref().unwrap().selected();
         assert_eq!(a.map_root, treemap::root_for(a.slot.tree.as_ref().unwrap(), sel), "a click in the tree re-roots the map");
         let (i, t) = a.map_tiles().iter().copied().enumerate().find(|(_, t)| t.kind == Kind::File).unwrap();
         let before = a.map_root;
         let (x, y) = centre(&t);
-        a.handle(Input::Click(x, y));
+        a.handle(Input::Click(x, y, Default::default()));
         a.update_map(1.0);
         assert_eq!(a.slot.model.as_ref().unwrap().selected(), Some(t.node));
         assert_eq!(a.map_root, before, "a click on the map keeps the root");
@@ -2525,7 +2533,7 @@ Test GPU", status_str(&a, true))));
         let mut a = with_map();
         let t = a.map_tiles().iter().copied().find(|t| t.kind == Kind::Frame).unwrap();
         let (x, y) = (t.rect.x + 0.5, t.rect.y + 0.5); // the frame's border, clear of its children
-        a.handle(Input::Click(x, y));
+        a.handle(Input::Click(x, y, Default::default()));
         a.handle(Input::DoubleClick(x, y));
         assert_eq!(a.map_root, Some(t.node));
         assert_eq!(a.slot.model.as_ref().unwrap().selected(), Some(t.node));
@@ -2640,13 +2648,13 @@ Test GPU", status_str(&a, true))));
         a.handle(Input::ToggleMap);
         assert!(a.layout.map_on);
         let b = a.layout.map_button();
-        a.handle(Input::Click(b.x + 2.0, b.y + 2.0));
+        a.handle(Input::Click(b.x + 2.0, b.y + 2.0, Default::default()));
         assert!(!a.layout.map_on, "the status bar button toggles too");
         a.layout.map_on = true;
         a.layout.set_map_w(170.0); // at 800 DIPs the pane can reach 247: room to grow by 50
         let (d, w0) = (a.layout.map_divider().unwrap(), a.layout.map_w);
         assert!(a.over_divider(d.x + 1.0, d.y + 5.0));
-        a.handle(Input::Click(d.x + 1.0, d.y + 5.0));
+        a.handle(Input::Click(d.x + 1.0, d.y + 5.0, Default::default()));
         a.handle(Input::Drag(d.x - 49.0, d.y + 5.0));
         assert_eq!(a.layout.map_w, w0 + 50.0, "dragging left widens the pane");
         a.handle(Input::Drag(-10_000.0, 0.0));
@@ -2739,7 +2747,7 @@ Test GPU", status_str(&a, true))));
         a.toggle_mark(root);
         assert!(a.basket().is_empty());
         assert!(status_str(&a, true).starts_with("cannot mark: it is a drive root"), "{}", status_str(&a, true));
-        a.handle(Input::Click(5.0, a.layout.header().y + 5.0)); // any click clears the notice
+        a.handle(Input::Click(5.0, a.layout.header().y + 5.0, Default::default())); // any click clears the notice
         assert!(!status_str(&a, true).starts_with("cannot mark"));
         let (file, ..) = picks(&a);
         a.slot.scan = Scan::Refreshing;
@@ -2874,10 +2882,10 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         let (file, ..) = picks(&a);
         let chip = a.layout.with_basket(true).basket_chip();
-        assert!(matches!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0)), Effect::None), "nothing marked: no chip, no effect");
+        assert!(matches!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0, Default::default())), Effect::None), "nothing marked: no chip, no effect");
         a.toggle_mark(file);
         a.update_map(1.0);
-        assert_eq!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0)), Effect::None);
+        assert_eq!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0, Default::default())), Effect::None);
         assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Delete(_))), "the chip asks how to delete");
     }
 
@@ -2899,11 +2907,11 @@ Test GPU", status_str(&a, true))));
         let mut a = scanned();
         a.ask(Modal::holders("f.txt", &[plumb_scan::holders::Holder { pid: 7, name: "x.exe".into() }]));
         let r = a.modal_button(Pick::Copy).expect("a Copy button");
-        let e = a.handle(Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0));
+        let e = a.handle(Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0, Default::default()));
         assert_eq!(e, Effect::Copy("f.txt\nx.exe  (PID 7)".into()));
         assert!(a.modal().is_some_and(|m| m.buttons[0].label == "Copied"), "the button says so");
         let r = a.modal_button(Pick::Close).unwrap();
-        assert_eq!(a.handle(Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0)), Effect::None);
+        assert_eq!(a.handle(Input::Click(r.x + r.w / 2.0, r.y + r.h / 2.0, Default::default())), Effect::None);
         assert!(a.modal().is_none());
     }
 
@@ -2912,7 +2920,7 @@ Test GPU", status_str(&a, true))));
         let (mut a, centre) = asking();
         a.report(Outcome::problem("could not delete C:\\f: in use; still marked"));
         let (x, y) = centre(&a, Pick::Cancel);
-        a.handle(Input::Click(x, y));
+        a.handle(Input::Click(x, y, Default::default()));
         assert!(a.modal().is_none() && a.outcome.line.starts_with("could not delete"), "{:?}", a.outcome.line);
     }
 
@@ -2921,21 +2929,21 @@ Test GPU", status_str(&a, true))));
         let (mut a, centre) = asking();
         let (scroll, marks) = (a.slot.scroll, a.slot.basket.len());
         // Everything but its own buttons is swallowed, including the keys that would unmark or scroll the list.
-        for i in [Input::Wheel(3, 5.0, 100.0), Input::Edit(Edit::Delete), Input::Key(Key::Down), Input::Find] {
+        for i in [Input::Wheel(3, 5.0, 100.0), Input::Edit(Edit::Delete), Input::Key(Key::Down, Default::default()), Input::Find] {
             assert_eq!(a.handle(i), Effect::None);
         }
         assert!(a.modal().is_some() && a.slot.scroll == scroll && a.slot.basket.len() == marks);
         // A click on the scrim cancels (the marks stay); one inside the panel, off its buttons, does nothing.
         let p = a.modal().map(|m| m.geometry(a.layout.w, a.layout.h).panel).unwrap();
-        a.handle(Input::Click(p.x + 2.0, p.y + 2.0));
+        a.handle(Input::Click(p.x + 2.0, p.y + 2.0, Default::default()));
         assert!(a.modal().is_some());
-        assert_eq!(a.handle(Input::Click(5.0, 5.0)), Effect::None);
+        assert_eq!(a.handle(Input::Click(5.0, 5.0, Default::default())), Effect::None);
         assert!(a.modal().is_none() && a.slot.basket.len() == marks);
         a.ask_delete();
         // ... but not the "Close anyway?" question.
         a.handle(Input::Escape);
         a.ask_close();
-        a.handle(Input::Click(5.0, 5.0));
+        a.handle(Input::Click(5.0, 5.0, Default::default()));
         assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Close)));
         a.handle(Input::Escape);
         a.ask_delete();
@@ -2956,13 +2964,13 @@ Test GPU", status_str(&a, true))));
         // A click on a button answers it: permanently, then Yes.
         a.ask_delete();
         let at = centre(&a, Pick::Permanent);
-        a.handle(Input::Click(at.0, at.1));
+        a.handle(Input::Click(at.0, at.1, Default::default()));
         let at = centre(&a, Pick::Yes);
-        assert!(matches!(a.handle(Input::Click(at.0, at.1)), Effect::Delete { permanent: true, .. }));
+        assert!(matches!(a.handle(Input::Click(at.0, at.1, Default::default())), Effect::Delete { permanent: true, .. }));
         // Unmark all clears the basket.
         a.ask_delete();
         let at = centre(&a, Pick::Unmark);
-        a.handle(Input::Click(at.0, at.1));
+        a.handle(Input::Click(at.0, at.1, Default::default()));
         assert!(a.slot.basket.is_empty() && a.modal().is_none());
     }
 
@@ -2986,7 +2994,7 @@ Test GPU", status_str(&a, true))));
         assert!(matches!(a.modal().map(|m| &m.ask), Some(Ask::Close)));
         assert_eq!(a.handle(Input::Escape), Effect::None, "Esc keeps the window open");
         a.ask_close();
-        a.handle(Input::Key(Key::Left));
+        a.handle(Input::Key(Key::Left, Default::default()));
         assert_eq!(a.handle(Input::Enter), Effect::Quit);
     }
 
