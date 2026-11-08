@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Multi-select and keyboard parity (v0.12 candidate)

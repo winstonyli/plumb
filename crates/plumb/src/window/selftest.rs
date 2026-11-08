@@ -83,6 +83,28 @@ pub fn selftest() -> Result<String> {
     if done != Some(true) {
         return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a scan that finished while parked came back without a finished tree"));
     }
+    // Selecting several rows, through the real window state: open every folder, then Shift+Down twice from the first row.
+    let picked = with(|w| {
+        {
+            let (Some(t), Some(m)) = (w.app.slot.tree.as_ref(), w.app.slot.model.as_mut()) else { return None };
+            for _ in 0..2 {
+                let open = m.rows().iter().map(|r| r.id).find(|&id| m.is_expandable(t, id) && !m.is_expanded(id));
+                if let Some(id) = open {
+                    m.expand(t, id);
+                }
+            }
+            let first = m.rows().first()?.id;
+            m.select(first);
+        }
+        let shift = Mods { shift: true, ctrl: false };
+        w.app.handle(Input::Key(Key::Down, shift));
+        w.app.handle(Input::Key(Key::Down, shift));
+        w.app.slot.model.as_ref().map(|m| m.picked_count())
+    })
+    .flatten();
+    if picked != Some(3) {
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, format!("Shift+Down twice from the first row should pick 3 rows, got {picked:?}")));
+    }
     // The filter, end to end: type into the box, let the worker scan, check the rows.
     with(|w| {
         w.app.handle(Input::Find);
@@ -103,7 +125,7 @@ pub fn selftest() -> Result<String> {
         w.resize();
         let sub = w.app.slot.tree.as_ref().map(|t| t.subtree_size[NodeId(0)]);
         w.try_render().map(|_| {
-            format!("{}; {}; root {:?} bytes; filter ok: {} rows", w.gfx.adapter, w.app.slot.summary, sub, filtered.unwrap_or(0))
+            format!("{}; {}; root {:?} bytes; filter ok: {} rows; shift-extend ok",w.gfx.adapter, w.app.slot.summary, sub, filtered.unwrap_or(0))
         })
     });
     let _ = std::fs::remove_dir_all(&dir);
