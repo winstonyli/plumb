@@ -170,6 +170,8 @@ fn the_count_matches_the_picked_rows_after_any_mix_of_operations() {
         let rows = m.rows().to_vec();
         let pick = |r: u64| rows[r as usize % rows.len()].id;
         match rnd(7) {
+            0 if rnd(3) == 0 => m.select(NodeId(rnd(t.len() as u64) as u32)),
+            1 if rnd(3) == 0 => m.toggle_pick(NodeId(rnd(t.len() as u64) as u32)),
             0 => m.select(pick(rnd(1000))),
             1 => m.toggle_pick(pick(rnd(1000))),
             2 => m.extend_to(pick(rnd(1000))),
@@ -182,4 +184,15 @@ fn the_count_matches_the_picked_rows_after_any_mix_of_operations() {
         assert_eq!(m.targets(), want);
         assert_eq!(m.picked_count(), want.len(), "a pick without a row, or a miscounted one");
     }
+}
+
+#[test]
+fn select_and_toggle_on_a_row_less_node_move_the_focus_but_pick_nothing() {
+    let (_, mut m) = open(); // 2 (f1) is under the collapsed `big`: no row
+    m.select(NodeId(4));
+    m.select(NodeId(2));
+    assert_eq!((m.picked_count(), m.targets(), m.selected()), (0, vec![], Some(NodeId(2))));
+    m.select(NodeId(4));
+    m.toggle_pick(NodeId(2));
+    assert_eq!((m.picked_count(), m.targets(), m.selected()), (1, n(&[4]), Some(NodeId(2))));
 }

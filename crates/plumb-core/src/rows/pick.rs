@@ -15,7 +15,7 @@ impl RowModel {
     /// Picks only `id` and makes it the focus and the anchor.
     pub fn select(&mut self, id: NodeId) {
         self.clear_picks();
-        self.set_pick(id, true);
+        self.set_pick(id, self.row_index(id).is_some());
         self.selected = Some(id);
         self.anchor = Some(id);
     }
@@ -40,7 +40,9 @@ impl RowModel {
 
     /// Flips `id`'s pick and makes it the focus and the anchor. Unpicking the last row leaves nothing picked.
     pub fn toggle_pick(&mut self, id: NodeId) {
-        self.set_pick(id, !self.is_picked(id));
+        if self.row_index(id).is_some() {
+            self.set_pick(id, !self.is_picked(id));
+        }
         self.selected = Some(id);
         self.anchor = Some(id);
     }
