@@ -64,7 +64,7 @@ use windows::Win32::UI::Input::Ime::{
     CFS_POINT, COMPOSITIONFORM, GCS_COMPSTR, GCS_RESULTSTR, IME_COMPOSITION_STRING,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_APPS, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F10,
+    GetAsyncKeyState, GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_APPS, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F10,
     VK_F5, VK_HOME, VK_LBUTTON, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
@@ -1484,7 +1484,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_TIMER if wp.0 == TIMER_DRAG => {
             // The button is down on a row: replay the pointer's position, so holding it past an edge keeps scrolling. A
             // button let go after the window lost the capture sends no WM_LBUTTONUP, so end the drag here.
-            if unsafe { GetKeyState(VK_LBUTTON.0 as i32) } < 0 {
+            // The asynchronous state: this thread's own input state never sees a release over another window.
+            if unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0 {
                 let mut p = POINT::default();
                 if unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(hwnd, &mut p).as_bool() } {
                     if let Some((x, y)) = with(|w| (p.x as f32 * 96.0 / w.dpi, p.y as f32 * 96.0 / w.dpi - w.inset)) {
