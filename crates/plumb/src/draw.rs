@@ -1096,11 +1096,14 @@ impl Pen<'_> {
         for (i, row) in v.model.visible_window(v.scroll, l.rows_visible()).iter().enumerate() {
             let r = l.row(i);
             let id = row.id;
-            if v.model.selected() == Some(id) {
-                self.fill(r, t.select);
+            let (fill, bar) = row_look(v.model, id, v.hover == Some(i));
+            match fill {
+                RowFill::Select => self.fill(r, t.select),
+                RowFill::Hover => self.fill(r, t.hover),
+                RowFill::None => {}
+            }
+            if bar {
                 self.fill(Rect { x: r.x, y: r.y, w: 3.0, h: r.h - 1.0 }, t.accent);
-            } else if v.hover == Some(i) {
-                self.fill(r, t.hover);
             }
             let marked = !v.basket.is_empty() && {
                 let mut path = self.painter.text.borrow_mut();
@@ -1178,9 +1181,46 @@ impl Pen<'_> {
     }
 }
 
+/// How a row shows the selection: picked rows take the select fill (else the hover tint, else none), and the accent bar marks the focus row
+/// (the cursor) whether or not it is picked.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RowFill {
+    Select,
+    Hover,
+    None,
+}
+
+fn row_look(model: &RowModel, id: plumb_core::NodeId, hover: bool) -> (RowFill, bool) {
+    let fill = if model.is_picked(id) {
+        RowFill::Select
+    } else if hover {
+        RowFill::Hover
+    } else {
+        RowFill::None
+    };
+    (fill, model.selected() == Some(id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picked_rows_take_the_select_fill_and_only_the_focus_has_the_bar() {
+        use plumb_core::{synth::flat_tree, NodeId};
+        let t = flat_tree(6);
+        let mut m = RowModel::new(&t);
+        m.expand(&t, NodeId(0));
+        let r: Vec<NodeId> = m.rows().iter().map(|r| r.id).collect();
+        m.select(r[1]);
+        m.extend_to(r[3]); // 1..=3 picked, focus 3
+        assert_eq!(row_look(&m, r[1], false), (RowFill::Select, false));
+        assert_eq!(row_look(&m, r[3], false), (RowFill::Select, true));
+        assert_eq!(row_look(&m, r[4], true), (RowFill::Hover, false));
+        assert_eq!(row_look(&m, r[4], false), (RowFill::None, false));
+        m.toggle_pick(r[3]); // focus stays on 3, which is no longer picked
+        assert_eq!(row_look(&m, r[3], false), (RowFill::None, true), "the cursor shows without a fill");
+    }
 
     #[test]
     fn any_system_accent_reads_as_text_on_a_control_in_both_themes() {

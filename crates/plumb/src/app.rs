@@ -1306,9 +1306,16 @@ impl App {
         self.write_selection(full, &mut s).then_some(s)
     }
 
-    /// Writes [`App::selection`]; false (writing nothing) when no row is selected.
+    /// Writes [`App::selection`]; false (writing nothing) when no row is picked. A set leads with how many rows are in it.
     fn write_selection(&self, full: bool, out: &mut String) -> bool {
-        let (Some(tree), Some(id)) = (self.slot.tree.as_ref(), self.slot.model.as_ref().and_then(|m| m.selected())) else { return false };
+        let (Some(tree), Some(m)) = (self.slot.tree.as_ref(), self.slot.model.as_ref()) else { return false };
+        let (Some(id), n) = (m.selected(), m.picked_count()) else { return false };
+        if n == 0 {
+            return false;
+        }
+        if n > 1 {
+            let _ = write!(out, "{n} selected   |   ");
+        }
         self.describe_sized(tree, id, tree.subtree_size[id]).write_line(full, out);
         true
     }
@@ -1942,6 +1949,22 @@ mod tests {
             ViewInfo { root: "D:\\".into(), total: 1000, free: 900, kind: ViewKind::Disk },
         ];
         App::new(Layout::new(800.0, 600.0), views, "test".into())
+    }
+
+    #[test]
+    fn the_status_line_counts_a_set_and_says_nothing_when_nothing_is_picked() {
+        let mut a = scanned();
+        {
+            let m = a.slot.model.as_mut().unwrap();
+            let r: Vec<NodeId> = m.rows().iter().map(|r| r.id).collect();
+            m.select(r[0]);
+            m.toggle_pick(r[0]);
+        }
+        assert_eq!(a.selection(true), None, "focus without a pick");
+        a.handle(Input::Edit(Edit::SelectAll));
+        let line = a.selection(true).unwrap();
+        let n = a.slot.model.as_ref().unwrap().picked_count();
+        assert!(n > 1 && line.starts_with(&format!("{n} selected   |   ")), "{line:?}");
     }
 
     fn scanned() -> App {
