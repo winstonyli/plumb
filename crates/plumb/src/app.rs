@@ -141,10 +141,13 @@ pub struct ProcInfo {
 
 /// What a row's context menu offers (`App::row_menu`).
 pub struct RowMenu {
-    /// The path in the tree's terms, to mark by.
+    /// The path in the tree's terms, to mark by; empty for a set (marking goes through `App::mark_selected`).
     pub raw: String,
-    /// The file system path, to reveal and copy; empty when unknown.
-    pub path: String,
+    /// The file system paths to reveal and copy, the ones that are known: one for a row, those of every picked row for a
+    /// set.
+    pub paths: Vec<String>,
+    /// How many rows the menu acts on: more than one only for a picked set.
+    pub count: usize,
     pub mark: MarkState,
     /// Whether to offer "Who is using this".
     pub who: bool,
@@ -859,11 +862,34 @@ impl App {
         self.slot.tree.as_ref().map(|t| attrs::of(t, id, (self.kind() == ViewKind::Processes).then_some(&self.slot.proc_info))).unwrap_or_default()
     }
 
-    /// Everything the context menu of `id` offers.
+    /// Everything the context menu of `id` offers: for a row inside a picked set of more than one, the set's menu.
     pub fn row_menu(&self, id: NodeId) -> Option<RowMenu> {
+        if let Some(m) = &self.slot.model
+            && m.is_picked(id)
+            && m.picked_count() > 1
+        {
+            return Some(self.set_menu());
+        }
         let (raw, path, mark, who) = self.menu_target(id)?;
         let (suspend_tree, resume_tree) = self.pause_trees(id);
-        Some(RowMenu { raw, path, mark, who, end: self.tree_targets(id), pause: self.pause_target(id), suspend_tree, resume_tree })
+        let paths = if path.is_empty() { Vec::new() } else { vec![path] };
+        Some(RowMenu { raw, paths, count: 1, mark, who, end: self.tree_targets(id), pause: self.pause_target(id), suspend_tree, resume_tree })
+    }
+
+    /// The menu of a picked set: copy the paths, and mark or unmark the topmost rows together. Open, Reveal, Who is using
+    /// this, Properties and the process commands stay single-row.
+    fn set_menu(&self) -> RowMenu {
+        let ids = self.slot.model.as_ref().map(|m| m.targets()).unwrap_or_default();
+        let paths = ids.iter().map(|&i| self.fs_path(i)).filter(|p| !p.is_empty()).collect();
+        let states: Vec<MarkState> = self.topmost().into_iter().map(|i| self.mark_state(i)).collect();
+        let mark = if states.iter().all(|s| *s == MarkState::Unmark) {
+            MarkState::Unmark
+        } else if states.iter().any(|s| *s == MarkState::Mark) {
+            MarkState::Mark
+        } else {
+            states.iter().find_map(|s| if let MarkState::Refused(why) = s { Some(MarkState::Refused(why)) } else { None }).unwrap_or(MarkState::Refused("nothing to mark"))
+        };
+        RowMenu { raw: String::new(), paths, count: ids.len(), mark, who: false, end: None, pause: None, suspend_tree: Vec::new(), resume_tree: Vec::new() }
     }
 
     /// The tree of `id` (`tree_targets`) as Suspend process tree and Resume process tree would act on it. Suspend acts on
@@ -1796,6 +1822,23 @@ mod tests {
         assert!(!who, "a process has no holders to ask about");
         assert_eq!((raw.as_str(), path.as_str()), ("", "C:\\Windows\\ping.exe"));
         assert_eq!(mark, MarkState::Refused("it is a process"));
+    }
+
+    #[test]
+    fn a_set_of_processes_has_nothing_to_copy_and_cannot_be_marked() {
+        let (mut a, id) = process_app();
+        let root = a.slot.model.as_ref().unwrap().rows()[0].id;
+        {
+            let (t, m) = (a.slot.tree.as_ref().unwrap(), a.slot.model.as_mut().unwrap());
+            m.expand(t, root);
+            m.select(root);
+            m.extend_to(id);
+        }
+        let menu = a.row_menu(root).unwrap();
+        assert_eq!(menu.count, 2);
+        assert!(menu.paths.is_empty(), "no executable path is known: no Copy paths entry");
+        assert_eq!(menu.mark, MarkState::Refused("it is a process"));
+        assert_eq!(a.copy_text(), None);
     }
 
     #[test]

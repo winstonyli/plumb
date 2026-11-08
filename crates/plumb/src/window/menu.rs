@@ -43,14 +43,20 @@ pub(super) fn pause_all(list: Vec<crate::modal::Victim>, resume: bool) {
 /// Shows the context menu at the cursor and runs the chosen command. Called with no borrow held,
 /// because `TrackPopupMenu` runs its own message loop.
 pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
-    let RowMenu { raw, path, mark, who, end, pause, suspend_tree, resume_tree } = menu;
+    let RowMenu { raw, paths, count, mark, who, end, pause, suspend_tree, resume_tree } = menu;
+    let path = paths.first().cloned().unwrap_or_default(); // the single row's, when count is 1
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
-        let files = !path.is_empty(); // a process whose executable is unknown has none
+        let files = count == 1 && !path.is_empty(); // a process whose executable is unknown has none
+        let copy_set = count > 1 && !paths.is_empty();
         if files {
             let _ = AppendMenuW(menu, MF_STRING, CMD_REVEAL, w!("Reveal in Explorer"));
             let _ = AppendMenuW(menu, MF_STRING, CMD_COPY, w!("Copy path"));
             let _ = AppendMenuW(menu, MF_STRING, CMD_PROPS, w!("Properties"));
+        }
+        if copy_set {
+            let text = wide(&format!("Copy paths ({count})"));
+            let _ = AppendMenuW(menu, MF_STRING, CMD_COPY, PCWSTR(text.as_ptr()));
         }
         if who {
             let _ = AppendMenuW(menu, MF_STRING, CMD_WHO, w!("Who is using this"));
@@ -71,17 +77,23 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
                 let _ = AppendMenuW(menu, MF_STRING, cmd, PCWSTR(text.as_ptr()));
             }
         }
-        if files || end.is_some() || who {
+        if files || copy_set || end.is_some() || who {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         }
-        match &mark {
-            MarkState::Mark => {
+        match (&mark, count > 1) {
+            (MarkState::Mark, false) => {
                 let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Mark for deletion\tDel"));
             }
-            MarkState::Unmark => {
+            (MarkState::Mark, true) => {
+                let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Mark selected\tDel"));
+            }
+            (MarkState::Unmark, false) => {
                 let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Unmark\tDel"));
             }
-            MarkState::Refused(why) => {
+            (MarkState::Unmark, true) => {
+                let _ = AppendMenuW(menu, MF_STRING, CMD_MARK, w!("Unmark selected\tDel"));
+            }
+            (MarkState::Refused(why), _) => {
                 let text = wide(&format!("Cannot mark: {why}"));
                 let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_MARK, PCWSTR(text.as_ptr()));
             }
@@ -92,7 +104,7 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
         let _ = DestroyMenu(menu);
         match cmd.0 as usize {
             CMD_REVEAL => reveal(&path),
-            CMD_COPY => copy_to_clipboard(hwnd, &path),
+            CMD_COPY => copy_to_clipboard(hwnd, &paths.join("\r\n")),
             CMD_PROPS => properties(&path),
             CMD_WHO => {
                 // Restart Manager can be slow: ask on a worker, answer by message.
@@ -125,7 +137,11 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
             CMD_RESUME_TREE => pause_all(resume_tree, true),
             CMD_MARK => {
                 with(|w| {
-                    w.app.toggle_mark_path(&raw);
+                    if count > 1 {
+                        w.app.mark_selected();
+                    } else {
+                        w.app.toggle_mark_path(&raw);
+                    }
                     w.invalidate();
                 });
             }

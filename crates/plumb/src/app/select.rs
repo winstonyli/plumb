@@ -522,4 +522,32 @@ mod tests {
         let area = a.layout.rows_area();
         assert!(r.y >= area.y && r.y + r.h <= area.y + area.h + 0.5, "{r:?} within {area:?}");
     }
+
+    #[test]
+    fn the_menu_of_a_picked_set_is_the_set_form_and_a_single_row_keeps_today_s() {
+        let mut a = app_h(600.0);
+        let (notes, todo) = (at(&a, "notes.txt"), at(&a, "todo.md"));
+        press(&mut a, notes, NONE);
+        press(&mut a, todo, SHIFT);
+        let id = a.slot.model.as_ref().unwrap().rows()[notes].id;
+        let set = a.row_menu(id).unwrap();
+        assert_eq!((set.count, set.paths.len(), set.raw.as_str()), (2, 2, ""));
+        assert_eq!(set.mark, MarkState::Mark);
+        assert!(!set.who && set.end.is_none() && set.pause.is_none());
+        a.handle(Input::Edit(Edit::Delete));
+        assert_eq!(a.row_menu(id).unwrap().mark, MarkState::Unmark, "every topmost row is marked");
+        press(&mut a, notes, NONE);
+        let one = a.row_menu(id).unwrap();
+        assert_eq!((one.count, one.paths.len()), (1, 1));
+        assert_eq!(one.raw, a.slot.tree.as_ref().unwrap().path(id));
+    }
+
+    #[test]
+    fn a_set_with_nothing_markable_shows_the_first_reason() {
+        let mut a = app_h(600.0);
+        press(&mut a, 0, NONE);
+        press(&mut a, 1, SHIFT); // the drive root and src
+        let id = a.slot.model.as_ref().unwrap().rows()[0].id;
+        assert_eq!(a.row_menu(id).unwrap().mark, MarkState::Refused("it is a drive root"), "the root covers src, so only the root is topmost");
+    }
 }
