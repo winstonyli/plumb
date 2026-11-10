@@ -10,7 +10,7 @@ fn hidden_window_scans_and_renders() {
     let out = Command::new(env!("CARGO_BIN_EXE_plumb")).arg("--selftest").output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{:?}\n{stdout}\n{}", out.status, String::from_utf8_lossy(&out.stderr));
-    assert!(stdout.contains("selftest ok") && stdout.contains("1 files") && stdout.contains("102400"), "{stdout}");
+    assert!(stdout.contains("selftest ok") && stdout.contains("1 file") && stdout.contains("102400"), "{stdout}");
 }
 
 /// Runs `--selftest-delete`: marks files in a scratch directory and answers the real commit dialogs.
@@ -32,4 +32,15 @@ fn held_keys_and_system_keys_go_where_they_should() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{:?}\n{stdout}\n{}", out.status, String::from_utf8_lossy(&out.stderr));
     assert!(stdout.contains("selftest-keys ok"), "{stdout}");
+}
+
+/// Runs `--selftest-feedback`: the toast, shell and clipboard failures, the unreadable-folder count, rescan failures, the minimum size
+/// and the wheel remainder, in a hidden window (it swaps the clipboard text and puts it back).
+#[test]
+#[ignore = "creates a hidden window and uses the clipboard"]
+fn the_user_is_told_what_failed() {
+    let out = Command::new(env!("CARGO_BIN_EXE_plumb")).arg("--selftest-feedback").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{:?}\n{stdout}\n{}", out.status, String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("selftest-feedback ok"), "{stdout}");
 }

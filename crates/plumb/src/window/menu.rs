@@ -168,7 +168,7 @@ fn shell_result(verb: &str, path: &str, result: std::result::Result<(), String>)
     }
 }
 
-fn reveal(path: &str) -> std::result::Result<(), String> {
+pub(super) fn reveal(path: &str) -> std::result::Result<(), String> {
     if !std::path::Path::new(path).exists() {
         return Err("it no longer exists".into());
     }

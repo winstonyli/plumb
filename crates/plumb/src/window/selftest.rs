@@ -1,4 +1,4 @@
-//! Hidden-window end-to-end checks driven through the real message loop: `--selftest`, `--selftest-watch`, `--selftest-delete`, `--selftest-processes`, `--selftest-tooltip`, `--selftest-keys`, `--selftest-live`.
+//! Hidden-window end-to-end checks driven through the real message loop: `--selftest`, `--selftest-watch`, `--selftest-delete`, `--selftest-processes`, `--selftest-tooltip`, `--selftest-keys`, `--selftest-feedback`, `--selftest-live`.
 use super::*;
 
 /// Pumps window messages until `cond` holds; errors after `secs`.
@@ -504,16 +504,10 @@ pub fn selftest_delete() -> Result<String> {
         if !exists(LOCKED) || with(|w| w.app.basket().len()) != Some(1) {
             return Err(fail("a failed delete removed the file or unmarked it".into()));
         }
-        // The reason reached the status bar (its tooltip carries the whole line), not an empty one.
-        let tip = with(|w| {
-            let bar = w.app.layout.status();
-            let mut tip = String::new();
-            w.app.tip_at(bar.x + 40.0, bar.y + 5.0, &mut tip);
-            tip
-        })
-        .unwrap_or_default();
+        // The reason reached the toast, not an empty one.
+        let tip = with(|w| w.app.toast.lines().join("\n")).unwrap_or_default();
         if !tip.contains(": in use by plumb.exe (") {
-            return Err(fail(format!("the failure's reason does not name this process on the status line: {tip:?}")));
+            return Err(fail(format!("the failure's reason does not name this process in the toast: {tip:?}")));
         }
         drop(held);
         with(|w| w.app.ask_delete());
@@ -969,6 +963,163 @@ pub fn selftest_keys() -> Result<String> {
     Ok("held Backspace once on the list, repeating in the box; Alt+Space asks for the system menu".into())
 }
 
+/// What the user is told: the toast through the real window (shown, timed out, dismissed by Esc), Reveal on a vanished path, Copy
+/// to the real clipboard (and held open by another window), the unreadable-folder count of a scan, a failed rescan with and without
+/// a live watch to replace, the minimum window size and the wheel's remainder. Your clipboard text is put back. Run it with
+/// `plumb --selftest-feedback`.
+pub fn selftest_feedback() -> Result<String> {
+    let dir = std::env::temp_dir().join(format!("plumb-selftest-feedback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    let locked = dir.join("locked");
+    std::fs::create_dir_all(&locked).ok();
+    std::fs::write(dir.join("f.bin"), vec![1u8; 1000]).ok();
+    let icacls = |args: &[&str]| std::process::Command::new("icacls").arg(&locked).args(args).output().map(|o| o.status.success()).unwrap_or(false);
+    let denied = icacls(&["/deny", &format!("{user}:(OI)(CI)(RD)")]);
+    let result = feedback_checks(&dir, denied);
+    if denied {
+        icacls(&["/remove:d", &user]);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    STATE.with(|s| *s.borrow_mut() = None);
+    result
+}
+
+fn feedback_checks(dir: &std::path::Path, denied: bool) -> Result<String> {
+    use windows::Win32::Foundation::{E_FAIL, HGLOBAL};
+    use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    let fail = |m: String| windows::core::Error::new(E_FAIL, m);
+    let toast = || with(|w| (w.app.toast.outcome.line.clone(), w.app.toast.active(), w.timers[5])).unwrap_or_default();
+    let clip = |hwnd: HWND| -> Option<String> {
+        unsafe {
+            OpenClipboard(Some(hwnd)).ok()?;
+            let text = GetClipboardData(13).ok().and_then(|h| {
+                let h = HGLOBAL(h.0);
+                let p = GlobalLock(h) as *const u16;
+                if p.is_null() {
+                    return None;
+                }
+                let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+                let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+                let _ = GlobalUnlock(h);
+                Some(s)
+            });
+            let _ = CloseClipboard();
+            text
+        }
+    };
+    let hwnd = create_window()?;
+    let win = Win::new(hwnd, crate::drives::list())?;
+    STATE.with(|s| *s.borrow_mut() = Some(win));
+    let root = dir.to_string_lossy().into_owned();
+    // The scan summary counts the folder the walker could not list.
+    with(|w| w.spawn_scan(0, root.clone(), false));
+    pump_until("the scan", 30, &|w| matches!(w.app.slot.scan, crate::app::Scan::Idle | crate::app::Scan::Failed(_)))?;
+    let summary = with(|w| w.app.slot.summary.clone()).unwrap_or_default();
+    if denied && !summary.contains("1 folder unreadable") {
+        return Err(fail(format!("the summary should count the denied folder, got {summary:?}")));
+    }
+    // A report is a toast with its timer running; Esc dismisses it; with the pointer away it also times out.
+    with(|w| {
+        w.app.report(crate::outcome::Outcome::problem("could not mark x: y"));
+        w.sync_timers();
+    });
+    let (line, active, timer) = toast();
+    if !(active && timer && line == "could not mark x: y") {
+        return Err(fail(format!("a report should show a toast with its timer running, got {line:?} active {active} timer {timer}")));
+    }
+    unsafe { SendMessageW(hwnd, WM_KEYDOWN, Some(WPARAM(VK_ESCAPE.0 as usize)), Some(LPARAM(1))) };
+    if toast().1 {
+        return Err(fail("Esc left the toast showing".into()));
+    }
+    let t0 = Instant::now();
+    let still = with(|w| {
+        w.app.report(crate::outcome::Outcome::ok("done"));
+        w.app.toast_tick(t0);
+        let mid = w.app.toast_tick(t0 + Duration::from_secs(3));
+        let end = w.app.toast_tick(t0 + Duration::from_secs(5));
+        (mid, end)
+    });
+    if still != Some((true, false)) {
+        return Err(fail(format!("good news should show 3 s and be gone by 5 s, got {still:?}")));
+    }
+    // Reveal on a path that is gone says so without starting Explorer.
+    let gone = dir.join("no-such-file").to_string_lossy().into_owned();
+    match super::menu::reveal(&gone) {
+        Err(why) if why.contains("no longer exists") => {}
+        other => return Err(fail(format!("Reveal on a vanished path should say it no longer exists, got {other:?}"))),
+    }
+    // Copy: the text lands on the clipboard and the toast counts it; another window holding the clipboard makes it fail.
+    let before = clip(hwnd);
+    super::menu::copy_rows(hwnd, "a\r\nb");
+    let (line, ..) = toast();
+    let copied = clip(hwnd);
+    if line != "copied 2 items" || copied.as_deref() != Some("a\r\nb") {
+        return Err(fail(format!("Copy should toast \"copied 2 items\" and set the clipboard, got {line:?} / {copied:?}")));
+    }
+    let other = unsafe { CreateWindowExW(Default::default(), w!("STATIC"), w!(""), WS_POPUP, 0, 0, 1, 1, None, None, None, None)? };
+    // Another program (a clipboard manager) may have it open for a moment: wait for our turn, up to a deadline.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut held = unsafe { OpenClipboard(Some(other)).is_ok() };
+    while !held && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        held = unsafe { OpenClipboard(Some(other)).is_ok() };
+    }
+    super::menu::copy_rows(hwnd, "c");
+    let (line, ..) = toast();
+    unsafe {
+        if held {
+            let _ = CloseClipboard();
+        }
+        let _ = DestroyWindow(other);
+    }
+    if !(held && line == "could not copy: another program is using the clipboard") {
+        return Err(fail(format!("Copy with the clipboard held elsewhere should say so, got {line:?} (held {held})")));
+    }
+    if let Some(text) = before {
+        let _ = super::menu::copy_to_clipboard(hwnd, &text);
+    }
+    // A failed rescan always reports; the banner comes only when the rescan replaced a live watch that ended.
+    let gone_root = dir.join("rescan-gone").to_string_lossy().into_owned();
+    for (replaces_watch, banner) in [(false, false), (true, true)] {
+        with(|w| {
+            w.app.set_live(LiveStatus::Off);
+            w.app.toast.dismiss();
+            w.spawn_scan(0, gone_root.clone(), true);
+            w.run.live_rescan = replaces_watch;
+        });
+        pump_until("the failed rescan", 30, &|w| w.run.rx.is_none())?;
+        let (line, ..) = toast();
+        let stale = with(|w| matches!(w.app.slot.live, LiveStatus::Stale(_))).unwrap_or(false);
+        if !line.starts_with("rescan failed: ") || stale != banner {
+            return Err(fail(format!("a failed rescan (replacing a watch: {replaces_watch}) should toast \"rescan failed\" and raise the banner {banner}, got {line:?} banner {stale}")));
+        }
+    }
+    // The smallest window the user can drag to, and the wheel's remainder.
+    let (dpi, min) = with(|w| {
+        let mut info = MINMAXINFO::default();
+        unsafe { SendMessageW(w.hwnd, WM_GETMINMAXINFO, None, Some(LPARAM(&mut info as *mut _ as isize))) };
+        (w.dpi, info.ptMinTrackSize)
+    })
+    .unwrap_or_default();
+    if (min.x, min.y) != ((640.0 * dpi / 96.0).round() as i32, (400.0 * dpi / 96.0).round() as i32) {
+        return Err(fail(format!("minimum track size {min:?} at {dpi} dpi")));
+    }
+    let mut lines = 3u32;
+    let _ = unsafe { SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, Some(&mut lines as *mut u32 as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)) };
+    if (1..10).contains(&lines) {
+        with(|w| w.wheel_rem = 0);
+        unsafe { SendMessageW(hwnd, WM_MOUSEWHEEL, Some(WPARAM((-12i16 as u16 as usize) << 16)), Some(LPARAM(0))) };
+        let rem = with(|w| w.wheel_rem).unwrap_or(0);
+        if rem != -12 * lines as i32 {
+            return Err(fail(format!("a small wheel step should wait as {} until it adds up to a row, got {rem}", -12 * lines as i32)));
+        }
+    }
+    unsafe { DestroyWindow(hwnd)? };
+    Ok(format!("toast shown, timed out and dismissed; Reveal, Copy and rescan failures reported; unreadable folders {}; minimum size {}x{}; wheel remainder kept", if denied { "counted" } else { "not checked (no deny ACL)" }, min.x, min.y))
+}
+
 /// The checks above by command-line flag; add a new one here and `main` runs it.
 type Selftest = (&'static str, fn() -> Result<String>);
 
@@ -979,6 +1130,7 @@ const SELFTESTS: &[Selftest] = &[
     ("--selftest-processes", selftest_processes),
     ("--selftest-tooltip", selftest_tooltip),
     ("--selftest-keys", selftest_keys),
+    ("--selftest-feedback", selftest_feedback),
     ("--selftest-live", selftest_live),
 ];
 

@@ -421,7 +421,7 @@ pub struct App {
     /// A delete is running on the worker thread.
     deleting: bool,
     /// A one-off message (a refused mark, what an action did), shown over the rows for a while.
-    toast: Toast,
+    pub(crate) toast: Toast,
     /// The pointer is on the toast, which holds its time.
     toast_hot: bool,
     system_root: String,
