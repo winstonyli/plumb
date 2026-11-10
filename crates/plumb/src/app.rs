@@ -7,6 +7,7 @@ mod filter;
 mod held;
 mod map;
 mod select;
+mod toast;
 
 use crate::attrs::{self, Attrs};
 use crate::describe::{self, Description};
@@ -16,6 +17,7 @@ use crate::fmt;
 use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H, ROW_H};
 use crate::modal::{Ask, Modal, Pick, Victim};
 use crate::outcome::Outcome;
+use toast::Toast;
 use crate::restore::Snapshot;
 use crate::state::{MapState, Sort, State};
 use plumb_core::basket::{self, Basket};
@@ -418,9 +420,10 @@ pub struct App {
     basket_view: BasketView,
     /// A delete is running on the worker thread.
     deleting: bool,
-    /// A one-off message (a refused mark, what an action did) shown first on the status line until the next click or key;
-    /// its detail lines are part of the full status line (the hover text).
-    outcome: Outcome,
+    /// A one-off message (a refused mark, what an action did), shown over the rows for a while.
+    toast: Toast,
+    /// The pointer is on the toast, which holds its time.
+    toast_hot: bool,
     system_root: String,
     /// Marks of views whose kept state was let go (see `Win::evict`): a later scan of that view takes them back.
     stash: HashMap<usize, Basket>,
@@ -435,7 +438,7 @@ impl App {
             layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), slot: Slot::default(),
             can_elevate: false, accent: None, sort: (1, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None, row_drag: false,
-            held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, outcome: Outcome::default(), stash: HashMap::new(), skipped: Vec::new(),
+            held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, toast: Toast::default(), toast_hot: false, stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
     }
@@ -735,7 +738,7 @@ impl App {
         }
         let bar = self.layout.status();
         if bar.contains(x, y) {
-            self.write_status(true, true, true, out);
+            self.write_status(true, true, out);
             let _ = write!(out, "\n{}", self.adapter);
             return Some(TipKey::Area(bar));
         }
@@ -1057,9 +1060,28 @@ impl App {
         self.slot.model.as_ref()?.rows().get(self.slot.scroll + i).map(|r| r.id)
     }
 
-    /// Shows what an action did, first on the status line until the next click or key.
+    /// Shows what an action did, as a toast.
     pub fn report(&mut self, outcome: Outcome) {
-        self.outcome = outcome;
+        self.toast.show(outcome);
+        self.layout.toast = self.toast.lines().len();
+    }
+
+    /// A toast is showing, so the window ticks it.
+    pub fn toasting(&self) -> bool {
+        self.toast.active()
+    }
+
+    /// Spends the toast's time up to `now`; true while it is still showing.
+    pub fn toast_tick(&mut self, now: Instant) -> bool {
+        let on = self.toast.tick(now, self.toast_hot);
+        self.layout.toast = self.toast.lines().len();
+        on
+    }
+
+    fn dismiss_toast(&mut self) {
+        self.toast.dismiss();
+        self.toast_hot = false;
+        self.layout.toast = 0;
     }
 
     pub fn handle(&mut self, input: Input) -> Effect {
@@ -1067,9 +1089,6 @@ impl App {
         self.layout.basket = self.basket_active();
         self.layout.metric = self.kind() == ViewKind::Processes;
         self.layout.held = self.kind() == ViewKind::Processes;
-        if self.modal().is_none() && matches!(input, Input::Click(..) | Input::DoubleClick(..) | Input::RightClick(..) | Input::Key(..) | Input::Edit(_) | Input::Enter | Input::Escape | Input::Find | Input::Refresh | Input::ContextMenu) {
-            self.outcome = Outcome::default();
-        }
         if self.modal().is_some() && !matches!(input, Input::Resize(..) | Input::Release) {
             return self.modal_input(input);
         }
@@ -1100,6 +1119,7 @@ impl App {
                 self.slot.filter.ui.focus = true;
                 self.slot.filter.ui.edit(Edit::SelectAll);
             }
+            Input::Escape if self.toast.active() => self.dismiss_toast(),
             Input::Escape => {
                 let used = self.slot.filter.ui.focus || !self.slot.filter.ui.text.is_empty();
                 let e = self.filter_escape();
@@ -1107,6 +1127,7 @@ impl App {
             }
             Input::Tab => self.slot.filter.ui.focus = !self.slot.filter.ui.focus,
             Input::Hover(x, y) => {
+                self.toast_hot = matches!(self.layout.hit(x, y, self.views.len()), Hit::Toast);
                 self.hover = match self.layout.hit(x, y, self.views.len()) {
                     Hit::Row(i) if self.row_at(i).is_some() => Some(i),
                     _ => None,
@@ -1203,6 +1224,10 @@ impl App {
         }
         let hit = self.layout.hit(x, y, self.views.len());
         match hit {
+            Hit::Toast => {
+                self.dismiss_toast();
+                return Effect::None;
+            }
             Hit::FilterBox => {
                 self.slot.filter.ui.focus = true;
                 return Effect::None;
@@ -1320,36 +1345,22 @@ impl App {
         true
     }
 
-    /// The status line without the selection and the notice: the status bar's second row, the selection having a row of its
-    /// own and the notice being drawn first, in its own colour.
+    /// The status line without the selection: the status bar's second row, the selection having a row of its own.
     fn state_line(&self) -> String {
         let mut s = String::new();
-        self.write_status(false, false, false, &mut s);
+        self.write_status(false, false, &mut s);
         s
     }
 
     /// Writes the whole status line (the status bar's tooltip carries it) to `out`, which it appends to: the compact line
     /// (`full` false) has no path and no time of the last change.
-    fn write_status(&self, full: bool, with_selection: bool, with_notice: bool, out: &mut String) {
+    fn write_status(&self, full: bool, with_selection: bool, out: &mut String) {
         let start = out.len();
         let sep = |out: &mut String| {
             if out.len() > start {
                 out.push_str("   |   ");
             }
         };
-        if with_notice && !self.outcome.is_empty() {
-            sep(out);
-            out.push_str(&self.outcome.line);
-            if full && !self.outcome.detail.is_empty() {
-                sep(out);
-                for (i, d) in self.outcome.detail.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str("; ");
-                    }
-                    out.push_str(d);
-                }
-            }
-        }
         if with_selection {
             let mark = out.len();
             sep(out);
@@ -1422,6 +1433,7 @@ impl App {
         let chips = self.chips();
         let (message, status, banner) = (self.message(), self.state_line(), self.banner());
         let held = self.held_text();
+        let toast = self.toast.lines();
         let selection = self.selection(true).unwrap_or_default();
         let basket_label = self.basket_label();
         let running = matches!(self.slot.scan, Scan::Running { .. });
@@ -1432,7 +1444,7 @@ impl App {
         };
         let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
         f(&Scene {
-            layout: self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes).with_held(self.kind() == ViewKind::Processes),
+            layout: Layout { toast: toast.len(), ..self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes).with_held(self.kind() == ViewKind::Processes) },
             metric: self.slot.proc_metric,
             held: held.as_ref().map(|(h, l)| (h.as_str(), *l)),
             theme: Theme::with_accent(dark, self.accent),
@@ -1450,8 +1462,8 @@ impl App {
             message: if running { "" } else { &message },
             loading: running && self.slot.tree.is_none(),
             status: &status,
-            notice: &self.outcome.line,
-            notice_ok: self.outcome.ok,
+            toast: &toast,
+            toast_ok: self.toast.outcome.ok,
             selection: &selection,
             banner: banner.as_deref(),
             filter: self.filter_bar(&count),
@@ -1489,9 +1501,13 @@ mod tests {
         s
     }
 
+    fn toast_str(a: &App) -> String {
+        a.toast.lines().join("\n")
+    }
+
     fn status_str(a: &App, full: bool) -> String {
         let mut s = String::new();
-        a.write_status(full, true, true, &mut s);
+        a.write_status(full, true, &mut s);
         s
     }
 
@@ -2464,7 +2480,7 @@ Test GPU", status_str(&a, true))));
         let bar = a.layout.status();
         let (x, y) = (bar.x + 40.0, bar.y + 5.0);
         let (key, before) = target_str(&a, x, y).unwrap();
-        a.report(Outcome::problem("something happened"));
+        a.adapter = "Test GPU".into();
         let (same, after) = target_str(&a, x, y).unwrap();
         assert_eq!(key, same, "the status bar is the same target");
         assert_ne!(before, after, "whose text moved on");
@@ -2821,9 +2837,18 @@ Test GPU", status_str(&a, true))));
         assert_eq!(a.mark_state(root), MarkState::Refused("it is a drive root"));
         a.toggle_mark(root);
         assert!(a.basket().is_empty());
-        assert!(status_str(&a, true).starts_with("could not mark ") && status_str(&a, true).contains(": it is a drive root"), "{}", status_str(&a, true));
-        a.handle(Input::Click(5.0, a.layout.header().y + 5.0, Default::default())); // any click clears the notice
-        assert!(!status_str(&a, true).starts_with("could not mark"));
+        let line = a.toast.outcome.line.clone();
+        assert!(line.starts_with("could not mark ") && line.contains(": it is a drive root"), "{line}");
+        a.handle(Input::Click(5.0, a.layout.header().y + 5.0, Default::default()));
+        assert!(a.toast.active(), "a click elsewhere leaves the toast to its timer");
+        a.layout.toast = a.toast.lines().len();
+        let t = a.layout.toast_rect();
+        a.handle(Input::Click(t.x + 4.0, t.y + 4.0, Default::default()));
+        assert!(!a.toast.active(), "a click on the toast dismisses it");
+        a.toggle_mark(root);
+        a.handle(Input::Escape);
+        assert!(!a.toast.active(), "Esc dismisses it");
+        a.layout.toast = 0;
         let (file, ..) = picks(&a);
         a.slot.scan = Scan::Refreshing;
         assert_eq!(a.mark_state(file), MarkState::Refused("the drive is being scanned"));
@@ -2888,14 +2913,14 @@ Test GPU", status_str(&a, true))));
         assert_eq!(req.paths.len(), 1);
         assert_eq!(a.basket().len(), 1, "the refused mark is dropped");
         a.finish_delete(&req.paths, 0, &[]);
-        assert!(a.outcome.line.contains("1 skipped: the Windows folder is protected"), "{}", a.outcome.line);
-        assert!(a.outcome.detail.iter().any(|d| d.starts_with(&bad_path)));
+        assert!(a.toast.outcome.line.contains("1 skipped: the Windows folder is protected"), "{}", a.toast.outcome.line);
+        assert!(a.toast.outcome.detail.iter().any(|d| d.starts_with(&bad_path)));
         // Alone, it gives no request, only the reason.
         let mut a = scanned();
         a.toggle_mark(bad);
         a.system_root = a.slot.tree.as_ref().unwrap().path(bad);
         assert!(a.commit_request().is_none());
-        assert!(a.outcome.line.starts_with("could not delete ") && a.outcome.line.ends_with(": the Windows folder is protected"), "{}", a.outcome.line);
+        assert!(a.toast.outcome.line.starts_with("could not delete ") && a.toast.outcome.line.ends_with(": the Windows folder is protected"), "{}", a.toast.outcome.line);
         assert!(a.basket().is_empty());
     }
 
@@ -2921,7 +2946,7 @@ Test GPU", status_str(&a, true))));
         assert!(a.slot.tree.as_mut().unwrap().remove(file));
         assert!(a.commit_request().is_none());
         assert!(a.basket().is_empty());
-        assert!(status_str(&a, true).starts_with("the marked items are already gone"), "{}", status_str(&a, true));
+        assert!(toast_str(&a).starts_with("the marked items are already gone"), "{}", toast_str(&a));
     }
 
     #[test]
@@ -2948,7 +2973,7 @@ Test GPU", status_str(&a, true))));
         a.set_deleting(true);
         a.finish_delete(std::slice::from_ref(&gone), 0, &[(kept.clone(), "access denied".into())]);
         assert!(a.basket().contains(&kept) && !a.basket().contains(&gone));
-        assert!(status_str(&a, true).starts_with("1 of 2 not deleted: access denied; still marked"), "{}", status_str(&a, true));
+        assert!(toast_str(&a).starts_with("1 of 2 not deleted: access denied; still marked"), "{}", toast_str(&a));
         assert!(a.commit_request().is_some(), "the delete is over, so a new commit may start");
     }
 
@@ -2991,12 +3016,12 @@ Test GPU", status_str(&a, true))));
     }
 
     #[test]
-    fn answering_a_modal_keeps_the_status_notice() {
+    fn answering_a_modal_keeps_the_toast() {
         let (mut a, centre) = asking();
         a.report(Outcome::problem("could not delete C:\\f: in use; still marked"));
         let (x, y) = centre(&a, Pick::Cancel);
         a.handle(Input::Click(x, y, Default::default()));
-        assert!(a.modal().is_none() && a.outcome.line.starts_with("could not delete"), "{:?}", a.outcome.line);
+        assert!(a.modal().is_none() && a.toast.outcome.line.starts_with("could not delete"), "{:?}", a.toast.outcome.line);
     }
 
     #[test]
@@ -3106,7 +3131,7 @@ Test GPU", status_str(&a, true))));
         assert!(a.basket().contains(&p));
         a.toggle_mark_path("nowhere\\at all");
         assert_eq!(a.basket().len(), 1);
-        assert!(status_str(&a, true).starts_with("that item is gone"));
+        assert!(toast_str(&a).starts_with("that item is gone"));
     }
 
     #[test]
@@ -3138,12 +3163,12 @@ Test GPU", status_str(&a, true))));
         a.set_deleting(true);
         let gone: Vec<String> = vec!["X-a".into(), "X-b".into()];
         a.finish_delete(&gone, 1, &[("X-c".into(), "in use".into()), ("X-d".into(), "denied".into())]);
-        let short = status_str(&a, false);
-        assert!(short.starts_with("2 of 4 not deleted: in use; still marked"), "{short}");
-        assert!(status_str(&a, true).contains("X-d: denied"), "{}", status_str(&a, true));
+        let shown = toast_str(&a);
+        assert!(shown.starts_with("2 of 4 not deleted: in use; still marked"), "{shown}");
+        assert!(a.toast.outcome.detail.iter().any(|d| d.contains("X-d: denied")), "every reason is kept: {:?}", a.toast.outcome.detail);
         let mut b = scanned();
         b.finish_delete(&gone, 1, &[]);
-        assert!(status_str(&b, false).starts_with("deleted 1 item, 1 already gone"), "{}", status_str(&b, false));
+        assert!(toast_str(&b).starts_with("deleted 1 item, 1 already gone"), "{}", toast_str(&b));
     }
 
     #[test]
@@ -3155,5 +3180,6 @@ Test GPU", status_str(&a, true))));
         a.set_deleting(false);
         a.slot.scan = Scan::Refreshing;
         assert!(!a.begin_delete());
-        assert!(status_str(&a, true).starts_with("cannot delete: the drive is being scanned"));    }
+        assert!(toast_str(&a).starts_with("cannot delete: the drive is being scanned"));
+    }
 }

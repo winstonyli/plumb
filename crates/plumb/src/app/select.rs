@@ -371,10 +371,8 @@ mod tests {
         assert_eq!(picked(&a), ["docs"], "an unpicked row becomes the selection");
     }
 
-    fn status_str(a: &App, full: bool) -> String {
-        let mut s = String::new();
-        a.write_status(full, true, true, &mut s);
-        s
+    fn toast_str(a: &App) -> String {
+        a.toast.lines().join("\n")
     }
 
     #[test]
@@ -429,7 +427,7 @@ mod tests {
         press(&mut a, 0, NONE); // the drive root
         a.handle(Input::Edit(Edit::Delete));
         assert!(a.basket().is_empty());
-        assert!(status_str(&a, true).starts_with("could not mark ") && status_str(&a, true).contains(": it is a drive root"), "{}", status_str(&a, true));
+        assert!(toast_str(&a).starts_with("could not mark ") && toast_str(&a).contains(": it is a drive root"), "{}", toast_str(&a));
         a.handle(Input::Edit(Edit::SelectAll)); // everything, root included: the root covers all, and is refused
         a.handle(Input::Edit(Edit::Delete));
         assert!(a.basket().is_empty(), "Ctrl+A then Del at a drive root marks nothing");
@@ -439,7 +437,7 @@ mod tests {
         a.slot.scan = Scan::Refreshing; // marks are refused while a scan runs
         a.handle(Input::Edit(Edit::Delete));
         assert!(a.basket().is_empty());
-        assert!(status_str(&a, true).starts_with("2 of 2 not marked: the drive is being scanned"), "{}", status_str(&a, true));
+        assert!(toast_str(&a).starts_with("2 of 2 not marked: the drive is being scanned"), "{}", toast_str(&a));
     }
 
     #[test]

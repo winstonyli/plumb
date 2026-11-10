@@ -5,7 +5,7 @@ use crate::icons;
 use plumb_core::basket::Basket;
 use plumb_core::age::{shade, FADE_MAX};
 use plumb_core::filter::Matcher;
-use crate::layout::{Layout, Rect, BASKET_W, CAPTION_RESERVE, FILTER_PAD, ICON_BTN, INDENT, METRIC_W, PICKER_H, ROW_H};
+use crate::layout::{Layout, Rect, BASKET_W, CAPTION_RESERVE, FILTER_PAD, ICON_BTN, INDENT, METRIC_W, PICKER_H, ROW_H, TOAST_LINE_H, TOAST_PAD};
 use plumb_core::treemap::{Class, Kind, Tile};
 use plumb_core::rows::RowModel;
 use std::cell::{Cell, RefCell};
@@ -269,11 +269,11 @@ pub struct Scene<'a> {
     pub message: &'a str,
     /// A first scan is running and no tree exists yet: placeholder rows instead of `message`.
     pub loading: bool,
-    /// The status bar's second row: notice, scan summary, live state.
+    /// The status bar's second row: scan summary, live state.
     pub status: &'a str,
-    /// The notice leading that row (a delete's outcome, a refused action), and whether it is good news: a problem is drawn in the danger colour.
-    pub notice: &'a str,
-    pub notice_ok: bool,
+    /// The toast's lines (a delete's outcome, a refused action; empty for none), and whether it is good news: a problem is drawn in the danger colour.
+    pub toast: &'a [String],
+    pub toast_ok: bool,
     /// The status bar's first row, left: the selected row's full path and size (empty when none).
     pub selection: &'a str,
     /// Text of the stale banner; its strip and Rescan button come from `layout`.
@@ -741,18 +741,7 @@ impl Pen<'_> {
         let sel = self.fit_middle(s.selection, text_w.max(0.0));
         self.text(&sel, Rect { w: text_w.max(0.0), ..right }, t.dim, false);
         let row2 = Rect { y: st.y + row1.h, h: st.h - row1.h, ..st };
-        let mut at = Rect { x: row2.x + 8.0, w: (row2.w - 16.0).max(0.0), ..row2 };
-        if !s.notice.is_empty() {
-            let note = self.fit_middle(s.notice, at.w * 0.7);
-            let used = self.painter.text_width(self.gfx, Role::Caption, &note);
-            self.text_as(Role::Caption, &note, at, if s.notice_ok { t.fg } else { t.danger }, false);
-            at = Rect { x: at.x + used, w: (at.w - used).max(0.0), ..at };
-            if !s.status.is_empty() {
-                self.text_as(Role::Caption, "   |   ", at, t.dim, false);
-                let gap = self.painter.text_width(self.gfx, Role::Caption, "   |   ");
-                at = Rect { x: at.x + gap, w: (at.w - gap).max(0.0), ..at };
-            }
-        }
+        let at = Rect { x: row2.x + 8.0, w: (row2.w - 16.0).max(0.0), ..row2 };
         self.text_as(Role::Caption, s.status, at, t.dim, false);
         if l.cancel {
             let r = l.cancel_button();
@@ -769,8 +758,27 @@ impl Pen<'_> {
             let c = self.control(r, s, false, false);
             self.centered(crate::app::metric_label(s.metric), r, c);
         }
+        if !s.toast.is_empty() {
+            self.toast(s);
+        }
         if let Some(m) = s.modal {
             self.modal(s, m);
+        }
+    }
+
+    /// The toast: a raised panel in the rows' bottom right corner, its first line in the danger colour when it is a problem.
+    fn toast(&self, s: &Scene) {
+        let (t, r) = (&s.theme, s.layout.toast_rect());
+        self.round(r, t.raised);
+        self.outline(r, if s.toast_ok { t.border } else { t.danger });
+        for (i, line) in s.toast.iter().enumerate() {
+            let at = Rect { x: r.x + TOAST_PAD, y: r.y + TOAST_PAD + i as f32 * TOAST_LINE_H, w: (r.w - 2.0 * TOAST_PAD).max(0.0), h: TOAST_LINE_H };
+            let colour = match (i, s.toast_ok) {
+                (0, true) => t.fg,
+                (0, false) => t.danger,
+                _ => t.dim,
+            };
+            self.text_as(Role::Caption, &self.fit_middle(line, at.w), at, colour, false);
         }
     }
 

@@ -95,6 +95,9 @@ const TIMER_HELD: usize = 5;
 const TIMER_FLASH: usize = 6;
 const FLASH_TICK_MS: u32 = 50;
 const TIMER_DRAG: usize = 7;
+/// While a toast shows: how often its time is spent.
+const TIMER_TOAST: usize = 8;
+const TOAST_TICK_MS: u32 = 250;
 /// While a drag over rows is held: how often the pointer's position is replayed, so a pointer resting past an edge keeps scrolling.
 const DRAG_TICK_MS: u32 = 40;
 const HELD_SETTLE_MS: u32 = 300;
@@ -191,8 +194,8 @@ struct Win {
     parked: Vec<Option<View>>,
     /// Counts view switches, to find the least recently used.
     clock: u64,
-    /// Which of the progress, preview, live, flash and drag-scroll timers are running.
-    timers: [bool; 5],
+    /// Which of the progress, preview, live, flash, drag-scroll and toast timers are running.
+    timers: [bool; 6],
     /// A parked view is swapped in for one operation (`in_slot`): timers and the filter stay as they are.
     borrowed: bool,
     /// The window is not the foreground one (`WM_ACTIVATE`): the Processes poller slows down.
@@ -336,7 +339,7 @@ impl Win {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, run: Run::default(),
             policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
-            parked: Vec::new(), clock: 0, timers: [false; 5], borrowed: false, background: false,
+            parked: Vec::new(), clock: 0, timers: [false; 6], borrowed: false, background: false,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
         win.apply_title_theme();
@@ -615,6 +618,7 @@ impl Win {
             .collect();
         let shown = self.app.active == Some(view);
         let failure = self.in_slot(view, |w| w.app.finish_delete(&gone, missing, &failed));
+        self.sync_timers();
         if failure.is_none() {
             self.app.set_deleting(false); // the view's slot was evicted meanwhile
         }
@@ -635,7 +639,7 @@ impl Win {
         self.app.marks = marks;
     }
 
-    /// Starts and stops the progress, preview, live, flash and drag-scroll timers to match the view on screen.
+    /// Starts and stops the progress, preview, live, flash, drag-scroll and toast timers to match the view on screen.
     fn sync_timers(&mut self) {
         if self.borrowed {
             return;
@@ -646,6 +650,7 @@ impl Win {
             (TIMER_LIVE, self.run.watch.as_ref().is_some_and(|w| w.armed), REPAINT.as_millis() as u32),
             (TIMER_FLASH, self.app.flashing(), FLASH_TICK_MS),
             (TIMER_DRAG, self.app.row_dragging(), DRAG_TICK_MS),
+            (TIMER_TOAST, self.app.toasting(), TOAST_TICK_MS),
         ];
         for (i, (id, on, ms)) in want.into_iter().enumerate() {
             if self.timers[i] != on {
@@ -975,6 +980,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
                 let failure = process_failure("end", "ended", &failed, victims.len());
                 with(|w| {
                     w.app.report(failure.outcome(""));
+                    w.sync_timers();
                     w.ask(Modal::process_failed(&failure));
                     w.invalidate();
                 });
@@ -1547,6 +1553,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_TIMER if wp.0 == TIMER_PROGRESS => {
             with(|w| w.poll_progress());
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_TOAST => {
+            with(|w| {
+                w.app.toast_tick(Instant::now());
+                w.sync_timers();
+                w.invalidate();
+            });
             LRESULT(0)
         }
         WM_TIMER if wp.0 == TIMER_FLASH => {

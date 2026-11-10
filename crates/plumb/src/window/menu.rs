@@ -34,6 +34,7 @@ pub(super) fn pause_all(list: Vec<crate::modal::Victim>, resume: bool) {
         } else {
             let failure = process_failure(verb, past, &failed, list.len());
             w.app.report(failure.outcome(""));
+            w.sync_timers();
             w.ask(Modal::process_failed(&failure));
         }
         w.invalidate();

@@ -59,7 +59,7 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), used: None, hover: Some(2), found: found.as_ref(), basket: &Basket::default(), flash: &Default::default(), procs: None }),
         message: "",
         loading: false, kind: Default::default(), metric: Default::default(), held: None,
-        status: "MFT scan: 200 files", notice: "", notice_ok: false, selection: "C:\\Users\\someone\\Documents  (1.2 GB, 300 items)",
+        status: "MFT scan: 200 files", toast: &[], toast_ok: false, selection: "C:\\Users\\someone\\Documents  (1.2 GB, 300 items)",
         banner: None,
         filter,
         basket: None,
@@ -262,7 +262,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
             let scene = Scene {
                 layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-                message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
+                message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
                 map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
                 modal: None,
             };
@@ -301,7 +301,7 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     let frame = |generation: u64, selected: Option<usize>| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
+            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
             modal: None,
         };
@@ -328,7 +328,7 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     let frame = |loading: bool| {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-            view: None, message: if loading { "" } else { "Scan failed\nThe volume could not be opened." }, loading, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
+            view: None, message: if loading { "" } else { "Scan failed\nThe volume could not be opened." }, loading, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_scene(&gfx, &scene, if loading { "plumb-loading" } else { "plumb-empty" })
     };
@@ -367,7 +367,7 @@ fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
     };
     let scene = Scene {
         layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-        view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
+        view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
         map: Some(MapView { tiles: &tiles, generation: 1, now, selected: None, hover: None, classes: &classes, marked: &[] }),
         modal: None,
     };
@@ -423,7 +423,7 @@ fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
         let theme = Theme::new(true);
         let scene = Scene {
             layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
+            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
             modal: None,
         };
@@ -460,7 +460,7 @@ fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows
     let frame = |marked: &[usize], chip: Option<&str>| {
         let scene = Scene {
             layout: layout.with_basket(chip.is_some()), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
-            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: chip,
+            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: chip,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked }),
             modal: None,
         };
@@ -492,7 +492,7 @@ fn a_marked_row_is_tinted() {
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket, flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
+            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_scene(&gfx, &scene, "plumb-marked-row")
     };
@@ -526,7 +526,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
+            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_on(&painter, &gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
     };
@@ -575,7 +575,7 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
     let scene = Scene {
         layout, theme: Theme::new(false), chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot: None, pressed: false,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-        message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Default::default(), held: None, status: "6 processes, 1.1 GB in use of 16 GB", notice: "", notice_ok: false, selection: "", banner: None,
+        message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Default::default(), held: None, status: "6 processes, 1.1 GB in use of 16 GB", toast: &[], toast_ok: false, selection: "", banner: None,
         filter: FilterBar::default(), basket: None,
         map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
         modal: None,
@@ -616,7 +616,7 @@ fn the_processes_map_follows_the_metric_button() {
         let scene = Scene {
             layout, theme: Theme::new(false), chips: &chips, active_chip: Some(0), sort: (1, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: m, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "", notice: "", notice_ok: false, selection: "", banner: None,
+            message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: m, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "", toast: &[], toast_ok: false, selection: "", banner: None,
             filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
             modal: None,
@@ -653,7 +653,8 @@ fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme:
     model.select(model.rows()[1].id);
     let chips = [Chip { label: "C:  123 GB".into(), used: 0.7, mark: Mark::None }, Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
     let held_lines = vec!["C:/Users/me/notes.txt".to_string(), "C:/Windows/Temp/x.log".to_string()];
-    let layout = Layout { chips: chip_widths(gfx, &chips), map_on: true, ..Layout::new(w as f32, h as f32) }.with_metric(true).with_held(true);
+    let toast: Vec<String> = if notice.0.is_empty() { Vec::new() } else { vec![notice.0.to_string()] };
+    let layout = Layout { chips: chip_widths(gfx, &chips), map_on: true, toast: toast.len(), ..Layout::new(w as f32, h as f32) }.with_metric(true).with_held(true);
     // A narrow window has no map pane at all.
     let has_map = layout.map().is_some();
     let tiles = layout.map().map(|m| plumb_core::treemap::layout(&tree, root, m, 1.0)).unwrap_or_default();
@@ -665,7 +666,7 @@ fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme:
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Metric::Memory, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB", selection: "", banner: None,
         filter: FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() }, basket: None,
         map: has_map.then_some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
-        modal, notice: notice.0, notice_ok: notice.1,
+        modal, toast: &toast, toast_ok: notice.1,
     };
     let (pw, ph) = ((w as f32 * scale) as u32, (h as f32 * scale) as u32);
     let target = bitmap_sized(gfx, D2D1_BITMAP_OPTIONS_TARGET, pw, ph, 96.0 * scale);
@@ -762,10 +763,9 @@ fn each_modal_paints_over_a_dimmed_view_in_both_themes_and_scales() {
     }
 }
 
-/// The status row at the narrowest sizes: a long failure notice must not push the state text or the buttons out of the
-/// window, and nothing may panic. Frames for looking at (`PLUMB_SHOT_DIR`).
+/// The toast at the narrowest sizes: a long failure notice must stay inside the window, and nothing may panic. Frames for looking at (`PLUMB_SHOT_DIR`).
 #[test]
-fn the_status_row_survives_narrow_windows_with_a_long_notice() {
+fn the_toast_survives_narrow_windows_with_a_long_notice() {
     let gfx = Gfx::warp().expect("WARP device");
     let painter = Painter::new(&gfx).unwrap();
     let none = |_: &Layout| Rect { x: -1.0, y: -1.0, w: 0.0, h: 0.0 };
@@ -780,7 +780,7 @@ fn the_status_row_survives_narrow_windows_with_a_long_notice() {
     }
 }
 
-/// A failure notice leads the status row in the danger colour; a success one in the text colour.
+/// A failure toast is drawn in the danger colour; a success one in the text colour.
 #[test]
 fn a_failure_notice_is_drawn_in_the_danger_colour_and_a_success_in_the_text_colour() {
     let gfx = Gfx::warp().expect("WARP device");
@@ -789,11 +789,12 @@ fn a_failure_notice_is_drawn_in_the_danger_colour_and_a_success_in_the_text_colo
     for dark in [false, true] {
         let t = Theme::new(dark);
         let (danger, fg) = (expect(t.danger), expect(t.fg));
-        // The status row's text sits at the bottom left; count pixels close to a colour in it.
+        // Count pixels close to a colour in the toast's rectangle.
+        let r = Layout { map_on: true, toast: 1, ..Layout::new(W as f32, H as f32) }.with_metric(true).with_held(true).toast_rect();
         let near = |buf: &[u8], c: [i32; 3]| {
             let mut n = 0;
-            for y in H - 22..H - 2 {
-                for x in 8..300 {
+            for y in r.y as u32 + 2..(r.y + r.h) as u32 - 2 {
+                for x in r.x as u32 + 2..(r.x + r.w) as u32 - 2 {
                     let p = rgb_at(buf, x, y);
                     if (p[0] - c[0]).abs() + (p[1] - c[1]).abs() + (p[2] - c[2]).abs() < 40 {
                         n += 1;
@@ -823,7 +824,7 @@ fn a_row_with_an_attribute_draws_a_pill_at_the_right_of_its_name_cell_and_leaves
         let scene = Scene {
             layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", notice: "", notice_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
+            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_scene(&gfx, &scene, "plumb-pill")
     };

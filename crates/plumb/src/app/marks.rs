@@ -74,7 +74,7 @@ impl App {
 
     /// Reports `failed` (path, reason) of `total` items that could not be marked.
     pub(super) fn refuse_mark(&mut self, failed: &[(String, String)], total: usize) {
-        self.outcome = Failure::new("mark", "marked", failed, total, "").outcome("");
+        self.report(Failure::new("mark", "marked", failed, total, "").outcome(""));
     }
 
     /// Marks or unmarks `id`; a refusal goes to the status line.
@@ -93,7 +93,7 @@ impl App {
     pub fn toggle_mark_path(&mut self, path: &str) {
         match self.slot.tree.as_ref().and_then(|t| t.find(path)) {
             Some(id) => self.toggle_mark(id),
-            None => self.outcome = Outcome::problem("that item is gone"),
+            None => self.report(Outcome::problem("that item is gone")),
         }
     }
 
@@ -151,7 +151,7 @@ impl App {
         } else {
             return false;
         };
-        self.outcome = Outcome::problem(format!("cannot delete: {why}"));
+        self.report(Outcome::problem(format!("cannot delete: {why}")));
         true
     }
 
@@ -175,13 +175,14 @@ impl App {
         self.basket_rev += 1;
         if ids.is_empty() {
             self.clear_basket();
-            self.outcome = match self.skipped.first() {
+            let o = match self.skipped.first() {
                 Some(_) => {
                     let failed: Vec<(String, String)> = self.skipped.drain(..).map(|(p, why)| (p, why.to_string())).collect();
                     Failure::new("delete", "deleted", &failed, failed.len(), "").outcome("")
                 }
                 None => Outcome::problem("the marked items are already gone"),
             };
+            self.report(o);
             return None;
         }
         let paths = ids.iter().map(|&i| tree.path(i)).collect();
@@ -212,7 +213,7 @@ impl App {
             let line = format!("{} skipped: {why}", self.skipped.len());
             outcome = outcome.and(&line, self.skipped_detail());
         }
-        self.outcome = outcome;
+        self.report(outcome);
         failure
     }
 }

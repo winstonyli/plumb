@@ -7,6 +7,10 @@ pub const HEADER_H: f32 = 24.0;
 /// One row of the status bar: the selection, legend and buttons on the first, the scan and live state on the second.
 pub const STATUS_ROW_H: f32 = 28.0;
 pub const STATUS_H: f32 = 2.0 * STATUS_ROW_H;
+/// The toast over the rows: its width, one line's height and the padding above and below its lines.
+pub const TOAST_W: f32 = 420.0;
+pub const TOAST_LINE_H: f32 = 20.0;
+pub const TOAST_PAD: f32 = 10.0;
 pub const ROW_H: f32 = 22.0;
 pub const SCROLLBAR_W: f32 = 12.0;
 /// A drive chip's width until its label has been measured (see `App::fit_chips`).
@@ -74,6 +78,8 @@ pub enum Hit {
     Cancel,
     /// The marked-items chip in the status bar.
     Basket,
+    /// The toast over the rows.
+    Toast,
     /// The filter text box (not its clear button).
     FilterBox,
     FilterRegex,
@@ -103,6 +109,8 @@ pub struct Layout {
     pub metric: bool,
     /// The "Files held" pane sits under the rows (the Processes view).
     pub held: bool,
+    /// Lines in the toast over the bottom right of the rows; 0 for none.
+    pub toast: usize,
     /// Widths of the Size, % of parent, Items and Modified columns.
     pub col_w: [f32; 4],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
@@ -115,7 +123,7 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false, basket: false, metric: false, held: false, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
+        Self { w, h, banner: false, cancel: false, basket: false, metric: false, held: false, toast: 0, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
     /// Sets the width of column `c` (1..=4), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
@@ -282,6 +290,13 @@ impl Layout {
         Rect { x: 0.0, y, w: (self.tree_w() - SCROLLBAR_W).max(0.0), h: (self.h - y - STATUS_H - pane).max(0.0) }
     }
 
+    /// The toast: `TOAST_W` wide and one `TOAST_LINE_H` per line, in the rows' bottom right corner.
+    pub fn toast_rect(&self) -> Rect {
+        let a = self.rows_area();
+        let (w, h) = (TOAST_W.min((a.w - 16.0).max(0.0)), self.toast as f32 * TOAST_LINE_H + 2.0 * TOAST_PAD);
+        Rect { x: a.x + a.w - w - 8.0, y: (a.y + a.h - h - 8.0).max(a.y), w, h }
+    }
+
     pub fn scrollbar(&self) -> Rect {
         let a = self.rows_area();
         Rect { x: a.x + a.w, y: a.y, w: SCROLLBAR_W.min(self.w), h: a.h }
@@ -347,6 +362,9 @@ impl Layout {
             if self.chip(i).contains(x, y) {
                 return Hit::Chip(i);
             }
+        }
+        if self.toast > 0 && self.toast_rect().contains(x, y) {
+            return Hit::Toast;
         }
         if self.cancel && self.cancel_button().contains(x, y) {
             return Hit::Cancel;
