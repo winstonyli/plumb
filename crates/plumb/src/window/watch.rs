@@ -324,6 +324,7 @@ impl Win {
             return false;
         }
         self.start_rescan(i);
+        self.run.live_rescan = self.run.rx.is_some();
         true
     }
 }

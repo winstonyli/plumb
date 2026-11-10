@@ -887,7 +887,7 @@ impl App {
         let states: Vec<MarkState> = self.topmost().into_iter().map(|i| self.mark_state(i)).collect();
         let mark = if states.iter().all(|s| *s == MarkState::Unmark) {
             MarkState::Unmark
-        } else if states.iter().any(|s| *s == MarkState::Mark) {
+        } else if states.contains(&MarkState::Mark) {
             MarkState::Mark
         } else {
             states.iter().find_map(|s| if let MarkState::Refused(why) = s { Some(MarkState::Refused(why)) } else { None }).unwrap_or(MarkState::Refused("nothing to mark"))

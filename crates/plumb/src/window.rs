@@ -118,6 +118,8 @@ struct Run {
     preview: Option<Preview>,
     /// The scan in flight is a rescan: the old tree stays on screen until it finishes.
     background: bool,
+    /// The rescan in flight replaces a live watch that ended: if it fails, nothing keeps the tree current.
+    live_rescan: bool,
     watch: Option<Watch>,
     /// A directory watch started with the scan and held until the tree is installed.
     dir_pending: Option<Watcher>,
@@ -200,6 +202,8 @@ struct Win {
     borrowed: bool,
     /// The window is not the foreground one (`WM_ACTIVATE`): the Processes poller slows down.
     background: bool,
+    /// Wheel delta not yet worth a row (`wheel_rows`): precision touchpads send many small ones.
+    wheel_rem: i32,
     /// The tooltip control, the icon button it last described, and the text it reads from (`tip_text`).
     tooltip: HWND,
     tip: Option<TipKey>,
@@ -339,7 +343,7 @@ impl Win {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, run: Run::default(),
             policy: RescanPolicy::default(), last_input: Instant::now(),
             posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
-            parked: Vec::new(), clock: 0, timers: [false; 6], borrowed: false, background: false,
+            parked: Vec::new(), clock: 0, timers: [false; 6], borrowed: false, background: false, wheel_rem: 0,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
         win.apply_title_theme();
@@ -868,12 +872,14 @@ impl Win {
         self.run.rx = None;
         self.run.preview = None; // anything still queued is discarded; the exact tree is here
         let background = std::mem::take(&mut self.run.background);
+        let live_rescan = std::mem::take(&mut self.run.live_rescan);
         match msg {
             Ok(sc) => {
                 let files = sc.tree.subtree_files[NodeId(0)] as u64;
                 let corrupt = sc.report.mft.as_ref().map(|m| m.stats.corrupt);
                 let found = self.app.active.and_then(|v| self.app.used(v)).filter(|&u| u > 0).map(|u| (sc.tree.subtree_size[NodeId(0)].saturating_mul(1000) / u).min(1000));
-                let s = summary(sc.report.used, files, sc.elapsed, found, corrupt, sc.report.note.as_deref());
+                let unreadable = sc.tree.flags.iter().filter(|f| f.contains(plumb_core::NodeFlags::DENIED)).count() as u64;
+                let s = summary(sc.report.used, files, sc.elapsed, found, corrupt, unreadable, sc.report.note.as_deref());
                 // `begin_scan` cleared the tree, so one on screen is the preview (or the tree
                 // being rescanned); with none yet the scan finished before the first preview.
                 if self.app.slot.tree.is_some() {
@@ -901,7 +907,10 @@ impl Win {
                 if self.app.slot.refreshing() {
                     self.app.slot.scan = crate::app::Scan::Idle;
                 }
-                self.app.set_live(LiveStatus::Stale(format!("the rescan failed: {e}")));
+                self.app.report(crate::outcome::Outcome::problem(format!("rescan failed: {e}")));
+                if live_rescan {
+                    self.app.set_live(LiveStatus::Stale(format!("the rescan failed: {e}")));
+                }
             }
             Err(e) => {
                 self.drop_pending();
@@ -924,7 +933,7 @@ impl Win {
 }
 
 /// The status line after a scan; `found` is the share (tenths of a percent) of the drive's used space the scan accounted for.
-pub fn summary(used: Used, files: u64, elapsed: Duration, found: Option<u64>, corrupt: Option<u64>, note: Option<&str>) -> String {
+pub fn summary(used: Used, files: u64, elapsed: Duration, found: Option<u64>, corrupt: Option<u64>, unreadable: u64, note: Option<&str>) -> String {
     let scanner = match used {
         Used::Mft => "MFT scan",
         Used::Walk => "Directory walk",
@@ -936,10 +945,29 @@ pub fn summary(used: Used, files: u64, elapsed: Duration, found: Option<u64>, co
     if let Some(c) = corrupt.filter(|&c| c > 0) {
         s.push_str(&format!(", {} skipped", crate::fmt::noun(c, "record", "records")));
     }
+    if unreadable > 0 {
+        s.push_str(&format!(", {} unreadable", crate::fmt::noun(unreadable, "folder", "folders")));
+    }
     if let Some(n) = note {
         s.push_str(&format!(" ({n})"));
     }
     s
+}
+
+/// The smallest outer window size, in pixels, at `dpi`: the layout drops the map and squeezes the name column well before this.
+fn min_track_size(dpi: f32) -> (i32, i32) {
+    let k = dpi / 96.0;
+    ((MIN_WINDOW.0 * k).round() as i32, (MIN_WINDOW.1 * k).round() as i32)
+}
+
+const MIN_WINDOW: (f32, f32) = (640.0, 400.0);
+
+/// Rows to scroll for a wheel `delta` (120 per notch; a precision touchpad sends fractions of that) at `per_notch` rows a notch.
+/// What is less than a row stays in `rem` for the next message. Positive delta is up, which is fewer rows.
+fn wheel_rows(rem: &mut i32, delta: i32, per_notch: i32) -> i32 {
+    let total = *rem + delta * per_notch;
+    *rem = total % 120;
+    -(total / 120)
 }
 
 /// Arguments for the elevated copy: `--scan "C:"` restarts the scan the user was looking at. `title` is a
@@ -973,7 +1001,7 @@ fn relaunch_elevated(view: Option<&str>) -> bool {
 fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
     match e {
         Effect::None => {}
-        Effect::Copy(text) => copy_to_clipboard(hwnd, &text),
+        Effect::Copy(text) => copy_rows(hwnd, &text),
         Effect::End(victims) => {
             let failed: Vec<_> = victims.iter().filter_map(|v| plumb_scan::procs::terminate(v.pid, v.created).err().map(|why| (v.clone(), why))).collect();
             if !failed.is_empty() {
@@ -1283,6 +1311,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             });
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
+        WM_GETMINMAXINFO => {
+            let info = unsafe { &mut *(lp.0 as *mut MINMAXINFO) };
+            let (w, h) = min_track_size(with(|w| w.dpi).unwrap_or(96.0));
+            info.ptMinTrackSize = POINT { x: w, y: h };
+            LRESULT(0)
+        }
         WM_SIZE => {
             let minimized = wp.0 == SIZE_MINIMIZED as usize;
             with(|w| {
@@ -1417,13 +1451,18 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_MOUSEWHEEL => {
             let delta = (wp.0 >> 16) as i16 as i32;
+            let mut lines = 3u32;
+            let _ = unsafe { SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, Some(&mut lines as *mut u32 as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)) };
             with(|w| {
                 w.last_input = Instant::now();
+                // The setting is lines per notch, or (u32::MAX, WHEEL_PAGESCROLL) a whole page.
+                let per_notch = if lines == u32::MAX { w.app.layout.rows_visible() as i32 } else { lines as i32 };
+                let rows = wheel_rows(&mut w.wheel_rem, delta, per_notch);
                 // The wheel message carries screen coordinates.
                 let mut p = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
                 let _ = unsafe { ScreenToClient(w.hwnd, &mut p) };
                 let k = 96.0 / w.dpi;
-                w.app.handle(Input::Wheel(-delta / 120 * 3, p.x as f32 * k, p.y as f32 * k - w.inset));
+                w.app.handle(Input::Wheel(rows, p.x as f32 * k, p.y as f32 * k - w.inset));
                 w.invalidate();
             });
             LRESULT(0)
@@ -1477,13 +1516,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 _ => None,
             };
             if ctrl && (wp.0 == 'C' as usize || wp.0 == 'X' as usize) && in_box && picked.is_some() {
-                copy_to_clipboard(hwnd, &picked.unwrap_or_default());
+                if let Err(why) = copy_to_clipboard(hwnd, &picked.unwrap_or_default()) {
+                    menu::say(crate::outcome::Outcome::problem(format!("could not copy: {why}")));
+                }
                 if wp.0 == 'X' as usize {
                     send(hwnd, Input::Edit(Edit::Backspace));
                 }
             } else if ctrl && wp.0 == 'C' as usize {
                 if let Some(Some(text)) = with(|w| w.app.copy_text()) {
-                    copy_to_clipboard(hwnd, &text);
+                    copy_rows(hwnd, &text);
                 }
             } else if let (true, true, Some(to)) = (shift, in_box, motion) {
                 send(hwnd, Input::Edit(Edit::Move { to, extend: true }));
@@ -1735,7 +1776,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-use menu::{context_menu, copy_to_clipboard};
+use menu::{context_menu, copy_rows, copy_to_clipboard};
 use tooltip::TIP_FRAME;
 use watch::{open_journal, ScanResult, Scanned, Watch};
 mod menu;
@@ -1776,6 +1817,26 @@ mod tests {
     }
 
     #[test]
+    fn the_wheel_scrolls_by_the_system_setting_and_keeps_what_is_less_than_a_row() {
+        let mut rem = 0;
+        assert_eq!(wheel_rows(&mut rem, -120, 3), 3, "one notch down is the setting");
+        assert_eq!(wheel_rows(&mut rem, 120, 5), -5);
+        assert_eq!((wheel_rows(&mut rem, 12, 3), rem), (0, 36), "a touchpad sliver waits");
+        assert_eq!(wheel_rows(&mut rem, 12, 3), 0);
+        assert_eq!(wheel_rows(&mut rem, 12, 3), 0);
+        assert_eq!((wheel_rows(&mut rem, 12, 3), rem), (-1, 24), "and a row is paid out when the slivers add up");
+        let mut down = 0;
+        let total: i32 = (0..40).map(|_| wheel_rows(&mut down, -12, 3)).sum();
+        assert_eq!(total, 12, "40 slivers of a tenth notch are 4 notches of 3 rows");
+    }
+
+    #[test]
+    fn the_minimum_window_size_scales_with_the_dpi() {
+        assert_eq!(min_track_size(96.0), (640, 400));
+        assert_eq!(min_track_size(192.0), (1280, 800));
+    }
+
+    #[test]
     fn a_run_names_every_field_the_swap_moves() {
         let mut a = Run::default();
         let mut b = Run::default();
@@ -1783,7 +1844,7 @@ mod tests {
         std::mem::swap(&mut a, &mut b);
         assert!(!a.background && b.background);
         // Naming every field means a new one fails to compile until this test covers it.
-        let Run { progress: _, rx: _, preview: _, background: _, watch: _, dir_pending: _, dir_failed: _, procs: _ } = &a;
+        let Run { progress: _, rx: _, preview: _, background: _, live_rescan: _, watch: _, dir_pending: _, dir_failed: _, procs: _ } = &a;
     }
 
     #[test]
@@ -1800,8 +1861,9 @@ mod tests {
 
     #[test]
     fn summary_lists_scanner_counts_skips_and_notes() {
-        let s = summary(Used::Mft, 1234, Duration::from_millis(2500), Some(923), Some(3), Some("note"));
-        assert_eq!(s, "MFT scan: 1,234 files in 2.5s, 92.3% of the used space, 3 records skipped (note)");
-        assert_eq!(summary(Used::Walk, 5, Duration::from_secs(1), None, None, None), "Directory walk: 5 files in 1.0s");
+        let s = summary(Used::Mft, 1234, Duration::from_millis(2500), Some(923), Some(3), 2, Some("note"));
+        assert_eq!(s, "MFT scan: 1,234 files in 2.5s, 92.3% of the used space, 3 records skipped, 2 folders unreadable (note)");
+        assert_eq!(summary(Used::Walk, 5, Duration::from_secs(1), None, None, 0, None), "Directory walk: 5 files in 1.0s");
+        assert_eq!(summary(Used::Walk, 5, Duration::from_secs(1), None, None, 1, None), "Directory walk: 5 files in 1.0s, 1 folder unreadable");
     }
 }

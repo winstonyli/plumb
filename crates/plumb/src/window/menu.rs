@@ -1,5 +1,6 @@
 //! The row context menu and the shell actions behind it (reveal, properties, copy).
 use super::*;
+use crate::outcome::{Failure, Outcome};
 
 pub(super) const CMD_REVEAL: usize = 1;
 
@@ -104,9 +105,9 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
         let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, Some(0), hwnd, None);
         let _ = DestroyMenu(menu);
         match cmd.0 as usize {
-            CMD_REVEAL => reveal(&path),
-            CMD_COPY => copy_to_clipboard(hwnd, &paths.join("\r\n")),
-            CMD_PROPS => properties(&path),
+            CMD_REVEAL => shell_result("reveal", &path, reveal(&path)),
+            CMD_COPY => copy_rows(hwnd, &paths.join("\r\n")),
+            CMD_PROPS => shell_result("show properties of", &path, properties(&path)),
             CMD_WHO => {
                 // Restart Manager can be slow: ask on a worker, answer by message.
                 let owner = hwnd.0 as isize;
@@ -151,12 +152,33 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
     }
 }
 
-pub(super) fn reveal(path: &str) {
-    let args = wide(&format!("/select,\"{path}\""));
-    unsafe { ShellExecuteW(None, w!("open"), w!("explorer.exe"), PCWSTR(args.as_ptr()), PCWSTR::null(), SW_SHOWNORMAL) };
+/// Shows `outcome` as the toast; called with no borrow held.
+pub(super) fn say(outcome: Outcome) {
+    with(|w| {
+        w.app.report(outcome);
+        w.sync_timers();
+        w.invalidate();
+    });
 }
 
-pub(super) fn properties(path: &str) {
+/// Reports a failed shell action on `path` as the shared "could not <verb> <path>: why" line.
+fn shell_result(verb: &str, path: &str, result: std::result::Result<(), String>) {
+    if let Err(why) = result {
+        say(Failure::new(verb, verb, &[(path.to_string(), why)], 1, "").outcome(""));
+    }
+}
+
+fn reveal(path: &str) -> std::result::Result<(), String> {
+    if !std::path::Path::new(path).exists() {
+        return Err("it no longer exists".into());
+    }
+    let args = wide(&format!("/select,\"{path}\""));
+    // `ShellExecuteW` reports success with a value above 32.
+    let r = unsafe { ShellExecuteW(None, w!("open"), w!("explorer.exe"), PCWSTR(args.as_ptr()), PCWSTR::null(), SW_SHOWNORMAL) };
+    if r.0 as isize > 32 { Ok(()) } else { Err(format!("Explorer did not start (code {})", r.0 as isize)) }
+}
+
+fn properties(path: &str) -> std::result::Result<(), String> {
     let p = wide(path);
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
@@ -166,24 +188,33 @@ pub(super) fn properties(path: &str) {
         nShow: SW_SHOW.0,
         ..Default::default()
     };
-    let _ = unsafe { ShellExecuteExW(&mut info) };
+    unsafe { ShellExecuteExW(&mut info) }.map_err(|e| e.message())
 }
 
-pub(super) fn copy_to_clipboard(hwnd: HWND, text: &str) {
+/// Copies `text` and says "copied N items", or why it could not.
+pub(super) fn copy_rows(hwnd: HWND, text: &str) {
+    say(match copy_to_clipboard(hwnd, text) {
+        Ok(()) => Outcome::ok(format!("copied {}", crate::fmt::noun(text.lines().count() as u64, "item", "items"))),
+        Err(why) => Outcome::problem(format!("could not copy: {why}")),
+    });
+}
+
+pub(super) fn copy_to_clipboard(hwnd: HWND, text: &str) -> std::result::Result<(), String> {
     let u = wide(text);
     unsafe {
-        if OpenClipboard(Some(hwnd)).is_err() {
-            return;
-        }
+        OpenClipboard(Some(hwnd)).map_err(|_| "another program is using the clipboard".to_string())?;
         let _ = EmptyClipboard();
-        if let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, u.len() * 2) {
+        let result = (|| {
+            let h = GlobalAlloc(GMEM_MOVEABLE, u.len() * 2).map_err(|e| e.message())?;
             let p = GlobalLock(h) as *mut u16;
-            if !p.is_null() {
-                std::ptr::copy_nonoverlapping(u.as_ptr(), p, u.len());
-                let _ = GlobalUnlock(h);
-                let _ = SetClipboardData(13, Some(HANDLE(h.0))); // CF_UNICODETEXT
+            if p.is_null() {
+                return Err("out of memory".to_string());
             }
-        }
+            std::ptr::copy_nonoverlapping(u.as_ptr(), p, u.len());
+            let _ = GlobalUnlock(h);
+            SetClipboardData(13, Some(HANDLE(h.0))).map(|_| ()).map_err(|e| e.message()) // CF_UNICODETEXT
+        })();
         let _ = CloseClipboard();
+        result
     }
 }
