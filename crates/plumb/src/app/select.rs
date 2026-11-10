@@ -156,7 +156,7 @@ impl App {
         let (mut todo, mut refused) = (Vec::new(), Vec::new());
         for (&id, _) in top.iter().zip(&marked).filter(|(_, m)| !**m) {
             match self.mark_state(id) {
-                MarkState::Refused(why) => refused.push(why),
+                MarkState::Refused(why) => refused.push((tree.path(id), why.to_string())),
                 _ => todo.push(tree.path(id)),
             }
         }
@@ -166,12 +166,8 @@ impl App {
         if !todo.is_empty() {
             self.basket_rev += 1;
         }
-        if let Some(why) = refused.first() {
-            self.outcome = Outcome::problem(if todo.is_empty() && refused.len() == 1 {
-                format!("cannot mark: {why}")
-            } else {
-                format!("{} not marked: {why}", refused.len())
-            });
+        if !refused.is_empty() {
+            self.refuse_mark(&refused, refused.len() + todo.len());
         }
     }
 
@@ -433,7 +429,7 @@ mod tests {
         press(&mut a, 0, NONE); // the drive root
         a.handle(Input::Edit(Edit::Delete));
         assert!(a.basket().is_empty());
-        assert!(status_str(&a, true).starts_with("cannot mark: it is a drive root"), "{}", status_str(&a, true));
+        assert!(status_str(&a, true).starts_with("could not mark ") && status_str(&a, true).contains(": it is a drive root"), "{}", status_str(&a, true));
         a.handle(Input::Edit(Edit::SelectAll)); // everything, root included: the root covers all, and is refused
         a.handle(Input::Edit(Edit::Delete));
         assert!(a.basket().is_empty(), "Ctrl+A then Del at a drive root marks nothing");
@@ -443,7 +439,7 @@ mod tests {
         a.slot.scan = Scan::Refreshing; // marks are refused while a scan runs
         a.handle(Input::Edit(Edit::Delete));
         assert!(a.basket().is_empty());
-        assert!(status_str(&a, true).starts_with("2 not marked: the drive is being scanned"), "{}", status_str(&a, true));
+        assert!(status_str(&a, true).starts_with("2 of 2 not marked: the drive is being scanned"), "{}", status_str(&a, true));
     }
 
     #[test]

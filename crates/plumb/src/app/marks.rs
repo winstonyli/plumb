@@ -72,10 +72,16 @@ impl App {
         basket::refusal(tree, id, &self.system_root).map_or(MarkState::Mark, MarkState::Refused)
     }
 
+    /// Reports `failed` (path, reason) of `total` items that could not be marked.
+    pub(super) fn refuse_mark(&mut self, failed: &[(String, String)], total: usize) {
+        self.outcome = Failure::new("mark", "marked", failed, total, "").outcome("");
+    }
+
     /// Marks or unmarks `id`; a refusal goes to the status line.
     pub fn toggle_mark(&mut self, id: NodeId) {
         if let MarkState::Refused(why) = self.mark_state(id) {
-            self.outcome = Outcome::problem(format!("cannot mark: {why}"));
+            let path = self.slot.tree.as_ref().map(|t| t.path(id)).unwrap_or_default();
+            self.refuse_mark(&[(path, why.to_string())], 1);
             return;
         }
         let Some(path) = self.slot.tree.as_ref().map(|t| t.path(id)) else { return };
@@ -170,7 +176,10 @@ impl App {
         if ids.is_empty() {
             self.clear_basket();
             self.outcome = match self.skipped.first() {
-                Some((_, why)) => Outcome::default().and(&format!("{} skipped: {why}", fmt::noun(self.skipped.len() as u64, "marked item", "marked items")), self.skipped_detail()),
+                Some(_) => {
+                    let failed: Vec<(String, String)> = self.skipped.drain(..).map(|(p, why)| (p, why.to_string())).collect();
+                    Failure::new("delete", "deleted", &failed, failed.len(), "").outcome("")
+                }
                 None => Outcome::problem("the marked items are already gone"),
             };
             return None;

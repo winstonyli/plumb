@@ -2821,9 +2821,9 @@ Test GPU", status_str(&a, true))));
         assert_eq!(a.mark_state(root), MarkState::Refused("it is a drive root"));
         a.toggle_mark(root);
         assert!(a.basket().is_empty());
-        assert!(status_str(&a, true).starts_with("cannot mark: it is a drive root"), "{}", status_str(&a, true));
+        assert!(status_str(&a, true).starts_with("could not mark ") && status_str(&a, true).contains(": it is a drive root"), "{}", status_str(&a, true));
         a.handle(Input::Click(5.0, a.layout.header().y + 5.0, Default::default())); // any click clears the notice
-        assert!(!status_str(&a, true).starts_with("cannot mark"));
+        assert!(!status_str(&a, true).starts_with("could not mark"));
         let (file, ..) = picks(&a);
         a.slot.scan = Scan::Refreshing;
         assert_eq!(a.mark_state(file), MarkState::Refused("the drive is being scanned"));
@@ -2895,7 +2895,7 @@ Test GPU", status_str(&a, true))));
         a.toggle_mark(bad);
         a.system_root = a.slot.tree.as_ref().unwrap().path(bad);
         assert!(a.commit_request().is_none());
-        assert!(a.outcome.line.starts_with("1 marked item skipped"), "{}", a.outcome.line);
+        assert!(a.outcome.line.starts_with("could not delete ") && a.outcome.line.ends_with(": the Windows folder is protected"), "{}", a.outcome.line);
         assert!(a.basket().is_empty());
     }
 
