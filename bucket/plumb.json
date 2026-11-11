@@ -1,11 +1,11 @@
 {
-    "version": "0.11.0",
+    "version": "0.12.0",
     "description": "Fast disk-usage explorer for Windows.",
     "homepage": "https://github.com/winstonyli/plumb",
     "license": "MIT|Apache-2.0",
-    "url": "https://github.com/winstonyli/plumb/releases/download/v0.11.0/plumb-v0.11.0-windows-x64.zip",
-    "hash": "229d20481875611e7296b542fabc1e9317091eaa0a2365319f7f17706ab5e43f",
-    "extract_dir": "plumb-v0.11.0-windows-x64",
+    "url": "https://github.com/winstonyli/plumb/releases/download/v0.12.0/plumb-v0.12.0-windows-x64.zip",
+    "hash": "a6672f64f16b5b05e10cc570dff5bdf743ac8d6fe06be0687337f09f39a44873",
+    "extract_dir": "plumb-v0.12.0-windows-x64",
     "bin": "plumb.exe",
     "shortcuts": [
         [
