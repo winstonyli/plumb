@@ -2,6 +2,43 @@
 
 All notable changes to plumb. Format follows [Common Changelog](https://common-changelog.org/) from 0.10.0 on (older entries are in Keep a Changelog form); all crates share one version and are bumped together at each tag.
 
+## 0.12.0 - 2026-11-11
+
+### Changed
+
+- Show the status text once: the selection line is the path alone (a set reads "N selected, X", with a real total), the scan line drops the file and byte counts the root row shows, the banner alone says that live updates stopped, and the Processes line names the metric instead of repeating the root row's total ([b3a2eb9](https://github.com/winstonyli/plumb/commit/b3a2eb9), [7e208c4](https://github.com/winstonyli/plumb/commit/7e208c4))
+- Widen the narrowest a column can be dragged from 50 to 64 DIP, so the Size column no longer cuts off sizes such as "999.9 GB" ([9ec96ee](https://github.com/winstonyli/plumb/commit/9ec96ee))
+- Report an action's outcome in a toast that floats over the list, times out (4 s for good news, 10 s for a problem) and goes away on a click or Esc, instead of the status line ([56ace25](https://github.com/winstonyli/plumb/commit/56ace25))
+- Word every refusal and failure the same way in the status line, menus and dialogs: one phrase per refusal, one "could not ..." form ([8f6c4bf](https://github.com/winstonyli/plumb/commit/8f6c4bf), [a08b0ba](https://github.com/winstonyli/plumb/commit/a08b0ba), [43ec9f6](https://github.com/winstonyli/plumb/commit/43ec9f6))
+- Show the root row's % of parent as what the scan found against the drive's used space, not 100% of itself ([388b80d](https://github.com/winstonyli/plumb/commit/388b80d))
+- Poll the Processes view every 2 s while the window is not in front ([e997c15](https://github.com/winstonyli/plumb/commit/e997c15))
+- Work out every date and age on the local calendar from a last-write time kept in seconds ([5b87662](https://github.com/winstonyli/plumb/commit/5b87662))
+
+### Added
+
+- Select several rows: Shift or Ctrl click, Shift+arrows, Ctrl+A and dragging over rows; the picked rows are highlighted and the status line counts them ([6ddb883](https://github.com/winstonyli/plumb/commit/6ddb883), [b670dec](https://github.com/winstonyli/plumb/commit/b670dec))
+- Act on the whole selection: Del and Ctrl+C work on every picked row, and the row menu offers Mark or Unmark selected and Copy paths ([dd9aabd](https://github.com/winstonyli/plumb/commit/dd9aabd), [db9744e](https://github.com/winstonyli/plumb/commit/db9744e))
+- Add keyboard parity with Explorer: Enter opens or closes a folder, Backspace goes to the parent, F5 scans again, Shift+F10 and the Apps key open the row menu, and Alt+Space opens the window menu ([bd9e6fe](https://github.com/winstonyli/plumb/commit/bd9e6fe), [b1d0e26](https://github.com/winstonyli/plumb/commit/b1d0e26), [c141c36](https://github.com/winstonyli/plumb/commit/c141c36))
+- End a process, or a process and its descendants, from the row menu after one confirmation that lists any that could not be ended ([c323944](https://github.com/winstonyli/plumb/commit/c323944), [79ed47e](https://github.com/winstonyli/plumb/commit/79ed47e))
+- Suspend and resume a process or a whole process tree from the row menu; a suspended process shows a tag ([e39b49e](https://github.com/winstonyli/plumb/commit/e39b49e), [00e3fcb](https://github.com/winstonyli/plumb/commit/00e3fcb))
+- Show attributes as tags beside a name (denied, protected, suspended, link, hardlink, system, cloud, elevated), with the meanings in the row tooltip ([19815d3](https://github.com/winstonyli/plumb/commit/19815d3), [dcce060](https://github.com/winstonyli/plumb/commit/dcce060), [e3331de](https://github.com/winstonyli/plumb/commit/e3331de), [b13ad09](https://github.com/winstonyli/plumb/commit/b13ad09))
+- Tint the rows that live updates changed and fade them over two seconds ([4567dc2](https://github.com/winstonyli/plumb/commit/4567dc2))
+- Count the folders a scan could not list and say so in the summary ([7406361](https://github.com/winstonyli/plumb/commit/7406361))
+- Report a failed Reveal, Properties, Copy or rescan, and keep the window from shrinking below a usable size; the wheel scrolls by the system's lines-per-notch setting ([7406361](https://github.com/winstonyli/plumb/commit/7406361))
+- Copy the path and every holder from the Who is using this dialog, and the failure text from the failed-delete dialog ([e8a6456](https://github.com/winstonyli/plumb/commit/e8a6456), [f381706](https://github.com/winstonyli/plumb/commit/f381706))
+- Describe what plumb is and how to install and build it in the README ([ae313dc](https://github.com/winstonyli/plumb/commit/ae313dc))
+
+### Fixed
+
+- Keep a row drag alive when the mouse buttons are swapped, and end it when the button is released over another window ([8137914](https://github.com/winstonyli/plumb/commit/8137914), [d63d5d7](https://github.com/winstonyli/plumb/commit/d63d5d7))
+
+### Internal
+
+- Add headless checks for the keyboard (`--selftest-keys`) and for feedback (`--selftest-feedback`), run from one flag table, and make the selftests' processes die with a failing run ([2dcf715](https://github.com/winstonyli/plumb/commit/2dcf715), [2962b3f](https://github.com/winstonyli/plumb/commit/2962b3f), [4bf4f07](https://github.com/winstonyli/plumb/commit/4bf4f07))
+- Replace the Source enum with a `Follow` trait, share one `Paced` for the live and preview pacing, and give a scan one phase enum instead of two flags kept in step by hand ([50bdb66](https://github.com/winstonyli/plumb/commit/50bdb66), [af4f27f](https://github.com/winstonyli/plumb/commit/af4f27f), [c9784f5](https://github.com/winstonyli/plumb/commit/c9784f5))
+- Build every report from one `Outcome`, `Failure` and `Reason`, and give the selection line, the map tooltip and the row tooltip one `Description` ([a08b0ba](https://github.com/winstonyli/plumb/commit/a08b0ba), [c50cbda](https://github.com/winstonyli/plumb/commit/c50cbda), [b13ad09](https://github.com/winstonyli/plumb/commit/b13ad09))
+- Move multi-select into `app/select.rs` and the row model, with a plan and spec for each ([eae2620](https://github.com/winstonyli/plumb/commit/eae2620), [52ac4a0](https://github.com/winstonyli/plumb/commit/52ac4a0))
+
 ## 0.11.0 - 2026-10-31
 
 ### Added
