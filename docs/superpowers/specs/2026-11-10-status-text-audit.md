@@ -46,5 +46,5 @@ This is `a1` in the 2026-11-10 discussion; it removes D1 and D2 by deleting `siz
 ## Open
 
 - **Decided 2026-11-10 (a1):** a multi-selection line reads "N selected, X" with X the real total (picked rows with no picked ancestor, `topmost()`); the "misleading" bullet above is fixed.
-- **Checked 2026-11-10 (n1):** at the 50 DIP minimum the Size cell is 42 DIP wide and clips (CLIP option). Measured Body widths: "1.0 KB" 35, "999.9 GB" 51, "512.3 MB" 54, "1,023.9 GB" 61. So values from about 100 MB up are cut at the minimum; removing size from the selection line would hide it there (the tooltip still has it). Still open: raise `MIN_COL_W` to about 64, or keep the size in the line.
-- Whether the summary should keep "N files": it is the only place a finished scan states how many files it counted, since Items counts folders' contents per row.
+- **Checked 2026-11-10 (n1):** at the 50 DIP minimum the Size cell is 42 DIP wide and clips (CLIP option). Measured Body widths: "1.0 KB" 35, "999.9 GB" 51, "512.3 MB" 54, "1,023.9 GB" 61. So values from about 100 MB up are cut at the minimum; removing size from the selection line would hide it there (the tooltip still has it). Decided (b1): `MIN_COL_W` 50 -> 64, so the 56 DIP cell fits "999.9 GB" (51).
+- **Decided (b3, as recommended): keep "N files" in the summary**; it is the only place a finished scan states its file count, and the root row counts items, not files.

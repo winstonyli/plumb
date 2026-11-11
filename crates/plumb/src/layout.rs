@@ -49,7 +49,7 @@ pub const INDENT: f32 = 20.0;
 /// Starting widths of the Size, % of parent, Items and Modified columns; Name takes the rest.
 pub const COL_W: [f32; 4] = [100.0, 130.0, 90.0, 96.0];
 /// Narrowest a dragged column may get, and narrowest the Name column may be squeezed.
-pub const MIN_COL_W: f32 = 50.0;
+pub const MIN_COL_W: f32 = 64.0;
 pub const MIN_NAME_W: f32 = 120.0;
 /// Half-width of the grab zone around a column's left edge in the header.
 const GRIP: f32 = 4.0;
