@@ -1339,7 +1339,10 @@ impl App {
             return false;
         }
         if n > 1 {
-            let _ = write!(out, "{n} selected   |   ");
+            // A set is told by its count and total; a picked folder and a picked file under it count once.
+            let total: u64 = self.topmost().iter().map(|&i| tree.subtree_size[i]).sum();
+            let _ = write!(out, "{n} selected, {}", self.kind().size_text(self.slot.proc_metric, total));
+            return true;
         }
         self.describe_sized(tree, id, tree.subtree_size[id]).write_line(full, out);
         true
@@ -1980,7 +1983,19 @@ mod tests {
         a.handle(Input::Edit(Edit::SelectAll));
         let line = a.selection(true).unwrap();
         let n = a.slot.model.as_ref().unwrap().picked_count();
-        assert!(n > 1 && line.starts_with(&format!("{n} selected   |   ")), "{line:?}");
+        let tree = a.slot.tree.as_ref().unwrap();
+        let root = fmt::size(tree.subtree_size[tree.roots[0]]);
+        assert!(n > 1 && line == format!("{n} selected, {root}"), "the root and every row under it count once: {line:?}");
+        // Two siblings add up.
+        let (x, y) = { let t = a.slot.tree.as_ref().unwrap(); let kids: Vec<NodeId> = t.children(t.roots[0]).take(2).collect(); (kids[0], kids[1]) };
+        let want = fmt::size(a.slot.tree.as_ref().unwrap().subtree_size[x] + a.slot.tree.as_ref().unwrap().subtree_size[y]);
+        {
+            let m = a.slot.model.as_mut().unwrap();
+            m.select(x);
+            m.toggle_pick(y);
+        }
+        let line = a.selection(true).unwrap();
+        assert!(line.ends_with(&format!(", {want}")) && line.starts_with("2 selected"), "{line:?} wants {want}");
     }
 
     fn scanned() -> App {
