@@ -68,38 +68,17 @@ pub fn process<'a>(tree: &'a Tree, id: NodeId, size: Show<'static>, metric: &'st
 }
 
 impl Description<'_> {
-    fn write_who(&self, out: &mut String) {
+    /// The selection line: who alone. The row beside it owns the size, the item count and the attribute tags.
+    pub fn write_line(&self, out: &mut String) {
         let _ = match self.pid {
             Some(pid) => write!(out, "{}  (PID {pid})", self.who),
             None => write!(out, "{}", self.who),
         };
     }
 
-    /// The selection line: the size and item count (led by the path when `with_who`; a process is always named), then
-    /// the attributes.
-    pub fn write_line(&self, with_who: bool, out: &mut String) {
-        if self.pid.is_some() {
-            self.write_who(out);
-            out.push_str("  ");
-        } else if with_who {
-            self.write_who(out);
-            out.push_str("  (");
-        }
-        let _ = write!(out, "{}", self.size);
-        if let Some(items) = &self.items {
-            let _ = write!(out, ", {items}");
-        }
-        if self.pid.is_none() && with_who {
-            out.push(')');
-        }
-        if !self.attrs.is_empty() {
-            let _ = write!(out, "  {}", self.attrs.words());
-        }
-    }
-
     /// The tooltip: who, then the facts, the executable, and the attributes (as words, or with `meanings` one a line).
     pub fn write_tip(&self, meanings: bool, out: &mut String) {
-        self.write_who(out);
+        self.write_line(out);
         let _ = write!(out, "\n{}", self.size);
         if let Some((metric, scope)) = self.scope {
             let _ = write!(out, " {metric} in {scope}");
@@ -127,9 +106,9 @@ impl Description<'_> {
     }
 
     #[cfg(test)]
-    pub fn line(&self, with_who: bool) -> String {
+    pub fn line(&self) -> String {
         let mut s = String::new();
-        self.write_line(with_who, &mut s);
+        self.write_line(&mut s);
         s
     }
 
@@ -148,12 +127,11 @@ mod tests {
     use plumb_core::synth::flat_tree;
 
     #[test]
-    fn a_file_reads_the_same_in_the_selection_line_and_the_tip() {
+    fn a_file_is_its_path_in_the_selection_line_and_the_path_and_size_in_the_tip() {
         let tree = flat_tree(3);
         let d = file(&tree, NodeId(1), 2048, 150_000, Attrs::default());
         let path = fmt::node_path(&tree, NodeId(1)).to_string();
-        assert_eq!(d.line(true), format!("{path}  (2.0 KB)"));
-        assert_eq!(d.line(false), "2.0 KB");
+        assert_eq!(d.line(), path);
         assert_eq!(d.tip(false), format!("{path}\n2.0 KB"));
     }
 
@@ -164,14 +142,13 @@ mod tests {
         let d = Description { pid: Some(77), scope: Some(("memory", "this process")), numbers: Some((5, 2048)), exe: info.path.as_deref(), ..file(&tree, NodeId(1), 4096, 1, Attrs::default()) };
         let name = fmt::node_path(&tree, NodeId(1)).to_string();
         assert_eq!(d.tip(false), format!("{name}  (PID 77)\n4.0 KB memory in this process; own CPU 0.5%, I/O 2.0 KB/s\nC:\\Windows\\ping.exe"));
-        assert_eq!(d.line(false), format!("{name}  (PID 77)  4.0 KB"), "a process is always named");
+        assert_eq!(d.line(), format!("{name}  (PID 77)"));
     }
 
     #[test]
     fn attributes_follow_the_facts_as_words_or_as_meanings() {
         let tree = flat_tree(3);
         let d = Description { attrs: Attrs::of_list(&[Attr::System, Attr::Cloud]), ..file(&tree, NodeId(1), 1, 1, Attrs::default()) };
-        assert!(d.line(true).ends_with("  system, cloud"), "{}", d.line(true));
         assert!(d.tip(false).ends_with("\nsystem, cloud"));
         let t = d.tip(true);
         assert!(t.contains("\nsystem: ") && t.contains("\ncloud: ") && !t.ends_with("system, cloud"), "{t}");

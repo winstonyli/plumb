@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # Status text audit: who says what
@@ -48,3 +48,13 @@ This is `a1` in the 2026-11-10 discussion; it removes D1 and D2 by deleting `siz
 - **Decided 2026-11-10 (a1):** a multi-selection line reads "N selected, X" with X the real total (picked rows with no picked ancestor, `topmost()`); the "misleading" bullet above is fixed.
 - **Checked 2026-11-10 (n1):** at the 50 DIP minimum the Size cell is 42 DIP wide and clips (CLIP option). Measured Body widths: "1.0 KB" 35, "999.9 GB" 51, "512.3 MB" 54, "1,023.9 GB" 61. So values from about 100 MB up are cut at the minimum; removing size from the selection line would hide it there (the tooltip still has it). Decided (b1): `MIN_COL_W` 50 -> 64, so the 56 DIP cell fits "999.9 GB" (51).
 - **Decided (b3, as recommended): keep "N files" in the summary**; it is the only place a finished scan states its file count, and the root row counts items, not files.
+
+## Outcome (c1, 2026-11-10)
+
+Built as proposed, with the open questions as decided above:
+
+- D1, D2: the selection line is the path alone (a process: name and PID); `Description::write_line` lost its size, items and attribute words, and the `with_who` form is gone.
+- D3: while a scan runs, the line says `N folders` once a tree is listed (files and bytes are the root row's); before the first tree it keeps the full counts.
+- D4: unchanged by decision b3.
+- D5: row 2 leaves out "live updates stopped" while the banner is up; the status tooltip keeps it.
+- D6: row 2 reads `N processes, sized by <metric>`; the total is the root row's.

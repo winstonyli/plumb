@@ -794,13 +794,12 @@ impl App {
         }
     }
 
-    /// The Processes status line: how many processes, and what the map's metric adds up to over all of them (so the
-    /// total says what it counts, and only Private bytes can honestly be set beside the machine's RAM).
+    /// The Processes status line: how many processes, and what the Size column counts. The total is the root row's.
     fn write_process_status(&self, out: &mut String) -> bool {
-        let Some(tree) = self.slot.tree.as_ref() else { return false };
-        let Some(&root) = tree.roots.first() else { return false };
-        let total = tree.subtree_size[root];
-        let _ = write!(out, "{}, {} {}", fmt::noun(self.slot.proc_info.len() as u64, "process", "processes"), self.kind().size_text(self.slot.proc_metric, total), metric_noun(self.slot.proc_metric));
+        if self.slot.tree.as_ref().is_none_or(|t| t.roots.is_empty()) {
+            return false;
+        }
+        let _ = write!(out, "{}, sized by {}", fmt::noun(self.slot.proc_info.len() as u64, "process", "processes"), metric_noun(self.slot.proc_metric));
         true
     }
 
@@ -1312,11 +1311,11 @@ impl App {
             Scan::Idle | Scan::Refreshing => out.push_str("No drive selected\nSelect a drive above to scan it."),
             Scan::Running { view, .. } if self.views[*view].kind == ViewKind::Processes => out.push_str("Reading processes\u{2026}"),
             Scan::Running { view, dirs, files, bytes, .. } => {
-                let _ = write!(
-                    out,
-                    "Scanning {}  {}, {}, {}",
-                    self.views[*view].title(), fmt::noun(*dirs, "folder", "folders"), fmt::noun(*files, "file", "files"), fmt::size(*bytes)
-                );
+                // Once a tree is listed, its root row already counts the files and bytes: only the folders are news.
+                let _ = write!(out, "Scanning {}  {}", self.views[*view].title(), fmt::noun(*dirs, "folder", "folders"));
+                if self.slot.tree.is_none() {
+                    let _ = write!(out, ", {}, {}", fmt::noun(*files, "file", "files"), fmt::size(*bytes));
+                }
             }
             Scan::Failed(m) => {
                 let _ = write!(out, "Scan failed\n{m}");
@@ -1325,14 +1324,14 @@ impl App {
         }
     }
 
-    /// The selected row's size and (for a folder) item count, led by its full path when `full`; first in the status line.
-    fn selection(&self, full: bool) -> Option<String> {
+    /// The selected row's full path (a process: its name and PID), or a set's count and total; first in the status line.
+    fn selection(&self) -> Option<String> {
         let mut s = String::new();
-        self.write_selection(full, &mut s).then_some(s)
+        self.write_selection(&mut s).then_some(s)
     }
 
     /// Writes [`App::selection`]; false (writing nothing) when no row is picked. A set leads with how many rows are in it.
-    fn write_selection(&self, full: bool, out: &mut String) -> bool {
+    fn write_selection(&self, out: &mut String) -> bool {
         let (Some(tree), Some(m)) = (self.slot.tree.as_ref(), self.slot.model.as_ref()) else { return false };
         let (Some(id), n) = (m.selected(), m.picked_count()) else { return false };
         if n == 0 {
@@ -1344,7 +1343,7 @@ impl App {
             let _ = write!(out, "{n} selected, {}", self.kind().size_text(self.slot.proc_metric, total));
             return true;
         }
-        self.describe_sized(tree, id, tree.subtree_size[id]).write_line(full, out);
+        self.describe_sized(tree, id, tree.subtree_size[id]).write_line(out);
         true
     }
 
@@ -1367,7 +1366,7 @@ impl App {
         if with_selection {
             let mark = out.len();
             sep(out);
-            if !self.write_selection(full, out) {
+            if !self.write_selection(out) {
                 out.truncate(mark);
             }
         }
@@ -1399,10 +1398,12 @@ impl App {
                     _ => out.push_str("live"),
                 }
             }
-            LiveStatus::Stale(_) => {
+            // The banner says it, with the reason; the tooltip, which has no banner, keeps the words.
+            LiveStatus::Stale(_) if full => {
                 sep(out);
                 out.push_str("live updates stopped");
             }
+            LiveStatus::Stale(_) => {}
         }
         if self.slot.refreshing() {
             sep(out);
@@ -1437,7 +1438,7 @@ impl App {
         let (message, status, banner) = (self.message(), self.state_line(), self.banner());
         let held = self.held_text();
         let toast = self.toast.lines();
-        let selection = self.selection(true).unwrap_or_default();
+        let selection = self.selection().unwrap_or_default();
         let basket_label = self.basket_label();
         let running = matches!(self.slot.scan, Scan::Running { .. });
         let count = self.filter_count();
@@ -1833,7 +1834,7 @@ mod tests {
     fn the_process_status_line_totals_what_the_metric_counts() {
         let (mut a, _) = process_app();
         a.set_procs(2, HashMap::from([(77u32, ProcInfo::default())]), (16 << 30, 3 << 30));
-        assert!(status_str(&a, true).ends_with(&format!("1 process, {} memory", fmt::size(4096))), "{}", status_str(&a, true));
+        assert!(status_str(&a, true).ends_with("1 process, sized by memory"), "{}", status_str(&a, true));
         assert_eq!(a.views[2].free, 3 << 30, "the chip follows the machine's free memory");
     }
 
@@ -1841,7 +1842,7 @@ mod tests {
     fn a_process_row_names_its_pid_and_its_menu_acts_on_its_executable() {
         let (mut a, id) = process_app();
         a.slot.model.as_mut().unwrap().select(id);
-        assert!(a.selection(true).unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection(true));
+        assert!(a.selection().unwrap().starts_with("ping.exe  (PID 77)"), "{:?}", a.selection());
         assert_eq!(a.menu_target(id).map(|t| t.1), Some(String::new()), "no executable known: a menu with no path");
         a.set_procs(2, HashMap::from([(77, ProcInfo { path: Some("C:\\Windows\\ping.exe".into()), created: 0, handles: 0, suspended: false, elevated: false })]), (1, 1));
         let (raw, path, mark, who) = a.menu_target(id).unwrap();
@@ -1877,7 +1878,7 @@ mod tests {
         a.set_procs(2, info(true), (1, 1));
         assert!(a.pause_target(id).is_some_and(|t| t.1), "Resume is offered");
         a.slot.model.as_mut().unwrap().select(id);
-        assert!(a.selection(true).unwrap().ends_with("  suspended"), "{:?}", a.selection(true));
+        assert!(!a.selection().unwrap().contains("suspended"), "the row's tag says it, the line does not: {:?}", a.selection());
         let root = a.slot.model.as_ref().unwrap().rows()[0].id;
         assert!(a.pause_target(root).is_none(), "the root is pid 0");
     }
@@ -1979,9 +1980,9 @@ mod tests {
             m.select(r[0]);
             m.toggle_pick(r[0]);
         }
-        assert_eq!(a.selection(true), None, "focus without a pick");
+        assert_eq!(a.selection(), None, "focus without a pick");
         a.handle(Input::Edit(Edit::SelectAll));
-        let line = a.selection(true).unwrap();
+        let line = a.selection().unwrap();
         let n = a.slot.model.as_ref().unwrap().picked_count();
         let tree = a.slot.tree.as_ref().unwrap();
         let root = fmt::size(tree.subtree_size[tree.roots[0]]);
@@ -1994,7 +1995,7 @@ mod tests {
             m.select(x);
             m.toggle_pick(y);
         }
-        let line = a.selection(true).unwrap();
+        let line = a.selection().unwrap();
         assert!(line.ends_with(&format!(", {want}")) && line.starts_with("2 selected"), "{line:?} wants {want}");
     }
 
@@ -2028,7 +2029,7 @@ mod tests {
     /// The status line minus the selection details that lead it.
     fn status_tail(a: &App) -> String {
         let s = status_str(a, true);
-        match a.selection(true) {
+        match a.selection() {
             Some(sel) => s.strip_prefix(&sel).map_or(s.clone(), |t| t.strip_prefix("   |   ").unwrap_or(t).to_string()),
             None => s,
         }
@@ -2098,6 +2099,16 @@ mod tests {
         a.switch_slot(&mut away);
         assert!(!a.filter_installed() && a.filter_dirty()); // asks for a fresh run on the returning tree
         assert_eq!(a.total_rows(), all);
+    }
+
+    #[test]
+    fn the_scan_line_counts_files_and_bytes_only_until_the_tree_lists_them() {
+        let mut a = app();
+        a.begin_scan(0);
+        a.slot.scan = Scan::Running { view: 0, dirs: 3, files: 40, bytes: 2048, paused: false };
+        assert!(a.message().ends_with("3 folders, 40 files, 2.0 KB"), "{}", a.message());
+        a.slot.tree = Some(kary_builder(30, 3).finish().unwrap());
+        assert!(a.message().ends_with("3 folders"), "the root row has the rest: {}", a.message());
     }
 
     #[test]
@@ -2449,13 +2460,7 @@ mod tests {
         let id = a.slot.model.as_ref().unwrap().rows()[1].id;
         a.slot.model.as_mut().unwrap().select(id);
         let tree = a.slot.tree.as_ref().unwrap();
-        let want = format!(
-            "{}  ({}, {} items)   |   done",
-            fmt::node_path(tree, id),
-            fmt::size(tree.subtree_size[id]),
-            fmt::count(tree.subtree_files[id] as u64)
-        );
-        assert_eq!(status_str(&a, true), want);
+        assert_eq!(status_str(&a, true), format!("{}   |   done", fmt::node_path(tree, id)), "the path alone: the row has the size and items");
     }
 
     #[test]
@@ -2470,6 +2475,7 @@ mod tests {
         a.set_live(LiveStatus::Stale("x".into()));
         a.live_changed("12:04:00".into());
         assert!(status_str(&a, true).contains("live updates stopped") && !status_str(&a, true).contains("12:04"));
+        assert!(!status_str(&a, false).contains("live updates stopped"), "the banner says it");
     }
 
     #[test]
@@ -2480,9 +2486,9 @@ mod tests {
         a.set_live(LiveStatus::On { last: None });
         a.live_changed("12:03:41".into());
         let tree = a.slot.tree.as_ref().unwrap();
-        let size = format!("{}, {} items", fmt::size(tree.subtree_size[id]), fmt::count(tree.subtree_files[id] as u64));
-        assert_eq!(status_str(&a, false), format!("{size}   |   done   |   live"), "no path, no time of the last change");
-        assert!(status_str(&a, true).contains("12:03:41") && status_str(&a, true).contains(&fmt::node_path(tree, id).to_string()));
+        let path = fmt::node_path(tree, id).to_string();
+        assert_eq!(status_str(&a, false), format!("{path}   |   done   |   live"), "no time of the last change");
+        assert!(status_str(&a, true).contains("12:03:41"));
         a.adapter = "Test GPU".into();
         let bar = a.layout.status();
         assert_eq!(tip_str(&a, bar.x + 40.0, bar.y + 5.0), Some(format!("{}
