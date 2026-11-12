@@ -49,7 +49,7 @@ fn journal_error(e: &windows::core::Error, what: &str) -> JournalError {
     match win32(e) {
         ERROR_JOURNAL_ENTRY_DELETED => JournalError::Wrapped,
         ERROR_JOURNAL_NOT_ACTIVE | ERROR_JOURNAL_DELETE_IN_PROGRESS => JournalError::Disabled,
-        // Unverified: what a stale journal ID returns. The journal-spike example prints the code.
+        // Unverified: what a stale journal ID returns. `journal-check` prints the code.
         ERROR_INVALID_PARAMETER if what == "reading the journal" => JournalError::Wrapped,
         code => JournalError::Other(format!("{what} failed (error {code}): {e}")),
     }

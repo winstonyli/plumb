@@ -100,7 +100,7 @@ impl Default for JournalConfig {
     }
 }
 
-/// Counters for the status bar and the spike; read from any thread.
+/// Counters of what the reader did; read from any thread.
 #[derive(Default, Debug)]
 pub struct JournalStats {
     pub reads: AtomicU64,

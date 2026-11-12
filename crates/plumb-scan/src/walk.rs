@@ -22,8 +22,6 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
 use windows::core::PCWSTR;
 
-const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
-const IO_REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;
 const BUF_BYTES: usize = 256 * 1024;
 
 /// A file id is already well spread, so one multiply is all the hashing the set needs.
@@ -80,7 +78,6 @@ impl Drop for Handle {
     }
 }
 
-/// Lists one directory. `dir` is a `\\?\`-style wide path without a trailing NUL.
 /// Bytes per cluster of the volume holding `path` (a wide path without NUL); 0 if unknown.
 pub(crate) fn cluster_size(path: &[u16]) -> u64 {
     let mut p = path.to_vec();
@@ -141,7 +138,7 @@ pub(crate) fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec
                 let mut traits = NodeFlags::from_attributes(e.FileAttributes);
                 traits.set(
                     NodeFlags::REPARSE,
-                    e.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 && matches!(e.ReparsePointTag, IO_REPARSE_TAG_MOUNT_POINT | IO_REPARSE_TAG_SYMLINK),
+                    e.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 && crate::merge::is_name_surrogate(Some(e.ReparsePointTag)),
                 );
                 // Directories count as 0: the MFT scanner does not count index allocation either.
                 // Data stored inside the MFT record reports its length rounded to 8 bytes, which is

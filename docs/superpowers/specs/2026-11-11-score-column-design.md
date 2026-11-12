@@ -100,20 +100,10 @@ would read low for about a minute after one. The rebuild fires when dead nodes p
 
 ### The column
 
-- (Moved 2026-11-11, user request: the score is now column 1, right after Name, then % of parent, then Size (dim, like the last two), and the default sort, descending; ties sort by size. Named by `layout::COL_SCORE` and the rest. Saved widths and sort from older versions are read in the new order, so they come out wrong once.) A fifth number column, default width 72 (not 96: at the 640 DIP minimum window five columns of 100/130/90/96/72 leave
-  Name 140, against 120 for `MIN_NAME_W`; with 96 Name would be 116). A test pins `Layout::new(640, 400).column(0).1 >=
-  MIN_NAME_W`.
-- Sites that hard-code four numbers or five columns, all moved to five numbers and six columns: `Layout::col_w` and its
-  doc (layout.rs ~70, 115), `COL_W`, `column`, `set_col_w`, the header hit-test loop and drag-resize (layout.rs ~400, 403),
-  `ViewKind::sort_key` (app.rs ~68-72) and the title array (app.rs ~51), `draw.rs` header (~692: titles, right-align at
-  ~703, the "≥" marker at ~700), the skeleton rows (~1063) and the row cells (~1175; `last_two` stays, the score is a third
-  cell from a new `ViewKind::score_text`), `app.rs` ~1264 (`col_w[c - 1]`), the saved-state loader (`s.column < 5` in
-  app.rs ~463, so a saved Score sort is restored), and the tests that name column indices (app.rs ~1521, 1955, 2452;
-  layout.rs ~475, 512-518; render.rs ~534).
-- Header tooltips do not exist today: `App::tip_target` (app.rs ~733-745) handles buttons, the status bar and rows only, and `Hit::Header` is never consulted. Add a header branch with a `TipKey` and a per-view text source for the Score column (the other headers get none).
-- More sites: draw.rs right-align `matches!(c, 1 | 3 | 4)` (~701) gains 5, and the "≥" test (~699) gains a `c == 5` Disk case; layout.rs `hit` loops `(1..5)` / `(0..5)` (~399, 403) become `(1..6)` / `(0..6)`; `titles` returns `[&str; 6]`; the app.rs ~2452 test (`col_w[..3]`, `COL_W[3]`) is extended.
-- `SortKey::Score` reads `tree.subtree_score` in `rows.rs::order`; it is `sort_key(5)` in both views.
-- The map hides at a wider window: `tree_min` (MIN_NAME_W + columns + scrollbar) goes from 548 to 620, so the map appears from 785 DIP wide instead of 713 (layout.rs `tree_min`, `map_shown`; their tests and the render shots move with it). The default sort and the Size column are unchanged.
+- Layout as shipped (user request 2026-11-11, after the first cut put it fifth): Name, **Score**, % of parent, Size, then Items and Modified (Disk) or CPU and I/O (Processes). The columns are named by `layout::COL_SCORE`, `COL_PCT`, `COL_SIZE`, `COL_THIRD`, `COL_FOURTH`; Size is drawn dim like the last two, the score in the main colour. Default widths `COL_W = [72, 130, 100, 90, 96]` (72 for the score: at the 640 DIP minimum window these leave Name 140, against 120 for `MIN_NAME_W`; a test pins `Layout::new(640, 400).column(0).1 >= MIN_NAME_W`).
+- The score is the default sort, descending, in both views; `SortKey::Score` reads `tree.subtree_score` in `rows.rs::order` and ties by size, then id. Saved widths and sort from older versions are read in the new order, so they come out wrong once (no shim; the release notes say so).
+- Header tooltips: `App::tip_target` has a header branch (`Hit::Header(COL_SCORE)`, a `TipKey::Area` of the header cell) with a per-view text (`ViewKind::score_help`); the other headers get none.
+- The map pane appears from 785 DIP wide (was 713): `tree_min` is `MIN_NAME_W` plus the columns plus the scrollbar (620).
 
 ## Tests
 

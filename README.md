@@ -7,7 +7,7 @@ A fast disk-usage explorer for Windows, with a live view of running processes.
 - **Stays current:** elevated NTFS drives follow the change journal; other drives use a directory watcher. New, grown, renamed, moved and deleted files appear without a rescan.
 - **Delete from the tree or the map:** mark items with `Del`, then send them to the Recycle Bin or delete them permanently, each after a confirmation. If a delete fails, plumb names the program that holds the file ("Who is using this" is also in the context menu).
 - **Select several rows:** Shift+click, Ctrl+click, Shift+arrows, Ctrl+A, or drag over rows; `Del`, Ctrl+C and the context menu then act on all of them. F5 rescans, Enter opens or closes a folder, Backspace goes to the parent, and Shift+F10 or the Apps key opens the menu of the focused row.
-- **A score column first:** the Disk view opens sorted by Stale (size not modified for a long time, summed up the tree) so the files worth deleting come first; Processes opens by Load (the most a process uses of CPU, memory or I/O, steady over about 30 s, a parent adding its children). Hover the header for the definition; click it to sort.
+- **A score column first:** the first column after Name is Stale (Disk) or Load (Processes), and the view opens sorted by it, so what is worth your attention comes first. Hover the header for its definition; click it to sort.
 - **Processes view:** every running process as a tree by parent, with memory, private bytes, CPU and I/O, the same map, a pane of the files the selected process has open, and End process, End process tree (after a confirmation) and Suspend or Resume for a process or its whole tree in the context menu.
 
 ## Install
