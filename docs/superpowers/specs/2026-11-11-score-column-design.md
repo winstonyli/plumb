@@ -95,8 +95,8 @@ machine, steady over about 30 s; a parent adds its children".
 
 `Procs` lives in `crates/plumb-core/src/procs.rs`; `Procs::new(metric)` returns `(Self, Tree)` today and becomes `Procs::new(metric, cores, ram)` (callers: the `window/procs.rs` rebuild, the procs.rs tests, the app.rs tests), `ram` being total physical memory (the right element of `Snapshot.ram`'s tuple, `physical_memory()`), since `apply` takes none. The reconciler creates it from the first snapshot; `Snapshot` gains `cores` (the logical
 processor count, read once by the poller with `GetActiveProcessorCount`, not the affinity-limited
-`available_parallelism`). A rebuild of `Procs` (many dead nodes, a view switch) restarts the averages, so the column
-reads low for about a minute after one. The rebuild fires when dead nodes pass `MAX_DEAD` (20_000), so churny sessions (builds) can hit it repeatedly. **Open (Decide):** accept the restart, or carry the `Known` averages across the rebuild keyed by (pid, created).
+`available_parallelism`). A rebuild of `Procs` (many dead nodes, a view switch) without carrying state restarts the averages, so the column
+would read low for about a minute after one. The rebuild fires when dead nodes pass `MAX_DEAD` (20_000), so churny sessions (builds) can hit it repeatedly. Decided 2026-11-11 (m1): the rebuild carries each process's smoothed state (EMAs and shown value) into the new `Procs`, keyed by (pid, created), so the order does not reshuffle; a test rebuilds mid-trace and checks the shown values are unchanged.
 
 ### The column
 
@@ -149,5 +149,6 @@ reads low for about a minute after one. The rebuild fires when dead nodes pass `
 - `IO_FULL` is fixed, not the disk's measured speed. Trigger: an NVMe-speed process always reading low, or a slow disk
   reading too high.
 - A modified time is a weak proxy for "unused" (backups, game assets read often).
-- Age ramp vs a single cutoff: the ramp is the user's pick (k1); a cutoff would drop `weight()`, two constants and the
-  128-bit step.
+- Age ramp vs a single cutoff: decided for the ramp 2026-11-11 (p1; surveyed against cutoff, stepped tiers and a
+  user-set cutoff). A cutoff would drop `weight()`, one constant and the 128-bit step; revisit only if the column
+  should read as an exact byte count.
