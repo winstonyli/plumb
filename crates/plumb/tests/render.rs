@@ -547,7 +547,7 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
     use plumb_core::treemap::layout as map_layout;
     let gfx = Gfx::warp().expect("WARP device");
     let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
-    let (mut procs, mut tree) = Procs::new(Metric::Memory);
+    let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
     let list = |cpu: u64, io: u64| {
         vec![
             sample(4, 0, "System", 200_000, 0, 0),
@@ -589,7 +589,7 @@ fn the_processes_map_follows_the_metric_button() {
     use plumb_core::procs::{Metric, Procs, Sample};
     let gfx = Gfx::warp().expect("WARP device");
     let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
-    let (mut procs, mut tree) = Procs::new(Metric::Memory);
+    let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
     let list = |k: u64| {
         vec![
             sample(2000, 1, "big-memory.exe", 900_000_000, k, 0),
@@ -642,7 +642,7 @@ fn processes_shot_with(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, h
 fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme: Theme, scale: f32, hot: &dyn Fn(&Layout) -> Rect, pressed: bool, modal: Option<&plumb::modal::Modal>, notice: (&str, bool), stem: &str) -> Vec<u8> {
     use plumb_core::procs::{Metric, Procs, Sample};
     let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
-    let (mut procs, mut tree) = Procs::new(Metric::Memory);
+    let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
     let list = |k: u64| vec![sample(2000, 1, "big-memory.exe", 900_000_000, k, 0), sample(2200, 1, "chatty.exe", 10_000_000, k, 400 * k)];
     procs.apply(&mut tree, &list(0), 0);
     procs.apply(&mut tree, &list(1_000_000), 10_000_000);

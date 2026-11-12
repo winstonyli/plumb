@@ -2,7 +2,7 @@
 //! folds each snapshot into the app's tree.
 use crate::app::{App, ProcInfo};
 use plumb_core::procs::{Metric, Procs, Sample};
-use plumb_scan::procs::{physical_memory, ProcEntry, Snapshotter};
+use plumb_scan::procs::{logical_cores, physical_memory, ProcEntry, Snapshotter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::Thread;
@@ -159,17 +159,17 @@ impl ProcState {
         let before = label(app);
         app.set_procs(view, info, ram);
         let rebuild = self.sync.is_none() || app.slot.tree.as_ref().is_none_or(|t| t.dead() > MAX_DEAD);
-        match (rebuild, self.sync.as_mut(), app.slot.tree.as_mut()) {
-            (false, Some(sync), Some(tree)) => {
-                sync.apply(tree, &samples, elapsed);
-                app.refresh_rows();
+        if let (false, Some(sync), Some(tree)) = (rebuild, self.sync.as_mut(), app.slot.tree.as_mut()) {
+            sync.apply(tree, &samples, elapsed);
+            app.refresh_rows();
+        } else {
+            let (mut sync, mut tree) = Procs::new(app.slot.proc_metric, logical_cores(), ram.0);
+            if let Some(old) = self.sync.take() {
+                sync.carry_from(old);
             }
-            _ => {
-                let (mut sync, mut tree) = Procs::new(app.slot.proc_metric);
-                sync.apply(&mut tree, &samples, elapsed);
-                app.finish_scan(tree, String::new());
-                self.sync = Some(sync);
-            }
+            sync.apply(&mut tree, &samples, elapsed);
+            app.finish_scan(tree, String::new());
+            self.sync = Some(sync);
         }
         label(app) != before
     }

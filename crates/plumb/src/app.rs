@@ -1535,7 +1535,7 @@ mod tests {
         let mut a = app();
         a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
         a.begin_scan(2);
-        let (mut procs, mut tree) = Procs::new(Metric::Memory);
+        let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
         procs.apply(&mut tree, &[Sample { pid: 77, parent: 1, created: 5, name: "ping.exe".into(), memory: 4096, private: 2048, cpu_100ns: 0, io_bytes: 0 }], 0);
         let id = tree.find("Processes\\ping.exe").expect("the process is under the root");
         a.finish_scan(tree, "x".into());
@@ -1905,7 +1905,7 @@ mod tests {
         let mut a = app();
         a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
         a.begin_scan(2);
-        let (mut procs, mut tree) = Procs::new(Metric::Memory);
+        let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
         let s = |pid, parent, name: &str| Sample { pid, parent, created: 5, name: name.into(), memory: 4096, private: 2048, cpu_100ns: 0, io_bytes: 0 };
         procs.apply(&mut tree, &[s(77, 1, "a.exe"), s(78, 77, "b.exe"), s(79, 78, "c.exe"), s(80, 77, "d.exe"), s(90, 1, "other.exe")], 0);
         let top = tree.find(r"Processes\a.exe").expect("the top process");
@@ -1931,7 +1931,7 @@ mod tests {
         let mut a = app();
         a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
         a.begin_scan(2);
-        let (mut procs, mut tree) = Procs::new(Metric::Memory);
+        let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
         let s = |pid, parent, name: &str| Sample { pid, parent, created: 5, name: name.into(), memory: 4096, private: 2048, cpu_100ns: 0, io_bytes: 0 };
         procs.apply(&mut tree, &[s(77, 1, "a.exe"), s(78, 77, "b.exe"), s(79, 77, "c.exe")], 0);
         let top = tree.find(r"Processes\a.exe").expect("the top process");
@@ -2716,7 +2716,7 @@ Test GPU", status_str(&a, true))));
         let mut a = app();
         a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
         a.begin_scan(2);
-        let (mut procs, mut tree) = Procs::new(Metric::Memory);
+        let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
         let s = |pid, parent, name: &str, memory| Sample { pid, parent, created: 5, name: name.into(), memory, private: memory / 2, cpu_100ns: 0, io_bytes: 0 };
         procs.apply(&mut tree, &[s(77, 1, "parent.exe", 400_000), s(78, 77, "child.exe", 100_000)], 0);
         let parent = tree.find("Processes\\parent.exe").expect("the parent is under the root");

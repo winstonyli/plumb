@@ -2,6 +2,7 @@
 //! the live file-system watch uses), so `RowModel` selection, scroll and expansion survive an update.
 //!
 //! Pure: no Windows types. The window converts its snapshot to [`Sample`]s.
+use crate::score::{self, Load};
 use crate::{NodeFlags, NodeId, Tree, TreeBuilder};
 use std::collections::{HashMap, HashSet};
 
@@ -54,6 +55,9 @@ struct Known {
     cpu_tenths: u64,
     io_rate: u64,
     prev: (u64, u64),
+    /// The smoothed load, and the part of it already added to the tree's score.
+    load: Load,
+    applied: u64,
 }
 
 impl Known {
@@ -73,6 +77,11 @@ pub struct Procs {
     root: NodeId,
     metric: Metric,
     known: HashMap<(u32, u64), Known>,
+    /// Machine size, for the load shares (0 divides nothing).
+    cores: u32,
+    ram: u64,
+    /// Averages and counters carried over from a previous `Procs`, taken by the process they belong to.
+    carried: HashMap<(u32, u64), (Load, (u64, u64))>,
 }
 
 /// The pid of a process node (0 for the synthetic root).
@@ -82,10 +91,16 @@ pub fn pid(tree: &Tree, id: NodeId) -> u32 {
 
 impl Procs {
     /// A new, empty process tree (just the synthetic root `Processes`) and the bookkeeping for it.
-    pub fn new(metric: Metric) -> (Self, Tree) {
+    pub fn new(metric: Metric, cores: u32, ram: u64) -> (Self, Tree) {
         let mut b = TreeBuilder::new();
         let root = b.push_str(NodeId::NONE, "Processes", 0, NodeFlags::DIR);
-        (Self { root, metric, known: HashMap::new() }, b.finish().expect("a one-node tree"))
+        (Self { root, metric, known: HashMap::new(), cores, ram, carried: HashMap::new() }, b.finish().expect("a one-node tree"))
+    }
+
+    /// Takes over `old`'s averages and counters, so a rebuilt tree shows the same loads and the next sample's rates
+    /// have a baseline. Call before the first `apply`.
+    pub fn carry_from(&mut self, old: Procs) {
+        self.carried = old.known.into_iter().map(|(k, v)| (k, (v.load, v.prev))).collect();
     }
 
     pub fn metric(&self) -> Metric {
@@ -101,7 +116,8 @@ impl Procs {
             if !self.known.contains_key(&(s.pid, s.created)) {
                 let name: Vec<u16> = s.name.encode_utf16().collect();
                 let id = tree.add_child(self.root, &name, 0, NodeFlags::empty());
-                self.known.insert((s.pid, s.created), Known { id, memory: 0, private: 0, cpu_tenths: 0, io_rate: 0, prev: (s.cpu_100ns, s.io_bytes) });
+                let (load, prev) = self.carried.remove(&(s.pid, s.created)).unwrap_or((Load::default(), (s.cpu_100ns, s.io_bytes)));
+                self.known.insert((s.pid, s.created), Known { id, memory: 0, private: 0, cpu_tenths: 0, io_rate: 0, prev, load, applied: 0 });
             }
         }
         // 2. Parents: the live process with the parent pid, if it is older than the child (a younger one is a reused
@@ -146,11 +162,18 @@ impl Procs {
             k.memory = if s.pid == 0 { 0 } else { s.memory };
             k.private = if s.pid == 0 { 0 } else { s.private };
             tree.set_aux(k.id, [k.cpu_tenths, k.io_rate, u64::from(s.pid)]);
+            let dt = elapsed_100ns as f64 / 1e7;
+            let shown = k.load.step(dt, score::cpu_share(k.cpu_tenths, self.cores), score::io_share(k.io_rate), score::mem_share(k.private, self.ram));
+            if shown != k.applied {
+                tree.add_score(k.id, shown as i64 - k.applied as i64);
+                k.applied = shown;
+            }
             let v = k.value(self.metric);
             if tree.size[k.id] != v {
                 tree.set_size(k.id, v);
             }
         }
+        self.carried.clear(); // whatever was not claimed by the first sample has exited
     }
 
     /// Switches what `Tree::size` holds; the roll-up follows.
@@ -200,7 +223,10 @@ mod tests {
     }
     impl ProcTree {
         fn new() -> Self {
-            let (sync, tree) = Procs::new(Metric::Memory);
+            Self::with(4, 1 << 30)
+        }
+        fn with(cores: u32, ram: u64) -> Self {
+            let (sync, tree) = Procs::new(Metric::Memory, cores, ram);
             Self { sync, tree, root: NodeId(0) }
         }
         fn apply(&mut self, samples: &[Sample], elapsed: u64) {
@@ -224,6 +250,101 @@ mod tests {
     fn parent_pid(p: &ProcTree, pid: u32) -> u32 {
         let par = p.tree.parent[node(p, pid)];
         if par == p.root { 0 } else { p.pid(par) }
+    }
+
+    const SECOND: u64 = 10_000_000;
+
+    /// A sample at second `t` of a process that has used `pct` percent of one core every second so far.
+    fn busy(pid: u32, parent: u32, created: u64, t: u64, pct: u64) -> Sample {
+        Sample { cpu_100ns: t * pct * SECOND / 100, ..s(pid, parent, created, "p.exe", 100) }
+    }
+    fn score(p: &ProcTree, pid: u32) -> u64 {
+        p.tree.subtree_score[node(p, pid)]
+    }
+
+    #[test]
+    fn load_is_zero_at_first_and_holds_still_under_jittering_cpu() {
+        let mut p = ProcTree::with(4, 1 << 30);
+        let (mut seed, mut cpu, mut changes, mut raw_changes) = (7u64, 0u64, 0, 0);
+        p.apply(&[busy(10, 1, 1, 0, 0)], 0);
+        assert_eq!(score(&p, 10), 0, "the first sample has no rate");
+        let (mut last, mut last_raw) = (0, 0);
+        for _ in 0..120 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            cpu += (5 + (seed >> 33) % 21) * SECOND / 100; // 5-25% of one core this second
+            p.apply(&[Sample { cpu_100ns: cpu, ..busy(10, 1, 1, 0, 0) }], SECOND);
+            let (now, raw) = (score(&p, 10), p.tree.aux[node(&p, 10).idx()][0]);
+            changes += u32::from(now != last);
+            raw_changes += u32::from(raw != last_raw);
+            (last, last_raw) = (now, raw);
+        }
+        assert!(changes <= 10, "the shown load changed {changes} times");
+        assert!(raw_changes > 60, "the raw value jitters ({raw_changes} changes)");
+        assert!(last >= 1, "a busy process shows something");
+    }
+
+    #[test]
+    fn a_parent_sums_its_children_and_an_exit_leaves_no_residue() {
+        let mut p = ProcTree::with(1, 1 << 30);
+        let all = |t| [busy(10, 1, 1, t, 40), busy(11, 10, 2, t, 40), busy(12, 10, 3, t, 40)];
+        p.apply(&all(0), 0);
+        for t in 1..=300 {
+            p.apply(&all(t), SECOND);
+        }
+        let (own, c11, c12) = (score(&p, 10) - score(&p, 11) - score(&p, 12), score(&p, 11), score(&p, 12));
+        assert!((39..=40).contains(&own) && (39..=40).contains(&c11) && (39..=40).contains(&c12), "{own} {c11} {c12}");
+        let before = score(&p, 10);
+        p.apply(&[busy(10, 1, 1, 301, 40), busy(11, 10, 2, 301, 40)], SECOND);
+        assert_eq!(score(&p, 10), before - c12, "the exited child takes exactly its score with it");
+        // The same pid again, a new process: it starts from nothing.
+        p.apply(&[busy(10, 1, 1, 302, 40), busy(11, 10, 2, 302, 40), busy(12, 10, 99, 302, 40)], SECOND);
+        let reused = (0..p.tree.len() as u32).map(NodeId).find(|&n| !p.tree.flags[n].contains(NodeFlags::DEAD) && p.pid(n) == 12).unwrap();
+        assert!(p.tree.subtree_score[reused] <= 1, "{}", p.tree.subtree_score[reused]);
+    }
+
+    #[test]
+    fn system_idle_scores_zero() {
+        let mut p = ProcTree::with(4, 1 << 30);
+        let idle = |t: u64| Sample { cpu_100ns: t * 40 * SECOND, io_bytes: t << 40, ..s(0, 0, 1, "System Idle Process", 1 << 20) };
+        p.apply(&[idle(0)], 0);
+        for t in 1..=60 {
+            p.apply(&[idle(t)], SECOND);
+        }
+        assert_eq!(score(&p, 0), 0);
+    }
+
+    #[test]
+    fn memory_share_is_not_smoothed() {
+        let mut p = ProcTree::with(4, 1000);
+        p.apply(&[s(10, 1, 1, "a.exe", 500)], 0); // private = 250 of 1000
+        assert_eq!(score(&p, 10), 25);
+    }
+
+    #[test]
+    fn zero_cores_or_ram_divides_nothing() {
+        let mut p = ProcTree::with(0, 0);
+        p.apply(&[busy(10, 1, 1, 0, 0)], 0);
+        for t in 1..=10 {
+            p.apply(&[busy(10, 1, 1, t, 50)], SECOND);
+        }
+        assert_eq!(score(&p, 10), 0);
+    }
+
+    #[test]
+    fn a_rebuild_carries_the_averages() {
+        let mut old = ProcTree::with(1, 1 << 30);
+        old.apply(&[busy(10, 1, 1, 0, 40)], 0);
+        for t in 1..=60 {
+            old.apply(&[busy(10, 1, 1, t, 40)], SECOND);
+        }
+        let shown = score(&old, 10);
+        assert!(shown >= 30, "{shown}");
+        let (mut sync, mut tree) = Procs::new(Metric::Memory, 1, 1 << 30);
+        sync.carry_from(old.sync);
+        sync.apply(&mut tree, &[busy(10, 1, 1, 61, 40)], SECOND);
+        let fresh = ProcTree { sync, tree, root: NodeId(0) };
+        let carried = score(&fresh, 10);
+        assert!(carried + 1 >= shown && carried <= shown + 1, "carried {carried}, was {shown}");
     }
 
     #[test]

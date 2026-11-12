@@ -4,7 +4,7 @@ use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
+    GetActiveProcessorCount, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
 };
 
 const SYSTEM_PROCESS_INFORMATION: u32 = 5;
@@ -170,6 +170,12 @@ pub fn physical_memory() -> (u64, u64) {
     if unsafe { GlobalMemoryStatusEx(&mut m) }.is_ok() { (m.ullTotalPhys, m.ullAvailPhys) } else { (0, 0) }
 }
 
+/// Logical processors across all groups (the denominator of a CPU share).
+pub fn logical_cores() -> u32 {
+    const ALL_PROCESSOR_GROUPS: u16 = 0xFFFF;
+    unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,6 +252,7 @@ mod tests {
         assert!(list.iter().any(|p| p.pid == child.id() && p.parent == me), "child listed under us");
         assert!(list.iter().any(|p| p.pid == 0 && p.name == "System Idle Process"));
         assert!(physical_memory().0 > 1 << 30);
+        assert!(logical_cores() >= 1);
         let _ = child.kill();
         let _ = child.wait();
     }
