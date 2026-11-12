@@ -1,7 +1,8 @@
 //! A snapshot of the running processes: `NtQuerySystemInformation(SystemProcessInformation)`, parsed by x64 offset.
 use crate::reason::Reason;
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+use windows::Win32::Foundation::{FILETIME, HANDLE};
+use windows::core::Owned;
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::{
     GetActiveProcessorCount, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
@@ -54,11 +55,11 @@ pub(crate) fn image_path(pid: u32) -> Option<String> {
 /// token is elevated.
 fn identity(pid: u32) -> (Option<String>, bool) {
     let Ok(h) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else { return (None, false) };
+    let h = unsafe { Owned::new(h) };
     let mut buf = vec![0u16; 32768]; // the longest path Windows allows
     let mut n = buf.len() as u32;
-    let ok = unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_FORMAT(0), PWSTR(buf.as_mut_ptr()), &mut n) }.is_ok();
-    let elevated = crate::volume::process_elevated(h);
-    let _ = unsafe { CloseHandle(h) };
+    let ok = unsafe { QueryFullProcessImageNameW(*h, PROCESS_NAME_FORMAT(0), PWSTR(buf.as_mut_ptr()), &mut n) }.is_ok();
+    let elevated = crate::volume::process_elevated(*h);
     (ok.then(|| String::from_utf16_lossy(&buf[..n as usize])), elevated)
 }
 
@@ -70,15 +71,14 @@ fn why(e: windows::core::Error) -> Reason {
 /// pid is reused, so a process created at another time is left alone. The error is the reason, in words.
 fn with_process(pid: u32, created: u64, access: PROCESS_ACCESS_RIGHTS, act: impl FnOnce(HANDLE) -> Result<(), Reason>) -> Result<(), Reason> {
     let h = unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|e| if e.code().0 == 0x8007_0057_u32 as i32 { Reason::other("it has already ended") } else { why(e) })?;
+    let h = unsafe { Owned::new(h) };
     let (mut c, mut x, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
-    let started = unsafe { GetProcessTimes(h, &mut c, &mut x, &mut k, &mut u) }.map(|_| (c.dwHighDateTime as u64) << 32 | c.dwLowDateTime as u64);
-    let out = match started {
-        Ok(t) if t == created => act(h),
+    let started = unsafe { GetProcessTimes(*h, &mut c, &mut x, &mut k, &mut u) }.map(|_| (c.dwHighDateTime as u64) << 32 | c.dwLowDateTime as u64);
+    match started {
+        Ok(t) if t == created => act(*h),
         Ok(_) => Err(Reason::other("the pid now belongs to a different process")),
         Err(e) => Err(why(e)),
-    };
-    let _ = unsafe { CloseHandle(h) };
-    out
+    }
 }
 
 /// Ends the process `pid` created at `created`, with exit code 1.

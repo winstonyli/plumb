@@ -13,7 +13,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::core::Owned;
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_DIRECTORY, GetDiskFreeSpaceW, GetVolumePathNameW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_ID_EXTD_DIR_INFO, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -69,15 +69,6 @@ struct Done {
     entries: Result<Vec<Entry>, ()>,
 }
 
-struct Handle(HANDLE);
-impl Drop for Handle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
-
 /// Bytes per cluster of the volume holding `path` (a wide path without NUL); 0 if unknown.
 pub(crate) fn cluster_size(path: &[u16]) -> u64 {
     let mut p = path.to_vec();
@@ -111,12 +102,12 @@ pub(crate) fn list_dir(dir: &[u16], buf: &mut [u64], cluster: u64) -> Result<Vec
         )
     }
     .map_err(|_| ())?;
-    let h = Handle(h);
+    let h = unsafe { Owned::new(h) };
     let mut out = Vec::new();
     let mut class = FileIdExtdDirectoryRestartInfo;
     loop {
         let r = unsafe {
-            GetFileInformationByHandleEx(h.0, class, buf.as_mut_ptr().cast::<c_void>(), (buf.len() * 8) as u32)
+            GetFileInformationByHandleEx(*h, class, buf.as_mut_ptr().cast::<c_void>(), (buf.len() * 8) as u32)
         };
         class = FileIdExtdDirectoryInfo;
         if r.is_err() {

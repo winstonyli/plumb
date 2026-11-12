@@ -635,18 +635,18 @@ pub fn selftest_tooltip() -> Result<String> {
 /// A job object that kills everything assigned to it, with its descendants, when it is dropped: a selftest that fails
 /// partway through still leaves none of the processes it started (a `Child` is not killed on drop, and a killed shell
 /// leaves the program it ran).
-struct Job(HANDLE);
+struct Job(windows::core::Owned<HANDLE>);
 
 impl Job {
     fn new() -> Result<Self> {
         use windows::Win32::System::JobObjects::*;
         unsafe {
-            let job = Self(CreateJobObjectW(None, PCWSTR::null())?);
+            let job = Self(windows::core::Owned::new(CreateJobObjectW(None, PCWSTR::null())?));
             let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
                 BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION { LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, ..Default::default() },
                 ..Default::default()
             };
-            SetInformationJobObject(job.0, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of_val(&info) as u32)?;
+            SetInformationJobObject(*job.0, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of_val(&info) as u32)?;
             Ok(job)
         }
     }
@@ -654,13 +654,7 @@ impl Job {
     /// Takes `child` and the programs it starts from now on; run it straight after the spawn.
     fn add(&self, child: &std::process::Child) -> Result<()> {
         use std::os::windows::io::AsRawHandle;
-        unsafe { windows::Win32::System::JobObjects::AssignProcessToJobObject(self.0, HANDLE(child.as_raw_handle())) }
-    }
-}
-
-impl Drop for Job {
-    fn drop(&mut self) {
-        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+        unsafe { windows::Win32::System::JobObjects::AssignProcessToJobObject(*self.0, HANDLE(child.as_raw_handle())) }
     }
 }
 

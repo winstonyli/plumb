@@ -8,7 +8,8 @@ use std::ffi::c_void;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE};
+use windows::Win32::Foundation::{GENERIC_READ, HANDLE};
+use windows::core::Owned;
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_SEQUENTIAL_SCAN, FILE_SHARE_READ, FILE_SHARE_WRITE, GetVolumeInformationW,
@@ -32,17 +33,17 @@ pub fn process_elevated(process: HANDLE) -> bool {
         if OpenProcessToken(process, TOKEN_QUERY, &mut token).is_err() {
             return false;
         }
+        let token = Owned::new(token);
         let mut elevation = TOKEN_ELEVATION::default();
         let mut returned = 0u32;
         let ok = GetTokenInformation(
-            token,
+            *token,
             TokenElevation,
             Some((&mut elevation as *mut TOKEN_ELEVATION).cast::<c_void>()),
             std::mem::size_of::<TOKEN_ELEVATION>() as u32,
             &mut returned,
         )
         .is_ok();
-        let _ = CloseHandle(token);
         ok && elevation.TokenIsElevated != 0
     }
 }
@@ -87,19 +88,11 @@ pub fn is_ntfs(root: &Path) -> bool {
 }
 
 /// An open raw volume, read-only.
-pub struct Volume(pub(crate) HANDLE);
+pub struct Volume(pub(crate) Owned<HANDLE>);
 
 // A volume handle is only read through `ReadFile` with explicit offsets.
 unsafe impl Send for Volume {}
 unsafe impl Sync for Volume {}
-
-impl Drop for Volume {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
 
 impl Volume {
     /// Opens the volume mounted at `root` (see [`volume_device`]).
@@ -117,7 +110,7 @@ impl Volume {
             )
         }
         .map_err(|e| io::Error::from_raw_os_error(e.code().0 & 0xFFFF))?;
-        Ok(Volume(h))
+        Ok(Volume(unsafe { Owned::new(h) }))
     }
 
     pub fn layout(&self) -> io::Result<MftLayout> {
@@ -125,7 +118,7 @@ impl Volume {
         let mut returned = 0u32;
         unsafe {
             DeviceIoControl(
-                self.0,
+                *self.0,
                 FSCTL_GET_NTFS_VOLUME_DATA,
                 None,
                 0,
@@ -155,7 +148,7 @@ impl VolumeRead for Volume {
             o.Anonymous.Anonymous.Offset = pos as u32;
             o.Anonymous.Anonymous.OffsetHigh = (pos >> 32) as u32;
             let mut got = 0u32;
-            unsafe { ReadFile(self.0, Some(&mut buf[done..]), Some(&mut got), Some(&mut o)) }
+            unsafe { ReadFile(*self.0, Some(&mut buf[done..]), Some(&mut got), Some(&mut o)) }
                 .map_err(|e| io::Error::from_raw_os_error(e.code().0 & 0xFFFF))?;
             if got == 0 {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short read from volume"));

@@ -7,7 +7,7 @@ use crate::journal::{JournalError, JournalInfo, JournalSource};
 use crate::volume::Volume;
 use std::ffi::c_void;
 use std::io;
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::core::Owned;
 use windows::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_DESCRIPTOR, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileIdType, FileStandardInfo, GetFileInformationByHandleEx, OpenFileById,
@@ -60,7 +60,7 @@ impl Volume {
         let mut returned = 0u32;
         unsafe {
             DeviceIoControl(
-                self.0,
+                *self.0,
                 code,
                 input.map(|i| (i as *const I).cast::<c_void>()),
                 input.map_or(0, |_| std::mem::size_of::<I>() as u32),
@@ -125,7 +125,7 @@ impl JournalSource for Volume {
         id.Anonymous.FileId = frn as i64;
         let h = match unsafe {
             OpenFileById(
-                self.0,
+                *self.0,
                 &id,
                 FILE_READ_ATTRIBUTES.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -133,22 +133,15 @@ impl JournalSource for Volume {
                 FILE_FLAG_BACKUP_SEMANTICS,
             )
         } {
-            Ok(h) => h,
+            Ok(h) => unsafe { Owned::new(h) },
             Err(e) if matches!(win32(&e), ERROR_FILE_NOT_FOUND | ERROR_INVALID_PARAMETER) => return Ok(None),
             Err(e) => return Err(io::Error::from_raw_os_error(win32(&e) as i32)),
         };
         let mut info = FILE_STANDARD_INFO::default();
         let r = unsafe {
-            GetFileInformationByHandleEx(h, FileStandardInfo, (&mut info as *mut FILE_STANDARD_INFO).cast(), std::mem::size_of::<FILE_STANDARD_INFO>() as u32)
+            GetFileInformationByHandleEx(*h, FileStandardInfo, (&mut info as *mut FILE_STANDARD_INFO).cast(), std::mem::size_of::<FILE_STANDARD_INFO>() as u32)
         };
-        close(h);
         r.map_err(|e| io::Error::from_raw_os_error(win32(&e) as i32))?;
         Ok((!info.DeletePending).then_some(info.AllocationSize.max(0) as u64))
-    }
-}
-
-fn close(h: HANDLE) {
-    unsafe {
-        let _ = CloseHandle(h);
     }
 }

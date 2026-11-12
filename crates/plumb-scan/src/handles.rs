@@ -9,7 +9,8 @@ use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::os::windows::io::AsRawHandle;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
+use windows::core::Owned;
+use windows::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
 use windows::Win32::Storage::FileSystem::{GetFileType, GetFinalPathNameByHandleW, GETFINALPATHNAMEBYHANDLE_FLAGS, FILE_NAME_NORMALIZED, FILE_TYPE_DISK, VOLUME_NAME_DOS};
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION};
 
@@ -52,10 +53,8 @@ fn file_type_index() -> Option<u32> {
     static INDEX: OnceLock<Option<u32>> = OnceLock::new();
     *INDEX.get_or_init(|| {
         let file = std::fs::File::open(std::env::current_exe().ok()?).ok()?;
-        let me = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, std::process::id()) }.ok()?;
-        let found = handle_snapshot(me).ok()?.into_iter().find(|&(v, _)| v == file.as_raw_handle() as usize).map(|(_, t)| t);
-        let _ = unsafe { CloseHandle(me) };
-        found
+        let me = unsafe { Owned::new(OpenProcess(PROCESS_QUERY_INFORMATION, false, std::process::id()).ok()?) };
+        handle_snapshot(*me).ok()?.into_iter().find(|&(v, _)| v == file.as_raw_handle() as usize).map(|(_, t)| t)
     })
 }
 
@@ -80,45 +79,40 @@ enum Found {
     Failed,
 }
 
-/// The target process, closed when the last holder (the caller or a worker still blocked on it) lets go.
-struct Target(HANDLE);
+/// The target process, closed when the last holder (the caller or a worker still blocked on it) lets go. A process
+/// handle may be used from any thread.
+struct Target(Owned<HANDLE>);
 
 unsafe impl Send for Target {}
 unsafe impl Sync for Target {}
 
-impl Drop for Target {
-    fn drop(&mut self) {
-        let _ = unsafe { CloseHandle(self.0) };
-    }
-}
-
+/// Asks about handle `value` of `target`.
 fn probe(target: &Target, value: usize) -> Found {
     let mut dup = HANDLE::default();
-    let ok = unsafe { DuplicateHandle(target.0, HANDLE(value as *mut _), GetCurrentProcess(), &mut dup, 0, false, DUPLICATE_SAME_ACCESS) };
+    let ok = unsafe { DuplicateHandle(*target.0, HANDLE(value as *mut _), GetCurrentProcess(), &mut dup, 0, false, DUPLICATE_SAME_ACCESS) };
     if ok.is_err() {
         return Found::NoCopy;
     }
-    let found = if unsafe { GetFileType(dup) } != FILE_TYPE_DISK {
+    let dup = unsafe { Owned::new(dup) };
+    if unsafe { GetFileType(*dup) } != FILE_TYPE_DISK {
         Found::NotDisk
     } else {
         let mut name = vec![0u16; 1024];
-        let n = unsafe { GetFinalPathNameByHandleW(dup, &mut name, GETFINALPATHNAMEBYHANDLE_FLAGS(FILE_NAME_NORMALIZED.0 | VOLUME_NAME_DOS.0)) } as usize;
+        let n = unsafe { GetFinalPathNameByHandleW(*dup, &mut name, GETFINALPATHNAMEBYHANDLE_FLAGS(FILE_NAME_NORMALIZED.0 | VOLUME_NAME_DOS.0)) } as usize;
         if n == 0 || n > name.len() {
             Found::Failed
         } else {
             let s = String::from_utf16_lossy(&name[..n]);
             Found::Path(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
         }
-    };
-    let _ = unsafe { CloseHandle(dup) };
-    found
+    }
 }
 
 /// The files `pid` has open. `per_handle` bounds each question; see the module comment.
 pub fn open_files(pid: u32, per_handle: Duration) -> Result<HandleList, HandleError> {
     let process = unsafe { OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION, false, pid) }.map_err(|_| HandleError::Denied)?;
-    let target = Arc::new(Target(process));
-    let values = Arc::new(handle_values(process)?);
+    let target = Arc::new(Target(unsafe { Owned::new(process) }));
+    let values = Arc::new(handle_values(*target.0)?);
     let next = Arc::new(AtomicUsize::new(0));
     let current = Arc::new(AtomicUsize::new(0)); // the worker generation allowed to take handles
     let (tx, rx) = channel::<Msg>();
@@ -195,10 +189,10 @@ mod tests {
         std::fs::write(&path, b"x").unwrap();
         let _held = std::fs::File::open(&path).unwrap();
         assert!(file_type_index().is_some(), "the File object type is learned on this boot");
-        let me = unsafe { OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION, false, std::process::id()) }.unwrap();
-        let (all, files) = (handle_snapshot(me).unwrap().len(), handle_values(me).unwrap().len());
+        let me = unsafe { Owned::new(OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION, false, std::process::id()).unwrap()) };
+        let (all, files) = (handle_snapshot(*me).unwrap().len(), handle_values(*me).unwrap().len());
         assert!(files < all, "the filter drops handles of other types: {files} of {all}");
-        let _ = unsafe { CloseHandle(me) };
+        drop(me);
         let list = open_files(std::process::id(), Duration::from_millis(500)).unwrap();
         let long = std::fs::canonicalize(&path).unwrap().to_string_lossy().into_owned();
         let want = long.strip_prefix(r"\\?\").unwrap_or(&long).to_lowercase();
