@@ -298,6 +298,24 @@ impl Default for Prefs {
     }
 }
 
+/// What the left button holds since it went down: one value, so two drags cannot be live.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pointer {
+    Up,
+    /// Down on a `hot` control (an icon button or a header cell).
+    Button,
+    /// Dragging the scrollbar thumb; `grab` is the distance from the thumb's top to the grab point.
+    Thumb { grab: f32 },
+    /// Dragging a column's left edge: the column, and the pointer x and column width at the start.
+    Column { col: usize, x0: f32, w0: f32 },
+    /// Dragging the map divider: the pointer x and the pane width at the start.
+    MapDivider { x0: f32, w0: f32 },
+    /// Down on a row: moving the pointer extends the selection (`drag_select`).
+    Rows,
+    /// Down in the filter box: moving the pointer extends its text selection (the window places the caret).
+    Filter,
+}
+
 pub struct App {
     pub layout: Layout,
     pub views: Vec<ViewInfo>,
@@ -308,8 +326,8 @@ pub struct App {
     pub hover: Option<usize>,
     /// The icon button under the mouse.
     pub hot: Option<Rect>,
-    /// The left button went down on `hot` and is still down.
-    pub pressed: bool,
+    /// What the left button holds since it went down (`Up` while it is up).
+    pointer: Pointer,
     /// What swaps when another view is put on screen.
     pub slot: Slot,
     /// Show the "Run as administrator" button (the process is not elevated).
@@ -319,14 +337,10 @@ pub struct App {
     pub adapter: String,
     /// Each view kind's sort and widths, indexed by `ViewKind`: the truth `layout.col_w` is loaded from (`set_active`).
     prefs: [Prefs; 2],
-    /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
-    grab: Option<f32>,
     /// The pointer is over the scrollbar thumb.
     pub thumb_hover: bool,
     /// The modals waiting to be answered, the first on screen; while any is up it takes all the input.
     modals: VecDeque<Modal>,
-    /// While dragging a column edge: the column, and the pointer x and column width at the start.
-    col_drag: Option<(usize, f32, f32)>,
     /// The folder the map shows; follows the tree's selection (see `follow_selection`).
     map_root: Option<NodeId>,
     /// The selection `map_root` was last chosen for: a change the map made itself is recorded here so it is not mistaken for one made in the tree.
@@ -343,10 +357,6 @@ pub struct App {
     map_classes: Vec<(treemap::Class, u64)>,
     /// The tile under the pointer.
     pub map_hover: Option<usize>,
-    /// While dragging the divider: the pointer x and the pane width at the start.
-    map_drag: Option<(f32, f32)>,
-    /// The left button went down on a row and is still down: moving the pointer extends the selection (`drag_select`).
-    row_drag: bool,
     /// The files the selected process holds (see `held_sync`).
     held: Held,
     /// Bumped when the marks change or the shown view's basket is swapped.
@@ -369,12 +379,22 @@ impl App {
     pub fn new(layout: Layout, views: Vec<ViewInfo>, adapter: String) -> Self {
         let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
-            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), slot: Slot::default(),
-            can_elevate: false, accent: None, prefs: [Prefs::default(); 2], grab: None, col_drag: None,
-            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None, row_drag: false,
+            layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pointer: Pointer::Up, thumb_hover: false, modals: VecDeque::new(), slot: Slot::default(),
+            can_elevate: false, accent: None, prefs: [Prefs::default(); 2],
+            map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None,
             held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, toast: Toast::default(), toast_hot: false, stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
         }
+    }
+
+    /// The left button is down on a control, or on the scrollbar thumb (which draws pressed while it is dragged).
+    pub fn pressed(&self) -> bool {
+        matches!(self.pointer, Pointer::Button | Pointer::Thumb { .. })
+    }
+
+    /// The left button went down in the filter box and is still down: the window extends its selection as the pointer moves.
+    pub fn filter_dragging(&self) -> bool {
+        self.pointer == Pointer::Filter
     }
 
     /// Sizes each chip to its label: `measure` gives a text's width in DIPs.
@@ -650,8 +670,7 @@ impl App {
     /// Whether the pointer is on a column edge in the header (or one is being dragged), for the resize cursor.
     pub fn over_divider(&self, x: f32, y: f32) -> bool {
         self.modal().is_none()
-            && (self.col_drag.is_some()
-                || self.map_drag.is_some()
+            && (matches!(self.pointer, Pointer::Column { .. } | Pointer::MapDivider { .. })
                 || matches!(self.layout.hit(x, y, self.views.len()), Hit::Divider(_) | Hit::MapDivider))
     }
 
@@ -1142,28 +1161,24 @@ impl App {
                 }
             }
             Input::Drag(x, y) => {
-                if let Some((c, x0, w0)) = self.col_drag {
-                    // The edge is the column's left side, so moving it left widens the column.
-                    self.layout.set_col_w(c, w0 + x0 - x);
-                    // Stored as it moves, and only the dragged column: the others may be clamped narrow by a small window.
-                    let k = self.kind() as usize;
-                    self.prefs[k].col_w[c - 1] = self.layout.col_w[c - 1];
-                } else if let Some(g) = self.grab {
-                    let s = self.layout.scroll_for_thumb_y(self.total_rows(), y - g);
-                    self.set_scroll(s);
-                } else if let Some((x0, w0)) = self.map_drag {
-                    self.layout.set_map_w(w0 + x0 - x);
-                } else if self.row_drag {
-                    self.drag_select(y);
+                match self.pointer {
+                    Pointer::Column { col, x0, w0 } => {
+                        // The edge is the column's left side, so moving it left widens the column.
+                        self.layout.set_col_w(col, w0 + x0 - x);
+                        // Stored as it moves, and only the dragged column: the others may be clamped narrow by a small window.
+                        let k = self.kind() as usize;
+                        self.prefs[k].col_w[col - 1] = self.layout.col_w[col - 1];
+                    }
+                    Pointer::Thumb { grab } => {
+                        let s = self.layout.scroll_for_thumb_y(self.total_rows(), y - grab);
+                        self.set_scroll(s);
+                    }
+                    Pointer::MapDivider { x0, w0 } => self.layout.set_map_w(w0 + x0 - x),
+                    Pointer::Rows => self.drag_select(y),
+                    Pointer::Up | Pointer::Button | Pointer::Filter => {} // the window moves the filter's caret itself
                 }
             }
-            Input::Release => {
-                self.row_drag = false;
-                self.pressed = false;
-                self.grab = None;
-                self.col_drag = None;
-                self.map_drag = None;
-            }
+            Input::Release => self.pointer = Pointer::Up,
         }
         Effect::None
     }
@@ -1182,7 +1197,8 @@ impl App {
     }
 
     fn click(&mut self, x: f32, y: f32, mods: Mods) -> Effect {
-        self.pressed = self.hot.is_some_and(|r| r.contains(x, y));
+        // The arms below replace this when the press starts a drag; it also ends any drag a lost release left behind.
+        self.pointer = if self.hot.is_some_and(|r| r.contains(x, y)) { Pointer::Button } else { Pointer::Up };
         if self.can_elevate && self.layout.admin_button().contains(x, y) {
             return Effect::Elevate;
         }
@@ -1194,6 +1210,7 @@ impl App {
             }
             Hit::FilterBox => {
                 self.slot.filter.ui.focus = true;
+                self.pointer = Pointer::Filter;
                 return Effect::None;
             }
             Hit::FilterRegex => {
@@ -1227,10 +1244,10 @@ impl App {
                     self.slot.scroll = 0;
                 }
             }
-            Hit::Divider(c) => self.col_drag = Some((c, x, self.layout.col_w[c - 1])),
+            Hit::Divider(c) => self.pointer = Pointer::Column { col: c, x0: x, w0: self.layout.col_w[c - 1] },
             Hit::MapButton => self.layout.map_on = !self.layout.map_on,
             Hit::MetricButton => return Effect::Metric(self.slot.proc_metric.next()),
-            Hit::MapDivider => self.map_drag = Some((x, self.layout.map_w)),
+            Hit::MapDivider => self.pointer = Pointer::MapDivider { x0: x, w0: self.layout.map_w },
             Hit::Map => {
                 if let Some(i) = treemap::hit(&self.map_tiles, x, y) {
                     self.select_from_map(i);
@@ -1240,7 +1257,7 @@ impl App {
             Hit::Scrollbar => {
                 let total = self.total_rows();
                 match self.layout.thumb(total, self.slot.scroll) {
-                    Some(t) if y >= t.y && y < t.y + t.h => self.grab = Some(y - t.y),
+                    Some(t) if y >= t.y && y < t.y + t.h => self.pointer = Pointer::Thumb { grab: y - t.y },
                     Some(t) => {
                         let page = self.layout.rows_visible().max(1);
                         self.set_scroll(if y < t.y { self.slot.scroll.saturating_sub(page) } else { self.slot.scroll + page });
@@ -1424,8 +1441,8 @@ impl App {
             kind: self.kind(),
             admin: self.can_elevate.then(|| self.layout.admin_button()),
             // The scrollbar thumb counts as a control under the pointer, and is pressed while it is dragged.
-            hot: self.hot.or(self.thumb().filter(|_| self.thumb_hover || self.grab.is_some())),
-            pressed: self.pressed || self.grab.is_some(),
+            hot: self.hot.or(self.thumb().filter(|_| self.thumb_hover || matches!(self.pointer, Pointer::Thumb { .. }))),
+            pressed: self.pressed(),
             modal: self.modals.front(),
             view,
             // The status bar already says what a running scan has found.

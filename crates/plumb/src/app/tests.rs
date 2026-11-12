@@ -875,12 +875,12 @@ fn a_press_on_the_hot_control_is_pressed_until_the_button_is_released() {
     let (x, y) = (chip.x + 5.0, chip.y + 5.0);
     a.handle(Input::Hover(x, y));
     a.handle(Input::Click(x, y, Default::default()));
-    assert!(a.pressed);
+    assert!(a.pressed());
     a.handle(Input::Release);
-    assert!(!a.pressed);
+    assert!(!a.pressed());
     a.handle(Input::Hover(5.0, a.layout.rows_area().y + 5.0));
     a.handle(Input::Click(5.0, a.layout.rows_area().y + 5.0, Default::default()));
-    assert!(!a.pressed, "nothing under the pointer to press");
+    assert!(!a.pressed(), "nothing under the pointer to press");
 }
 
 #[test]
@@ -1063,7 +1063,7 @@ fn each_view_kind_keeps_its_own_sort_and_widths() {
 fn a_column_drag_then_a_switch_is_remembered() {
     let mut a = app();
     let w0 = a.layout.col_w[COL_PCT - 1];
-    a.col_drag = Some((COL_PCT, 500.0, w0));
+    a.pointer = Pointer::Column { col: COL_PCT, x0: 500.0, w0 };
     a.handle(Input::Drag(450.0, 0.0));
     a.handle(Input::Release);
     a.set_active(Some(1));
@@ -1079,7 +1079,7 @@ fn a_click_on_a_divider_in_a_small_window_stores_nothing() {
     a.prefs[ViewKind::Disk as usize].col_w = [200.0; 5];
     a.layout.w = 600.0;
     a.set_active(Some(0));
-    a.col_drag = Some((1, 500.0, a.layout.col_w[0]));
+    a.pointer = Pointer::Column { col: 1, x0: 500.0, w0: a.layout.col_w[0] };
     a.handle(Input::Release);
     assert_eq!(a.prefs[ViewKind::Disk as usize].col_w, [200.0; 5]);
 }
@@ -1088,7 +1088,7 @@ fn a_click_on_a_divider_in_a_small_window_stores_nothing() {
 fn a_switch_during_a_column_drag_keeps_the_dragged_width() {
     let mut a = app();
     let w0 = a.layout.col_w[COL_PCT - 1];
-    a.col_drag = Some((COL_PCT, 500.0, w0));
+    a.pointer = Pointer::Column { col: COL_PCT, x0: 500.0, w0 };
     a.handle(Input::Drag(450.0, 0.0));
     a.set_active(Some(1)); // a watch event borrows another view's slot (`in_slot`)
     a.set_active(Some(0));
@@ -1857,4 +1857,22 @@ fn begin_delete_refuses_a_scanning_drive_and_a_second_delete() {
     a.slot.scan = Scan::Refreshing;
     assert!(!a.begin_delete());
     assert!(toast_str(&a).starts_with("cannot delete: the drive is being scanned"));
+}
+
+#[test]
+fn a_press_holds_exactly_one_thing_and_release_lets_go_of_it() {
+    let mut a = scanned();
+    let (hy, dx) = (a.layout.header().y + 4.0, a.layout.column(COL_SCORE).0);
+    a.handle(Input::Click(dx, hy, Default::default()));
+    assert!(matches!(a.pointer, Pointer::Column { .. }), "a press on a column edge drags it");
+    let row = a.layout.rows_area();
+    a.handle(Input::Click(150.0, row.y + 5.0, Default::default()));
+    assert!(matches!(a.pointer, Pointer::Rows), "the next press replaces the drag: {:?}", a.pointer);
+    a.handle(Input::Release);
+    assert!(matches!(a.pointer, Pointer::Up));
+    let f = a.filter_box();
+    a.handle(Input::Click(f.x + 5.0, f.y + 5.0, Default::default()));
+    assert!(a.filter_dragging(), "a press in the filter box starts a text drag");
+    a.handle(Input::Release);
+    assert!(!a.filter_dragging(), "and release ends it");
 }

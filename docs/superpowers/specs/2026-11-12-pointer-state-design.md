@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # Pointer state as one value (cleanup plan item B2)
@@ -57,7 +57,7 @@ enum Pointer {
 - `Input::Drag` becomes one `match self.pointer`; `Input::Release` becomes `self.pointer = Pointer::Up`.
 - `over_divider` reads `matches!(self.pointer, Column { .. } | MapDivider { .. })`; `row_dragging()` reads `Rows`.
 
-## Decisions (open until the user answers)
+## Decisions (f1 and v1 chosen by the user, 2026-11-12)
 
 **f. The filter-box drag.** f1 (recommended): `Pointer::Filter` lives in `App`; `click`'s `Hit::FilterBox` arm sets it
 (the double-click path reaches `click` too), `WM_MOUSEMOVE` asks `app.filter_dragging()`; `WM_LBUTTONUP`'s
@@ -65,7 +65,9 @@ enum Pointer {
 leftover (a); no new `App` method beyond the getter. f2: leave `filter_drag` on `Win`, five fields become one, the filter drag stays a second flag cleared in
 `WM_LBUTTONUP`. f2 is smaller but keeps one "which drag" flag outside the value.
 
-**v. What else ends a drag.** v1 (recommended): `Release` and `set_active` (a view switch) both set `Up`; fixes the view
+**v. What else ends a drag. Outcome: v2 built, v1 not.** The user chose v1, but its hook is wrong: `set_active` is also called transiently by `Win::in_slot` (a watch event borrowing another view's slot) and by `park_active`, so clearing there would kill a live drag on every watch event. A real view-switch hook needs its own design; leftover (a) stays parked.
+
+Original text: **v. What else ends a drag.** v1 (recommended): `Release` and `set_active` (a view switch) both set `Up`; fixes the view
 switch half of leftover (a); it is a behaviour change unrelated to the state shape, so it can be left out. v2:
 `Release` and the top of `click` only (a stale drag also ends at the next press). Focus loss mid-drag (leftover (b)) is
 left parked either way: `WM_CAPTURECHANGED` is not handled anywhere today, so it would be a new message handler that

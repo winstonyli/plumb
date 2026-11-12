@@ -5,7 +5,7 @@ use super::*;
 impl App {
     /// Whether a press on a row is being dragged over more rows (the window keeps a timer running meanwhile).
     pub fn row_dragging(&self) -> bool {
-        self.row_drag
+        self.pointer == Pointer::Rows
     }
 
     /// A press on visible row `i` at x: Shift extends the selection to it, Ctrl flips it, a plain press selects it. The
@@ -28,7 +28,9 @@ impl App {
             again = m.selected() == Some(id);
             m.select(id);
         }
-        self.row_drag = folder.is_none() && !mods.ctrl;
+        if folder.is_none() && !mods.ctrl {
+            self.pointer = Pointer::Rows;
+        }
         if again {
             self.held_mark_stale();
         }

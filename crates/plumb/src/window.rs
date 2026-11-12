@@ -190,8 +190,6 @@ struct Win {
     filter_rx: Receiver<(u64, Hits)>,
     /// First half of a surrogate pair seen by `WM_CHAR`.
     high_surrogate: Option<u16>,
-    /// The left button went down in the filter box and is still held: moving extends the selection.
-    filter_drag: bool,
     /// The views not on screen that hold a tree or a scan, by view index.
     parked: Vec<Option<View>>,
     /// Counts view switches, to find the least recently used.
@@ -253,7 +251,7 @@ impl Win {
         let win = Self {
             hwnd, app, gfx, painter, swap, comp, target: None, dpi, inset: 0.0, dark, run: Run::default(),
             policy: RescanPolicy::default(), last_input: Instant::now(),
-            posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None, filter_drag: false,
+            posted: Arc::default(), filter_tx, filter_rx, high_surrogate: None,
             parked: Vec::new(), clock: 0, timers: [false; 6], borrowed: false, background: false, wheel_rem: 0,
             tooltip: Self::make_tooltip(hwnd), tip: None, tip_last: String::new(), tip_scratch: String::new(), tip_buf: Vec::new(),
         };
@@ -276,7 +274,6 @@ impl Win {
         let at = self.filter_byte(x);
         let shift = mods_now().shift;
         self.app.handle(Input::Edit(if double { Edit::Word(at) } else { Edit::Place { at, extend: shift } }));
-        self.filter_drag = true;
         self.invalidate();
     }
 
@@ -970,7 +967,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         WM_LBUTTONUP => {
             let _ = unsafe { ReleaseCapture() };
-            with(|w| w.filter_drag = false);
             dispatch(hwnd, lp, |_, _| Input::Release);
             LRESULT(0)
         }
@@ -981,7 +977,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_MOUSEMOVE => {
             if wp.0 & 1 != 0 {
                 with(|w| {
-                    if w.filter_drag {
+                    if w.app.filter_dragging() {
                         let at = w.filter_byte(w.dip(lp).0);
                         w.app.handle(Input::Edit(Edit::Place { at, extend: true }));
                         w.invalidate();
