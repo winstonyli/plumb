@@ -46,73 +46,6 @@ pub enum ViewKind {
     Processes,
 }
 
-impl ViewKind {
-    /// `metric` is what the Processes view's first number column holds; a disk ignores it.
-    pub fn titles(self, metric: Metric) -> [&'static str; 6] {
-        match self {
-            ViewKind::Disk => ["Name", "Stale", "% of parent", "Size", "Items", "Modified"],
-            ViewKind::Processes => ["Name", "Load", "% of parent", metric_label(metric), "CPU", "I/O"],
-        }
-    }
-
-    /// The Score column's cell: stale bytes for a disk, a load in tenths of a percent for processes.
-    pub fn score_text(self, tree: &Tree, id: NodeId) -> fmt::Show<'static> {
-        let v = tree.subtree_score[id];
-        match self {
-            ViewKind::Disk => fmt::size(v),
-            ViewKind::Processes => fmt::tenths(v),
-        }
-    }
-
-    /// The Score header's tooltip.
-    pub fn score_help(self) -> &'static str {
-        match self {
-            ViewKind::Disk => "Size not modified for a long time (counts in from 30 days, in full after 2 years); a folder adds its files",
-            ViewKind::Processes => "The most a process uses of CPU, memory or I/O, as a share of the machine, steady over about 30 s; a parent adds its children",
-        }
-    }
-
-    /// The text of a size-column value: bytes for a disk; a process's memory, CPU share or I/O rate by `metric`.
-    pub fn size_text(self, metric: Metric, v: u64) -> fmt::Show<'static> {
-        match (self, metric) {
-            (ViewKind::Processes, Metric::Cpu) => fmt::tenths(v),
-            (ViewKind::Processes, Metric::Io) => fmt::rate(v),
-            _ => fmt::size(v),
-        }
-    }
-
-    /// The sort each header column stands for; "% of parent" orders by size.
-    pub fn sort_key(self, col: usize) -> SortKey {
-        match self {
-            ViewKind::Disk => [SortKey::Name, SortKey::Score, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified][col],
-            ViewKind::Processes => [SortKey::Name, SortKey::Score, SortKey::Size, SortKey::Size, SortKey::Aux(0), SortKey::Aux(1)][col],
-        }
-    }
-
-    /// What a map class is called in this view. Processes borrows four file classes to show where the executable
-    /// lives (see `location_class`).
-    pub fn class_label(self, c: Class) -> &'static str {
-        match (self, c) {
-            (ViewKind::Processes, Class::Executable) => "Windows",
-            (ViewKind::Processes, Class::Document) => "Program Files",
-            (ViewKind::Processes, Class::Code) => "User profile",
-            (ViewKind::Processes, Class::Other) => "Elsewhere",
-            _ => c.label(),
-        }
-    }
-
-    /// The text of the last two columns for `id`; the second is `None` when the node has nothing to show there.
-    pub fn last_two(self, tree: &Tree, id: NodeId) -> (fmt::Show<'static>, Option<fmt::Show<'static>>) {
-        match self {
-            ViewKind::Disk => (fmt::count(tree.subtree_files[id] as u64), tree.mtime[id].map(|d| fmt::date(fmt::local_day(d.get())))),
-            ViewKind::Processes => {
-                let [cpu, io, _] = tree.aux.get(id.idx()).copied().unwrap_or_default();
-                (fmt::tenths(cpu), Some(fmt::rate(io)))
-            }
-        }
-    }
-}
-
 /// The name of a map metric: the button's label and the first column's title.
 pub fn metric_label(m: Metric) -> &'static str {
     match m {
@@ -568,7 +501,7 @@ impl App {
     pub fn finish_scan(&mut self, tree: Tree, summary: String) {
         self.filter_reset();
         self.map_reset();
-        let model = Self::fresh_model(&tree, self.kind().sort_key(self.sort.0), self.sort.1);
+        let model = Self::fresh_model(&tree, self.kind().spec().cols[self.sort.0].sort, self.sort.1);
         self.slot.tree = Some(tree);
         self.slot.model = Some(model);
         self.slot.scroll = 0;
@@ -584,7 +517,7 @@ impl App {
         self.slot.scroll = 0;
         self.slot.model = None;
         self.slot.flash.clear();
-        let key = self.kind().sort_key(self.sort.0);
+        let key = self.kind().spec().cols[self.sort.0].sort;
         let Some(tree) = &mut self.slot.tree else { return };
         tree.take_touched(); // the model is built from the tree as it is now
         self.slot.model = Some(Self::fresh_model(tree, key, self.sort.1));
@@ -603,7 +536,7 @@ impl App {
         };
         self.map_reset();
         let Some(snap) = kept else { return self.finish_scan(tree, summary) };
-        let (model, scroll) = snap.apply(&tree, self.kind().sort_key(self.sort.0), self.sort.1, self.layout.rows_visible());
+        let (model, scroll) = snap.apply(&tree, self.kind().spec().cols[self.sort.0].sort, self.sort.1, self.layout.rows_visible());
         self.slot.tree = Some(tree);
         self.slot.model = Some(model);
         self.slot.scroll = scroll;
@@ -760,7 +693,7 @@ impl App {
             return Some(TipKey::Area(bar));
         }
         if let Hit::Header(crate::layout::COL_SCORE) = self.layout.hit(x, y, self.views.len()) {
-            out.push_str(self.kind().score_help());
+            out.push_str(self.kind().spec().score_help);
             return Some(TipKey::Area(self.layout.header_cell(crate::layout::COL_SCORE)));
         }
         if let Hit::Row(i) = self.layout.hit(x, y, self.views.len()) {
@@ -779,7 +712,7 @@ impl App {
 
     /// A map tile of the Processes view: name and pid, the numbers, the executable and when it started.
     fn process_tip(&self, tree: &Tree, t: &Tile, out: &mut String) {
-        let (metric, size) = (metric_noun(self.slot.proc_metric), self.kind().size_text(self.slot.proc_metric, t.bytes));
+        let (metric, size) = (metric_noun(self.slot.proc_metric), (self.kind().spec().size_text)(self.slot.proc_metric, t.bytes));
         if t.kind == Kind::Rest {
             // A parent whose own size is under the cutoff is merged here too, with no Own tile of its own.
             let own = tree.size[t.node] > 0 && !self.map_tiles.iter().any(|o| o.kind == Kind::Own && o.node == t.node);
@@ -809,7 +742,7 @@ impl App {
         let attrs = self.row_attrs(id);
         if self.kind() == ViewKind::Processes {
             let pid = tree.aux.get(id.idx()).map_or(0, |a| a[2]) as u32;
-            describe::process(tree, id, self.kind().size_text(self.slot.proc_metric, bytes), metric_noun(self.slot.proc_metric), self.slot.proc_info.get(&pid), plumb_core::age::now_secs(), attrs)
+            describe::process(tree, id, (self.kind().spec().size_text)(self.slot.proc_metric, bytes), metric_noun(self.slot.proc_metric), self.slot.proc_info.get(&pid), plumb_core::age::now_secs(), attrs)
         } else {
             describe::file(tree, id, bytes, self.map_now, attrs)
         }
@@ -1278,7 +1211,7 @@ impl App {
                 self.sort = (c, desc);
                 let kind = self.kind();
                 if let (Some(t), Some(m)) = (&self.slot.tree, &mut self.slot.model) {
-                    m.set_sort(t, kind.sort_key(c), desc);
+                    m.set_sort(t, kind.spec().cols[c].sort, desc);
                     self.slot.scroll = 0;
                 }
             }
@@ -1361,7 +1294,7 @@ impl App {
         if n > 1 {
             // A set is told by its count and total; a picked folder and a picked file under it count once.
             let total: u64 = self.topmost().iter().map(|&i| tree.subtree_size[i]).sum();
-            let _ = write!(out, "{n} selected, {}", self.kind().size_text(self.slot.proc_metric, total));
+            let _ = write!(out, "{n} selected, {}", (self.kind().spec().size_text)(self.slot.proc_metric, total));
             return true;
         }
         self.describe_sized(tree, id, tree.subtree_size[id]).write_line(out);
@@ -1501,7 +1434,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{COL_FOURTH, COL_PCT, COL_SCORE};
+    use crate::layout::{COL_LAST, COL_PCT, COL_SCORE};
     use crate::outcome::Failure;
 
     /// The text-returning forms of the tooltip and status builders, which write into a buffer.
@@ -1539,16 +1472,16 @@ mod tests {
 
     #[test]
     fn a_disk_view_keeps_its_titles_sorts_and_last_two_columns() {
-        assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Stale", "% of parent", "Size", "Items", "Modified"]);
-        let keys: Vec<_> = (0..COL_COUNT).map(|c| ViewKind::Disk.sort_key(c)).collect();
+        assert_eq!(ViewKind::Disk.spec().titles(Metric::Cpu), ["Name", "Stale", "% of parent", "Size", "Items", "Modified"]);
+        let keys: Vec<_> = (0..COL_COUNT).map(|c| ViewKind::Disk.spec().cols[c].sort).collect();
         assert_eq!(keys, [SortKey::Name, SortKey::Score, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified]);
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let f = b.push_str(r, "f", 5, plumb_core::NodeFlags::empty());
         b.set_mtime(f, std::num::NonZeroU32::new(1_700_000_000));
         let t = b.finish().unwrap();
-        assert_eq!(ViewKind::Disk.last_two(&t, f), (fmt::count(1), Some(fmt::date(fmt::local_day(1_700_000_000)))));
-        assert_eq!(ViewKind::Disk.last_two(&t, r), (fmt::count(1), None), "no date, no fourth cell");
+        assert_eq!((ViewKind::Disk.spec().last_two)(&t, f), (fmt::count(1), Some(fmt::date(fmt::local_day(1_700_000_000)))));
+        assert_eq!((ViewKind::Disk.spec().last_two)(&t, r), (fmt::count(1), None), "no date, no fourth cell");
     }
 
     #[test]
@@ -1557,12 +1490,12 @@ mod tests {
         let (l, y) = (&a.layout, a.layout.header().y + 4.0);
         let (key, text) = target_str(&a, l.column(crate::layout::COL_SCORE).0 + 20.0, y).expect("a tip over the Score header");
         assert_eq!(key, TipKey::Area(l.header_cell(crate::layout::COL_SCORE)));
-        assert_eq!(text, ViewKind::Disk.score_help());
+        assert_eq!(text, ViewKind::Disk.spec().score_help);
         assert!(target_str(&a, l.column(crate::layout::COL_SIZE).0 + 20.0, y).is_none());
         let (p, _) = process_app();
         let mut s = String::new();
         p.tip_target(p.layout.column(crate::layout::COL_SCORE).0 + 20.0, p.layout.header().y + 4.0, &mut s);
-        assert_eq!(s, ViewKind::Processes.score_help());
+        assert_eq!(s, ViewKind::Processes.spec().score_help);
     }
 
     #[test]
@@ -1574,12 +1507,12 @@ mod tests {
         t.set_mtime(f, std::num::NonZeroU32::new(now - 3 * 365 * 86_400));
         t.set_now(now);
         let t = t.finish().unwrap();
-        assert_eq!(ViewKind::Disk.score_text(&t, f), fmt::size(4096));
+        assert_eq!((ViewKind::Disk.spec().score_text)(&t, f), fmt::size(4096));
         let mut p = plumb_core::TreeBuilder::new();
         let root = p.push_str(NodeId::NONE, "Processes", 0, plumb_core::NodeFlags::DIR);
         let mut p = p.finish().unwrap();
         p.add_score(root, 12);
-        assert_eq!(ViewKind::Processes.score_text(&p, root).to_string(), "1.2%");
+        assert_eq!((ViewKind::Processes.spec().score_text)(&p, root).to_string(), "1.2%");
     }
 
     /// An app with a Processes view as its third view, showing one process `ping.exe` (pid 77) under the root.
@@ -1605,8 +1538,8 @@ mod tests {
         assert_eq!(location_class(Some(r"C:\Users\me\AppData\Local\b.exe"), sys), Class::Code);
         assert_eq!(location_class(Some(r"D:\tools\c.exe"), sys), Class::Other);
         assert_eq!(location_class(None, sys), Class::Other);
-        assert_eq!(ViewKind::Processes.class_label(Class::Code), "User profile");
-        assert_eq!(ViewKind::Disk.class_label(Class::Code), "Code");
+        assert_eq!((ViewKind::Processes.spec().class_label)(Class::Code), "User profile");
+        assert_eq!((ViewKind::Disk.spec().class_label)(Class::Code), "Code");
     }
 
     #[test]
@@ -1625,12 +1558,12 @@ mod tests {
         assert_eq!(click(&mut a), Effect::Metric(Metric::Io));
         a.slot.proc_metric = Metric::Io;
         assert_eq!(click(&mut a), Effect::Metric(Metric::Memory));
-        assert_eq!(ViewKind::Processes.titles(Metric::Io)[3], "I/O");
-        assert_eq!(ViewKind::Processes.titles(Metric::Private)[3], "Private");
-        assert_eq!(ViewKind::Processes.size_text(Metric::Private, 2048), fmt::size(2048));
-        assert_eq!(ViewKind::Processes.size_text(Metric::Cpu, 123), "12.3%");
-        assert_eq!(ViewKind::Processes.size_text(Metric::Io, 2048), fmt::rate(2048));
-        assert_eq!(ViewKind::Disk.size_text(Metric::Cpu, 2048), fmt::size(2048), "a disk ignores the metric");
+        assert_eq!(ViewKind::Processes.spec().titles(Metric::Io)[3], "I/O");
+        assert_eq!(ViewKind::Processes.spec().titles(Metric::Private)[3], "Private");
+        assert_eq!((ViewKind::Processes.spec().size_text)(Metric::Private, 2048), fmt::size(2048));
+        assert_eq!((ViewKind::Processes.spec().size_text)(Metric::Cpu, 123), "12.3%");
+        assert_eq!((ViewKind::Processes.spec().size_text)(Metric::Io, 2048), fmt::rate(2048));
+        assert_eq!((ViewKind::Disk.spec().size_text)(Metric::Cpu, 2048), fmt::size(2048), "a disk ignores the metric");
     }
 
     #[test]
@@ -2004,14 +1937,14 @@ mod tests {
 
     #[test]
     fn a_process_view_sorts_cpu_and_io_by_aux_and_shows_them_as_rates() {
-        assert_eq!(ViewKind::Processes.titles(Metric::Memory)[4..], ["CPU", "I/O"]);
-        assert_eq!((ViewKind::Processes.sort_key(1), ViewKind::Processes.sort_key(4), ViewKind::Processes.sort_key(5)), (SortKey::Score, SortKey::Aux(0), SortKey::Aux(1)));
+        assert_eq!(ViewKind::Processes.spec().titles(Metric::Memory)[4..], ["CPU", "I/O"]);
+        assert_eq!((ViewKind::Processes.spec().cols[1].sort, ViewKind::Processes.spec().cols[4].sort, ViewKind::Processes.spec().cols[5].sort), (SortKey::Score, SortKey::Aux(0), SortKey::Aux(1)));
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let mut t = b.finish().unwrap();
-        assert_eq!(ViewKind::Processes.last_two(&t, r), (fmt::tenths(0), Some(fmt::rate(0))), "no aux yet");
+        assert_eq!((ViewKind::Processes.spec().last_two)(&t, r), (fmt::tenths(0), Some(fmt::rate(0))), "no aux yet");
         t.set_aux(r, [255, 2048, 99]);
-        assert_eq!(ViewKind::Processes.last_two(&t, r), (fmt::tenths(255), Some(fmt::rate(2048))));
+        assert_eq!((ViewKind::Processes.spec().last_two)(&t, r), (fmt::tenths(255), Some(fmt::rate(2048))));
     }
     use crate::layout::{CHIP_GAP, CHIP_W, HEADER_H, PICKER_H, ROW_H};
     use plumb_core::synth::kary_builder;
@@ -2514,7 +2447,7 @@ mod tests {
         let mut e = app();
         e.restore(&State::parse("columns = [111.0, 99.0, 77.0, 88.0]\n[sort]\ncolumn = 5\ndescending = true\n"));
         assert_eq!((e.layout.col_w[3], e.layout.col_w[4]), (88.0, crate::layout::COL_W[4]));
-        assert_eq!(e.sort(), (COL_FOURTH, true));
+        assert_eq!(e.sort(), (COL_LAST, true));
     }
 
     #[test]

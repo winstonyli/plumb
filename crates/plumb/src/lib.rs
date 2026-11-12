@@ -13,6 +13,7 @@ pub mod outcome;
 pub mod preview;
 pub mod restore;
 pub mod state;
+pub mod view_spec;
 #[cfg(windows)]
 pub mod draw;
 #[cfg(windows)]

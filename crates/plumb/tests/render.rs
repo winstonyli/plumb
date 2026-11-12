@@ -531,7 +531,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
         render_on(&painter, &gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
     };
     let (known, unknown) = (shot(Some(154_000)), shot(None));
-    let (mx, mw) = layout.column(plumb::layout::COL_FOURTH);
+    let (mx, mw) = layout.column(plumb::layout::COL_LAST);
     let r = layout.row(1);
     let differs = |x0: f32, w: f32| (x0 as u32..(x0 + w) as u32).any(|x| (r.y as u32..(r.y + r.h) as u32).any(|y| rgb_at(&known, x, y) != rgb_at(&unknown, x, y)));
     assert!(differs(mx, mw), "the date is drawn in the Modified column");
@@ -557,7 +557,7 @@ fn the_stale_column_is_drawn_for_an_old_file() {
         let mut model = RowModel::new(&tree);
         model.reveal(&tree, plumb_core::NodeId(1));
         let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_FOURTH, true), admin: None, hot: None, pressed: false,
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_LAST, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
             message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };

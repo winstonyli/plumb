@@ -5,7 +5,7 @@ use crate::icons;
 use plumb_core::basket::Basket;
 use plumb_core::age::{shade, FADE_MAX};
 use plumb_core::filter::Matcher;
-use crate::layout::{COL_FOURTH, COL_PCT, COL_SCORE, COL_SIZE, COL_THIRD, Layout, Rect, BASKET_W, CAPTION_RESERVE, FILTER_PAD, ICON_BTN, INDENT, METRIC_W, PICKER_H, ROW_H, TOAST_LINE_H, TOAST_PAD};
+use crate::layout::{COL_LAST, COL_PCT, COL_SCORE, COL_SIZE, Layout, Rect, BASKET_W, CAPTION_RESERVE, FILTER_PAD, ICON_BTN, INDENT, METRIC_W, PICKER_H, ROW_H, TOAST_LINE_H, TOAST_PAD};
 use plumb_core::treemap::{Class, Kind, Tile};
 use plumb_core::rows::RowModel;
 use std::cell::{Cell, RefCell};
@@ -689,14 +689,15 @@ impl Pen<'_> {
         let h = l.header();
         self.fill(h, t.panel);
         let partial = s.view.as_ref().is_some_and(|v| v.partial);
-        for (c, name) in s.kind.titles(s.metric).iter().enumerate() {
+        let spec = s.kind.spec();
+        for (c, name) in spec.titles(s.metric).iter().enumerate() {
             let (x, w) = l.column(c);
             if s.hot == Some(l.header_cell(c)) {
                 self.fill(l.header_cell(c), mix(t.panel, t.fg, 0.07)); // the cell is clickable: it sorts
             }
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
             // During a scan the sums are what has been found so far: "at least", said once here.
-            let atleast = if partial && (c == COL_SIZE || (matches!(c, COL_SCORE | COL_THIRD) && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
+            let atleast = if partial && spec.cols[c].partial { "\u{2265} " } else { "" };
             let color = if arrow.is_empty() { t.dim } else { t.fg };
             self.text_as_fmt(Role::Title, format_args!("{atleast}{name}{arrow}"), Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, c != 0 && c != COL_PCT);
             if c > 0 {
@@ -857,7 +858,7 @@ impl Pen<'_> {
             .map(|&(c, b)| {
                 let share = b * 100 / total.max(1);
                 let (lt, pct) = if share == 0 { ("<", 1) } else { ("", share) };
-                let w = self.text_width_fmt(Role::Caption, format_args!("{} {lt}{pct}%", s.kind.class_label(c)));
+                let w = self.text_width_fmt(Role::Caption, format_args!("{} {lt}{pct}%", (s.kind.spec().class_label)(c)));
                 (c, lt, pct, w)
             })
             .collect();
@@ -887,7 +888,7 @@ impl Pen<'_> {
         let mut x = r.x + r.w - shift - used;
         for &(c, lt, pct, w) in &entries[..n] {
             self.fill(Rect { x, y: r.y + (r.h - 10.0) / 2.0, w: 10.0, h: 10.0 }, s.theme.class[c.index()]);
-            self.text_as_fmt(Role::Caption, format_args!("{} {lt}{pct}%", s.kind.class_label(c)), Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
+            self.text_as_fmt(Role::Caption, format_args!("{} {lt}{pct}%", (s.kind.spec().class_label)(c)), Rect { x: x + 14.0, w: w + 2.0, ..r }, s.theme.dim, false);
             x += 14.0 + w + 12.0;
         }
         used + shift
@@ -1060,7 +1061,7 @@ impl Pen<'_> {
     fn skeleton(&self, s: &Scene) {
         let (t, l) = (&s.theme, &s.layout);
         let n = l.rows_visible();
-        let ((nx, nw), (sx, sw), (ix, iw)) = (l.column(0), l.column(COL_SIZE), l.column(COL_THIRD));
+        let ((nx, nw), (sx, sw), (ix, iw)) = (l.column(0), l.column(COL_SIZE), l.column(COL_LAST - 1));
         for i in 0..n {
             let r = l.row(i);
             let c = D2D1_COLOR_F { a: 0.22 * (1.0 - i as f32 / n as f32), ..t.dim };
@@ -1158,7 +1159,7 @@ impl Pen<'_> {
             }
             self.text(&name, cell, fg, false);
             let (sx, sw) = l.column(COL_SIZE);
-            self.text_fmt(format_args!("{}", s.kind.size_text(s.metric, v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, side, true);
+            self.text_fmt(format_args!("{}", (s.kind.spec().size_text)(s.metric, v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, side, true);
             let (px, pw) = l.column(COL_PCT);
             let (bx, bw) = (px + 4.0, pw - 8.0);
             self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
@@ -1172,16 +1173,16 @@ impl Pen<'_> {
                 }
             }
             self.text_fmt(format_args!("{}", fmt::tenths((frac * 1000.0).round() as u64)), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
-            let (third, fourth) = s.kind.last_two(v.tree, id);
-            let (ix, iw) = l.column(COL_THIRD);
+            let (third, fourth) = (s.kind.spec().last_two)(v.tree, id);
+            let (ix, iw) = l.column(COL_LAST - 1);
             self.text_fmt(format_args!("{third}"), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
             if let Some(text) = fourth {
-                let (mx, mw) = l.column(COL_FOURTH);
+                let (mx, mw) = l.column(COL_LAST);
                 self.text_fmt(format_args!("{text}"), Rect { x: mx, y: r.y, w: mw - 8.0, h: r.h }, side, true);
             }
             if v.tree.subtree_score[id] != 0 {
                 let (kx, kw) = l.column(COL_SCORE); // a zero score is left blank: most rows have none, and the numbers should stand out
-                self.text_fmt(format_args!("{}", s.kind.score_text(v.tree, id)), Rect { x: kx, y: r.y, w: kw - 8.0, h: r.h }, fg, true);
+                self.text_fmt(format_args!("{}", (s.kind.spec().score_text)(v.tree, id)), Rect { x: kx, y: r.y, w: kw - 8.0, h: r.h }, fg, true);
             }
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {

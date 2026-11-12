@@ -46,16 +46,15 @@ pub const METRIC_W: f32 = 72.0;
 pub const HELD_ROWS: usize = 6;
 pub const HELD_H: f32 = (HELD_ROWS as f32 + 1.0) * ROW_H;
 pub const INDENT: f32 = 20.0;
-/// The columns after Name, left to right (the score first: it is what the view is for). The Third and Fourth columns are Items and Modified
+/// The columns after Name, left to right (the score first: it is what the view is for). The last two are Items and Modified
 /// for a disk, CPU and I/O for processes.
 pub const COL_SCORE: usize = 1;
 pub const COL_PCT: usize = 2;
 pub const COL_SIZE: usize = 3;
-pub const COL_THIRD: usize = 4;
-pub const COL_FOURTH: usize = 5;
+pub const COL_LAST: usize = COL_COUNT - 1;
 /// The number of header columns: Name and the five above.
 pub const COL_COUNT: usize = 6;
-/// Starting widths of the Score, % of parent, Size, Third and Fourth columns; Name takes the rest.
+/// Starting widths of the five columns after Name; Name takes the rest.
 pub const COL_W: [f32; 5] = [72.0, 130.0, 100.0, 90.0, 96.0];
 /// Narrowest a dragged column may get, and narrowest the Name column may be squeezed.
 pub const MIN_COL_W: f32 = 64.0;
@@ -74,7 +73,7 @@ fn icon_button(right: f32, band: Rect) -> Rect {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
     Chip(usize),
-    /// Column header: 0 Name, then `COL_SCORE`..=`COL_FOURTH`.
+    /// Column header: 0 Name, then `COL_SCORE`..=`COL_LAST`.
     Header(usize),
     /// The left edge of column 1..=5 in the header, where a drag resizes that column.
     Divider(usize),
@@ -481,7 +480,7 @@ mod tests {
     #[test]
     fn columns_fill_the_row_width() {
         let l = Layout::new(800.0, 600.0);
-        let (x4, w4) = l.column(COL_FOURTH);
+        let (x4, w4) = l.column(COL_LAST);
         assert_eq!(x4 + w4, l.rows_area().w);
         assert_eq!(l.column(0).0 + l.column(0).1, l.column(COL_SCORE).0);
     }
@@ -491,8 +490,8 @@ mod tests {
         let l = Layout::new(640.0, 400.0);
         assert!(l.column(0).1 >= MIN_NAME_W, "{}", l.column(0).1);
         let y = l.header().y + 4.0;
-        assert_eq!(l.hit(l.column(COL_FOURTH).0, y, 0), Hit::Divider(COL_FOURTH));
-        assert_eq!(l.hit(l.column(COL_FOURTH).0 + 20.0, y, 0), Hit::Header(COL_FOURTH));
+        assert_eq!(l.hit(l.column(COL_LAST).0, y, 0), Hit::Divider(COL_LAST));
+        assert_eq!(l.hit(l.column(COL_LAST).0 + 20.0, y, 0), Hit::Header(COL_LAST));
         assert_eq!(l.tree_min(), MIN_NAME_W + COL_W.iter().sum::<f32>() + SCROLLBAR_W);
     }
 
@@ -530,7 +529,7 @@ mod tests {
         assert_eq!(l.hit(edge + 10.0, y, 0), Hit::Header(COL_PCT));
         l.set_col_w(COL_PCT, 200.0);
         assert_eq!(l.column(COL_PCT).1, 200.0);
-        assert_eq!(l.column(COL_FOURTH).0 + l.column(COL_FOURTH).1, l.rows_area().w, "the right edge stays put");
+        assert_eq!(l.column(COL_LAST).0 + l.column(COL_LAST).1, l.rows_area().w, "the right edge stays put");
         l.set_col_w(COL_PCT, 1.0);
         assert_eq!(l.column(2).1, MIN_COL_W);
         l.set_col_w(2, 10_000.0);
