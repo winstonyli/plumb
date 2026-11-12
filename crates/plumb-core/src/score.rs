@@ -11,6 +11,8 @@ pub const STALE_FULL: u32 = 730 * 86_400;
 pub const IO_FULL: u64 = 500_000_000;
 /// The time constant (seconds) of the CPU and I/O averages.
 pub const TAU_SECS: f64 = 30.0;
+/// The share of the shown load that the average must move before the shown load does (at least half a point).
+pub const BAND: f64 = 0.15;
 
 /// How much of a file's size counts at `age_secs`, per mille.
 pub fn weight(age_secs: u32) -> u32 {
@@ -44,13 +46,13 @@ pub fn io_share(io_rate: u64) -> f64 {
     io_rate as f64 * 100.0 / IO_FULL as f64
 }
 
-/// The tenths of a percent to show for the percent `x`: it moves only when `x` is half a point away, and an idle
+/// The tenths of a percent to show for the percent `x`: it moves only when `x` is [`BAND`] of the shown value (at least half a point) away, and an idle
 /// `x` (under 0.05%) shows 0. Tenths, so many small children still add up to a visible family.
 pub fn settle(shown: u64, x: f64) -> u64 {
     let t = x * 10.0;
     if t < 0.5 {
         0
-    } else if (t - shown as f64).abs() >= 5.0 {
+    } else if (t - shown as f64).abs() >= (shown as f64 * BAND).max(5.0) {
         t.round() as u64
     } else {
         shown
@@ -120,9 +122,12 @@ mod tests {
 
     #[test]
     fn the_dead_band_holds_small_moves_and_snaps_idle_to_zero() {
-        assert_eq!(settle(50, 5.4), 50);
-        assert_eq!(settle(50, 5.5), 55);
-        assert_eq!(settle(50, 4.5), 45);
+        assert_eq!(settle(50, 5.7), 50);
+        assert_eq!(settle(50, 5.8), 58);
+        assert_eq!(settle(50, 4.2), 42);
+        assert_eq!(settle(50, 4.3), 50);
+        assert_eq!(settle(10, 1.4), 10, "a small value keeps the half-point floor");
+        assert_eq!(settle(10, 1.5), 15);
         assert_eq!(settle(1, 0.049), 0);
         assert_eq!(settle(1, 0.05), 1);
         assert_eq!(settle(0, 0.29), 0);
@@ -143,11 +148,26 @@ mod tests {
         for _ in 0..3000 {
             l.step(1.0, 40.0, 0.0, 0.0);
         }
-        assert!((395..=400).contains(&l.shown()), "within half a point of 40%: {}", l.shown());
+        assert!((395..=400).contains(&l.shown()), "within the band of 40%: {}", l.shown());
         for _ in 0..3000 {
             l.step(1.0, 0.0, 0.0, 0.0);
         }
         assert_eq!(l.shown(), 0);
+    }
+
+    #[test]
+    fn a_slow_swing_changes_the_shown_load_only_a_few_times() {
+        let mut l = Load::default();
+        let (mut last, mut changes) = (0, 0);
+        for s in 0..600 {
+            let cpu = 25.0 + 10.0 * (f64::from(s) * std::f64::consts::TAU / 90.0).sin();
+            let shown = l.step(1.0, cpu, 0.0, 0.0);
+            if s >= 120 && shown != last {
+                changes += 1;
+            }
+            last = shown;
+        }
+        assert!(changes <= 16, "{changes} changes in 480 s");
     }
 
     #[test]
