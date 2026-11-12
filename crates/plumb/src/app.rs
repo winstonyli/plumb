@@ -1175,6 +1175,9 @@ impl App {
                 if let Some((c, x0, w0)) = self.col_drag {
                     // The edge is the column's left side, so moving it left widens the column.
                     self.layout.set_col_w(c, w0 + x0 - x);
+                    // Stored as it moves, and only the dragged column: the others may be clamped narrow by a small window.
+                    let k = self.kind() as usize;
+                    self.prefs[k].col_w[c - 1] = self.layout.col_w[c - 1];
                 } else if let Some(g) = self.grab {
                     let s = self.layout.scroll_for_thumb_y(self.total_rows(), y - g);
                     self.set_scroll(s);
@@ -1188,12 +1191,7 @@ impl App {
                 self.row_drag = false;
                 self.pressed = false;
                 self.grab = None;
-                if let Some((c, ..)) = self.col_drag.take() {
-                    // Only the column the user dragged is stored: the others may be clamped narrow by a small window.
-                    let k = self.kind() as usize;
-                    self.prefs[k].col_w[c - 1] = self.layout.col_w[c - 1];
-                }
-
+                self.col_drag = None;
                 self.map_drag = None;
             }
         }
@@ -2550,6 +2548,29 @@ mod tests {
         assert_eq!(a.layout.col_w[COL_PCT - 1], w0 + 50.0);
         assert_eq!(a.remembered().disk.widths["pct"], w0 + 50.0);
         assert_eq!(a.remembered().processes.widths["pct"], crate::layout::COL_W[COL_PCT - 1], "the other kind keeps its default");
+    }
+
+    #[test]
+    fn a_click_on_a_divider_in_a_small_window_stores_nothing() {
+        let mut a = app();
+        a.prefs[ViewKind::Disk as usize].col_w = [200.0; 5];
+        a.layout.w = 600.0;
+        a.set_active(Some(0));
+        a.col_drag = Some((1, 500.0, a.layout.col_w[0]));
+        a.handle(Input::Release);
+        assert_eq!(a.prefs[ViewKind::Disk as usize].col_w, [200.0; 5]);
+    }
+
+    #[test]
+    fn a_switch_during_a_column_drag_keeps_the_dragged_width() {
+        let mut a = app();
+        let w0 = a.layout.col_w[COL_PCT - 1];
+        a.col_drag = Some((COL_PCT, 500.0, w0));
+        a.handle(Input::Drag(450.0, 0.0));
+        a.set_active(Some(1)); // a watch event borrows another view's slot (`in_slot`)
+        a.set_active(Some(0));
+        a.handle(Input::Release);
+        assert_eq!(a.prefs[ViewKind::Disk as usize].col_w[COL_PCT - 1], w0 + 50.0);
     }
 
     #[test]
