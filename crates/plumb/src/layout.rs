@@ -53,6 +53,8 @@ pub const COL_PCT: usize = 2;
 pub const COL_SIZE: usize = 3;
 pub const COL_THIRD: usize = 4;
 pub const COL_FOURTH: usize = 5;
+/// The number of header columns: Name and the five above.
+pub const COL_COUNT: usize = 6;
 /// Starting widths of the Score, % of parent, Size, Third and Fourth columns; Name takes the rest.
 pub const COL_W: [f32; 5] = [72.0, 130.0, 100.0, 90.0, 96.0];
 /// Narrowest a dragged column may get, and narrowest the Name column may be squeezed.
@@ -404,10 +406,10 @@ impl Layout {
             return Hit::Map;
         }
         if self.header().contains(x, y) {
-            if let Some(c) = (1..6).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
+            if let Some(c) = (1..COL_COUNT).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
                 return Hit::Divider(c);
             }
-            return (0..6).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
+            return (0..COL_COUNT).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
         }
         if self.scrollbar().contains(x, y) {
             return Hit::Scrollbar;
@@ -479,9 +481,9 @@ mod tests {
     #[test]
     fn columns_fill_the_row_width() {
         let l = Layout::new(800.0, 600.0);
-        let (x4, w4) = l.column(5);
+        let (x4, w4) = l.column(COL_FOURTH);
         assert_eq!(x4 + w4, l.rows_area().w);
-        assert_eq!(l.column(0).0 + l.column(0).1, l.column(1).0);
+        assert_eq!(l.column(0).0 + l.column(0).1, l.column(COL_SCORE).0);
     }
 
     #[test]
@@ -489,8 +491,8 @@ mod tests {
         let l = Layout::new(640.0, 400.0);
         assert!(l.column(0).1 >= MIN_NAME_W, "{}", l.column(0).1);
         let y = l.header().y + 4.0;
-        assert_eq!(l.hit(l.column(5).0, y, 0), Hit::Divider(5));
-        assert_eq!(l.hit(l.column(5).0 + 20.0, y, 0), Hit::Header(5));
+        assert_eq!(l.hit(l.column(COL_FOURTH).0, y, 0), Hit::Divider(COL_FOURTH));
+        assert_eq!(l.hit(l.column(COL_FOURTH).0 + 20.0, y, 0), Hit::Header(COL_FOURTH));
         assert_eq!(l.tree_min(), MIN_NAME_W + COL_W.iter().sum::<f32>() + SCROLLBAR_W);
     }
 
@@ -512,7 +514,7 @@ mod tests {
         assert_eq!(l.hit(10.0 + 2.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::Chip(2));
         assert_eq!(l.hit(10.0 + 3.0 * (CHIP_W + CHIP_GAP), 10.0, 3), Hit::None);
         assert_eq!(l.hit(5.0, PICKER_H + 5.0, 3), Hit::Header(0));
-        assert_eq!(l.hit(l.column(2).0 + 20.0, PICKER_H + 5.0, 3), Hit::Header(2));
+        assert_eq!(l.hit(l.column(COL_PCT).0 + 20.0, PICKER_H + 5.0, 3), Hit::Header(COL_PCT));
         assert_eq!(l.hit(5.0, PICKER_H + HEADER_H + 1.0, 3), Hit::Row(0));
         assert_eq!(l.hit(5.0, PICKER_H + HEADER_H + 3.0 * ROW_H + 1.0, 3), Hit::Row(3));
         assert_eq!(l.hit(795.0, 200.0, 3), Hit::Scrollbar);
@@ -523,13 +525,13 @@ mod tests {
     fn dragging_a_column_edge_resizes_it_within_limits() {
         let mut l = Layout::new(800.0, 600.0);
         let y = l.header().y + 4.0;
-        let edge = l.column(2).0;
+        let edge = l.column(COL_PCT).0;
         assert_eq!(l.hit(edge, y, 0), Hit::Divider(2));
-        assert_eq!(l.hit(edge + 10.0, y, 0), Hit::Header(2));
-        l.set_col_w(2, 200.0);
-        assert_eq!(l.column(2).1, 200.0);
-        assert_eq!(l.column(5).0 + l.column(5).1, l.rows_area().w, "the right edge stays put");
-        l.set_col_w(2, 1.0);
+        assert_eq!(l.hit(edge + 10.0, y, 0), Hit::Header(COL_PCT));
+        l.set_col_w(COL_PCT, 200.0);
+        assert_eq!(l.column(COL_PCT).1, 200.0);
+        assert_eq!(l.column(COL_FOURTH).0 + l.column(COL_FOURTH).1, l.rows_area().w, "the right edge stays put");
+        l.set_col_w(COL_PCT, 1.0);
         assert_eq!(l.column(2).1, MIN_COL_W);
         l.set_col_w(2, 10_000.0);
         assert!(l.column(0).1 >= MIN_NAME_W);

@@ -83,13 +83,14 @@ pub fn save(state: &State) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::{COL_PCT, COL_SIZE};
 
     #[test]
     fn a_state_survives_a_round_trip() {
         let s = State {
             window: Some(Placement { x: -20, y: 40, w: 1100, h: 760, maximized: true }),
             columns: Some(vec![120.0, 90.5, 80.0]),
-            sort: Some(Sort { column: 3, descending: false }),
+            sort: Some(Sort { column: COL_SIZE, descending: false }),
             map: MapState { visible: false, width: 333.5 },
         };
         assert_eq!(State::parse(&s.to_text()), s);
@@ -101,7 +102,7 @@ mod tests {
         assert_eq!(State::parse("this is not toml {{"), State::default());
         assert_eq!(State::parse(""), State::default());
         let partial = State::parse("[sort]\ncolumn = 2\ndescending = true\nfuture_key = 1\n");
-        assert_eq!(partial.sort, Some(Sort { column: 2, descending: true }));
+        assert_eq!(partial.sort, Some(Sort { column: COL_PCT, descending: true }));
         assert_eq!((partial.window, partial.columns), (None, None));
         assert_eq!(partial.map, MapState::default());
     }

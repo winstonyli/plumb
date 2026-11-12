@@ -53,7 +53,7 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
         theme: Theme::new(dark),
         chips: &chips,
         active_chip: Some(0),
-        sort: (1, true),
+        sort: (plumb::layout::COL_SCORE, true),
         admin: Some(admin),
         hot: None, pressed: false,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), used: None, hover: Some(2), found: found.as_ref(), basket: &Basket::default(), flash: &Default::default(), procs: None }),
@@ -260,7 +260,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
         let plain = tiles.iter().position(|t| t.kind == Kind::File && t.bytes == 100_000).unwrap();
         let shoot = |selected: Option<usize>, stem: &str| {
             let scene = Scene {
-                layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+                layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
                 view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
                 message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
                 map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
@@ -300,7 +300,7 @@ fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     let painter = Painter::new(&gfx).unwrap();
     let frame = |generation: u64, selected: Option<usize>| {
         let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
             modal: None,
@@ -327,7 +327,7 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     let layout = Layout::new(W as f32, H as f32);
     let frame = |loading: bool| {
         let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: None, message: if loading { "" } else { "Scan failed\nThe volume could not be opened." }, loading, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
         render_scene(&gfx, &scene, if loading { "plumb-loading" } else { "plumb-empty" })
@@ -366,7 +366,7 @@ fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
         ((r.x + r.w / 2.0) as u32, (r.y + r.h / 2.0) as u32)
     };
     let scene = Scene {
-        layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+        layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
         view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
         map: Some(MapView { tiles: &tiles, generation: 1, now, selected: None, hover: None, classes: &classes, marked: &[] }),
         modal: None,
@@ -422,7 +422,7 @@ fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
         let classes = plumb_core::treemap::class_bytes(&tiles);
         let theme = Theme::new(true);
         let scene = Scene {
-            layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+            layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
             modal: None,
@@ -459,7 +459,7 @@ fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows
     };
     let frame = |marked: &[usize], chip: Option<&str>| {
         let scene = Scene {
-            layout: layout.with_basket(chip.is_some()), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+            layout: layout.with_basket(chip.is_some()), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: chip,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked }),
             modal: None,
@@ -490,7 +490,7 @@ fn a_marked_row_is_tinted() {
     let layout = Layout::new(W as f32, H as f32);
     let shot = |basket: &Basket| {
         let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket, flash: &Default::default(), procs: None }),
             message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
@@ -524,7 +524,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
         let mut model = RowModel::new(&tree);
         model.reveal(&tree, plumb_core::NodeId(1));
         let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
             message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
@@ -557,7 +557,7 @@ fn the_stale_column_is_drawn_for_an_old_file() {
         let mut model = RowModel::new(&tree);
         model.reveal(&tree, plumb_core::NodeId(1));
         let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (5, true), admin: None, hot: None, pressed: false,
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_FOURTH, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
             message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };
@@ -603,7 +603,7 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
     let chips = [Chip { label: "C:  123 GB".into(), used: 0.7, mark: Mark::None }, Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
     let layout = Layout { chips: chip_widths(&gfx, &chips), ..layout };
     let scene = Scene {
-        layout, theme: Theme::new(false), chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot: None, pressed: false,
+        layout, theme: Theme::new(false), chips: &chips, active_chip: Some(1), sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Default::default(), held: None, status: "6 processes, 1.1 GB in use of 16 GB", toast: &[], toast_ok: false, selection: "", banner: None,
         filter: FilterBar::default(), basket: None,
@@ -644,7 +644,7 @@ fn the_processes_map_follows_the_metric_button() {
         areas.push(tiles.iter().find(|t| t.kind != plumb_core::treemap::Kind::Rest && tree.name_string(t.node) == "big-memory.exe").map_or(0.0, |t| t.rect.w * t.rect.h));
         let classes = plumb_core::treemap::class_bytes(&tiles);
         let scene = Scene {
-            layout, theme: Theme::new(false), chips: &chips, active_chip: Some(0), sort: (1, true), admin: None, hot: None, pressed: false,
+            layout, theme: Theme::new(false), chips: &chips, active_chip: Some(0), sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
             message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: m, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "", toast: &[], toast_ok: false, selection: "", banner: None,
             filter: FilterBar::default(), basket: None,
@@ -691,7 +691,7 @@ fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme:
     let classes = plumb_core::treemap::class_bytes(&tiles);
     let hot = Some(hot(&layout));
     let scene = Scene {
-        layout, theme, chips: &chips, active_chip: Some(1), sort: (1, true), admin: None, hot, pressed,
+        layout, theme, chips: &chips, active_chip: Some(1), sort: (plumb::layout::COL_SCORE, true), admin: None, hot, pressed,
         view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
         message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Metric::Memory, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB", selection: "", banner: None,
         filter: FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() }, basket: None,
@@ -852,7 +852,7 @@ fn a_row_with_an_attribute_draws_a_pill_at_the_right_of_its_name_cell_and_leaves
         let mut model = RowModel::new(&tree);
         model.reveal(&tree, plumb_core::NodeId(1));
         let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (1, true), admin: None, hot: None, pressed: false,
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
             message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
         };

@@ -14,7 +14,7 @@ use crate::describe::{self, Description};
 use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H, ROW_H};
+use crate::layout::{chip_width, COL_COUNT, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H, ROW_H};
 use crate::modal::{Ask, Modal, Pick, Victim};
 use crate::outcome::Outcome;
 use toast::Toast;
@@ -477,7 +477,7 @@ impl App {
 
     /// Takes the remembered column widths and sort (before any scan, so the first tree is sorted by it).
     pub fn restore(&mut self, s: &State) {
-        if let Some(Sort { column, descending }) = s.sort.filter(|s| s.column < 6) {
+        if let Some(Sort { column, descending }) = s.sort.filter(|s| s.column < COL_COUNT) {
             self.sort = (column, descending);
         }
         if let Some(cols) = &s.columns {
@@ -1501,6 +1501,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::{COL_FOURTH, COL_PCT, COL_SCORE};
     use crate::outcome::Failure;
 
     /// The text-returning forms of the tooltip and status builders, which write into a buffer.
@@ -1539,7 +1540,7 @@ mod tests {
     #[test]
     fn a_disk_view_keeps_its_titles_sorts_and_last_two_columns() {
         assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Stale", "% of parent", "Size", "Items", "Modified"]);
-        let keys: Vec<_> = (0..6).map(|c| ViewKind::Disk.sort_key(c)).collect();
+        let keys: Vec<_> = (0..COL_COUNT).map(|c| ViewKind::Disk.sort_key(c)).collect();
         assert_eq!(keys, [SortKey::Name, SortKey::Score, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified]);
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
@@ -2294,16 +2295,16 @@ mod tests {
     fn dragging_a_column_edge_widens_the_column_and_release_ends_it() {
         let mut a = scanned();
         let y = a.layout.header().y + 4.0;
-        let x = a.layout.column(1).0;
-        let w = a.layout.column(1).1;
+        let x = a.layout.column(COL_SCORE).0;
+        let w = a.layout.column(COL_SCORE).1;
         assert!(a.over_divider(x, y));
         a.handle(Input::Click(x, y, Default::default()));
         a.handle(Input::Drag(x - 30.0, y));
-        assert_eq!(a.layout.column(1).1, w + 30.0);
+        assert_eq!(a.layout.column(COL_SCORE).1, w + 30.0);
         assert!(a.over_divider(0.0, 0.0), "while dragging the cursor stays a resize cursor");
         a.handle(Input::Release);
         a.handle(Input::Drag(x - 60.0, y));
-        assert_eq!(a.layout.column(1).1, w + 30.0, "released: further moves do nothing");
+        assert_eq!(a.layout.column(COL_SCORE).1, w + 30.0, "released: further moves do nothing");
         assert!(!a.over_divider(0.0, 0.0));
     }
 
@@ -2388,7 +2389,7 @@ mod tests {
     #[test]
     fn a_double_click_on_a_header_sorts_again() {
         let mut a = scanned();
-        let h = a.layout.column(1).0 + 20.0;
+        let h = a.layout.column(COL_SCORE).0 + 20.0;
         let y = a.layout.header().y + 4.0;
         let first = a.sort;
         a.handle(Input::Click(h, y, Default::default()));
@@ -2433,7 +2434,7 @@ mod tests {
         let mut a = scanned();
         let name = |a: &App, i: usize| a.slot.tree.as_ref().unwrap().name_string(a.slot.model.as_ref().unwrap().rows()[i].id);
         let hy = PICKER_H + 2.0;
-        assert_eq!(a.sort(), (1, true)); // default: Size descending
+        assert_eq!(a.sort(), (COL_SCORE, true)); // default: Size descending
         a.handle(Input::Click(5.0, hy, Default::default()));
         assert_eq!(a.sort(), (0, false)); // Name ascending
         let first = name(&a, 1);
@@ -2488,7 +2489,7 @@ mod tests {
     #[test]
     fn remembered_columns_and_sort_come_back_and_nonsense_is_ignored() {
         let mut a = app();
-        a.layout.set_col_w(2, 140.0);
+        a.layout.set_col_w(COL_PCT, 140.0);
         a.sort = (3, false);
         let mut b = app();
         b.restore(&a.remembered());
@@ -2508,7 +2509,7 @@ mod tests {
         let mut e = app();
         e.restore(&State::parse("columns = [111.0, 99.0, 77.0, 88.0]\n[sort]\ncolumn = 5\ndescending = true\n"));
         assert_eq!((e.layout.col_w[3], e.layout.col_w[4]), (88.0, crate::layout::COL_W[4]));
-        assert_eq!(e.sort(), (5, true));
+        assert_eq!(e.sort(), (COL_FOURTH, true));
     }
 
     #[test]
