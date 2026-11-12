@@ -67,6 +67,20 @@ fn the_walker_replay_equals_the_builder_tree() {
 }
 
 #[test]
+fn a_preview_tree_scores_old_files_as_they_arrive() {
+    let (tx, rx) = channel(1 << 10);
+    let name = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+    let three_years_ago = std::num::NonZeroU32::new(plumb_core::age::now_secs() - 3 * 365 * 86_400);
+    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: name("C:"), size: 0, flags: NodeFlags::DIR, mtime: None });
+    tx.send(PreviewMsg::Add { parent: NodeId(0), name: name("old.bin"), size: 4096, flags: NodeFlags::empty(), mtime: three_years_ago });
+    tx.send(PreviewMsg::Add { parent: NodeId(0), name: name("new.bin"), size: 4096, flags: NodeFlags::empty(), mtime: std::num::NonZeroU32::new(plumb_core::age::now_secs()) });
+    let (mut p, mut tree) = (Preview::new(rx), None);
+    p.apply(&mut tree, far());
+    let t = tree.unwrap();
+    assert_eq!((t.subtree_score[NodeId(1)], t.subtree_score[NodeId(2)], t.subtree_score[NodeId(0)]), (4096, 0, 4096));
+}
+
+#[test]
 fn mft_records_in_any_order_build_the_same_tree() {
     // 40 directories and 200 files under record 5, with parents of every record before or after it.
     let mut seed = 99;

@@ -160,6 +160,7 @@ impl Preview {
 fn root_tree(name: &[u16]) -> Tree {
     let mut b = TreeBuilder::new();
     b.push(NodeId::NONE, name, 0, NodeFlags::DIR);
+    b.set_now(plumb_core::age::now_secs());
     b.finish().expect("one node")
 }
 

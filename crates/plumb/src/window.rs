@@ -748,6 +748,7 @@ impl Win {
                     // Never shown: a cancelled scan's receiver is dropped first (`cancel_scan`, `spawn_scan`).
                     ScanError::Cancelled => "cancelled".to_string(),
                 })?;
+                b.set_now(plumb_core::age::now_secs());
                 let tree = b.finish().map_err(|e| format!("{e:?}"))?;
                 Ok(Scanned { tree, report, elapsed: t0.elapsed(), journal, root: root.clone() })
             }));
