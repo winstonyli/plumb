@@ -935,7 +935,7 @@ impl Win {
 }
 
 /// The status line after a scan; `found` is the share (tenths of a percent) of the drive's used space the scan accounted for.
-pub fn summary(used: Used, files: u64, elapsed: Duration, found: Option<u64>, corrupt: Option<u64>, unreadable: u64, note: Option<&str>) -> String {
+fn summary(used: Used, files: u64, elapsed: Duration, found: Option<u64>, corrupt: Option<u64>, unreadable: u64, note: Option<&str>) -> String {
     let scanner = match used {
         Used::Mft => "MFT scan",
         Used::Walk => "Directory walk",
@@ -974,12 +974,12 @@ fn wheel_rows(rem: &mut i32, delta: i32, per_notch: i32) -> i32 {
 
 /// Arguments for the elevated copy: `--scan "C:"` restarts the scan the user was looking at. `title` is a
 /// `ViewInfo::title`, which has no trailing backslash to escape the closing quote.
-pub fn relaunch_args(title: Option<&str>) -> String {
+fn relaunch_args(title: Option<&str>) -> String {
     title.map(|t| format!("--scan \"{t}\"")).unwrap_or_default()
 }
 
 /// The volume (a `ViewInfo::title`) after `--scan`, if any.
-pub fn parse_scan_arg(mut args: impl Iterator<Item = String>) -> Option<String> {
+fn parse_scan_arg(mut args: impl Iterator<Item = String>) -> Option<String> {
     args.find(|a| a == "--scan")?;
     args.next()
 }

@@ -73,6 +73,7 @@ impl Attrs {
     }
 
     #[cfg(test)]
+    #[cfg(test)]
     pub fn of_list(list: &[Attr]) -> Self {
         list.iter().fold(Self::default(), |a, &x| a.with(x, true))
     }
