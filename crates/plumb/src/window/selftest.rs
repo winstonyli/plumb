@@ -818,7 +818,11 @@ pub fn selftest_processes() -> Result<String> {
             m.select(id);
             w.held_poll();
         });
-        wait("the files this process holds", 10, &|w| w.app.with_scene(false, |s| s.held.is_some_and(|(_, lines)| lines.iter().any(|l| l.ends_with("f.bin")))))?;
+        // The visible lines are the first of a path-sorted list, so where f.bin sits depends on what else this process holds
+        // (a run wrapper's log files sort ahead of the temp dir): wait for the title's count to include the eleven files opened here.
+        // The title reads "Files held by <name> (PID n): <count> files ...".
+        let held_count = |title: &str| -> Option<usize> { title.split(": ").nth(1)?.split(' ').next()?.parse().ok() };
+        wait("the files this process holds", 10, &|w| w.app.with_scene(false, |s| s.held.is_some_and(|(h, lines)| !lines.is_empty() && held_count(h).is_some_and(|n| n >= 11))))?;
         // A real WM_MOUSEWHEEL (screen coordinates) over the pane scrolls the list, and the title gives the range.
         let view = |w: &mut Win| w.app.with_scene(false, |s| s.held.map(|(h, l)| (h.to_string(), l.first().cloned())));
         let top = with(view).flatten();
@@ -841,11 +845,7 @@ pub fn selftest_processes() -> Result<String> {
         }
         // The list follows the process: close the ten extra files and the pane re-reads itself once the handle count
         // has changed and ten snapshots have passed (no click, no new selection).
-        // The title reads "Files held by <name> (PID n): <count> files ..."; take the count.
-        let count_of = |w: &mut Win| -> Option<usize> {
-            let title = w.app.with_scene(false, |s| s.held.map(|(h, _)| h.to_string()))?;
-            title.split(": ").nth(1)?.split(' ').next()?.parse().ok()
-        };
+        let count_of = |w: &mut Win| -> Option<usize> { held_count(&w.app.with_scene(false, |s| s.held.map(|(h, _)| h.to_string()))?) };
         let n0 = with(count_of).flatten().ok_or_else(|| fail("the pane has no file count".into()))?;
         drop(extra);
         wait("the pane noticed the closed files", 35, &|w| count_of(w).is_some_and(|n| n + 10 <= n0))?;
