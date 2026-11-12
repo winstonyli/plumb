@@ -4,12 +4,42 @@
 //! The Name and "% of parent" cells are drawn by `draw.rs` (icon, chevron, pills, filter tint; a bar from the share
 //! of the parent), so they are not here. Alignment and dimness follow column position. Behaviour that differs by
 //! kind (menus, kill, held files, map tiles) stays `kind() == Processes` code.
-use crate::app::{metric_label, ViewKind};
+use crate::app::ViewKind;
 use crate::fmt::{self, Show};
 use plumb_core::procs::Metric;
 use plumb_core::rows::SortKey;
 use plumb_core::treemap::Class;
 use plumb_core::{NodeId, Tree};
+
+/// The name of a map metric: the button's label and the first column's title.
+pub fn metric_label(m: Metric) -> &'static str {
+    match m {
+        Metric::Memory => "Memory",
+        Metric::Private => "Private",
+        Metric::Cpu => "CPU",
+        Metric::Io => "I/O",
+    }
+}
+
+/// What a map metric counts, as a noun inside a sentence ("4 KB private", "12.3% CPU").
+pub fn metric_noun(m: Metric) -> &'static str {
+    match m {
+        Metric::Memory => "memory",
+        Metric::Private => "private",
+        Metric::Cpu => "CPU",
+        Metric::Io => "I/O",
+    }
+}
+
+/// One line saying what a map metric counts, for the metric button's tooltip.
+pub fn metric_help(m: Metric) -> &'static str {
+    match m {
+        Metric::Memory => "the working set: resident pages, shared ones counted once per process",
+        Metric::Private => "private bytes: committed memory not shared with other processes",
+        Metric::Cpu => "share of one core",
+        Metric::Io => "bytes transferred per second",
+    }
+}
 
 /// A column by what it holds, the stable name of a saved sort or width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

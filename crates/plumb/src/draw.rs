@@ -757,7 +757,7 @@ impl Pen<'_> {
         if l.procs {
             let r = l.metric_button();
             let c = self.control(r, s, false, false);
-            self.centered(crate::app::metric_label(s.metric), r, c);
+            self.centered(crate::view_spec::metric_label(s.metric), r, c);
         }
         if !s.toast.is_empty() {
             self.toast(s);
