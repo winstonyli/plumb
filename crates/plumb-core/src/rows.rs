@@ -16,6 +16,8 @@ pub enum SortKey {
     Modified,
     /// Slot `i` of [`Tree::aux`] (a source's own numbers); a tree without them sorts as all zeros.
     Aux(u8),
+    /// The rolled-up score ([`Tree::subtree_score`]).
+    Score,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -190,6 +192,7 @@ impl RowModel {
         let o = match self.key {
             SortKey::Size => tree.subtree_size[a].cmp(&tree.subtree_size[b]),
             SortKey::Items => tree.subtree_files[a].cmp(&tree.subtree_files[b]),
+            SortKey::Score => tree.subtree_score[a].cmp(&tree.subtree_score[b]),
             SortKey::Modified => tree.mtime[a].cmp(&tree.mtime[b]),
             SortKey::Name => cmp_names(tree.name(a), tree.name(b)),
             SortKey::Aux(i) => {
@@ -583,6 +586,15 @@ mod tests {
         assert_eq!(ids(&m), vec![0, 4, 1, 6], "newest first, unknown last");
         m.set_sort(&t, SortKey::Modified, false);
         assert_eq!(ids(&m), vec![0, 6, 1, 4], "oldest first, unknown first");
+    }
+
+    #[test]
+    fn score_sort_orders_by_the_rolled_up_score_and_ties_by_id() {
+        let (t, [r, ..]) = crate::tree::tests::scored();
+        let mut m = RowModel::new(&t);
+        m.set_sort(&t, SortKey::Score, true);
+        m.expand(&t, r);
+        assert_eq!(ids(&m), vec![0, 1, 4, 5], "d (1478) first, then e and c (0) by id");
     }
 
     #[test]
