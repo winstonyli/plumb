@@ -542,6 +542,36 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
 }
 
 #[test]
+fn the_stale_column_is_drawn_for_an_old_file() {
+    let gfx = Gfx::warp().expect("WARP device");
+    let layout = Layout::new(640.0, H as f32);
+    let painter = Painter::new(&gfx).unwrap();
+    let now = plumb_core::age::now_secs();
+    let shot = |age_days: u32| {
+        let mut b = plumb_core::TreeBuilder::new();
+        let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+        let f = b.push_str(root, "target.bin", 5_000, plumb_core::NodeFlags::empty());
+        b.set_mtime(f, std::num::NonZeroU32::new(now - age_days * 86_400));
+        b.set_now(now);
+        let tree = b.finish().unwrap();
+        let mut model = RowModel::new(&tree);
+        model.reveal(&tree, plumb_core::NodeId(1));
+        let scene = Scene {
+            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (5, true), admin: None, hot: None, pressed: false,
+            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
+            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
+        };
+        render_on(&painter, &gfx, &scene, if age_days > 365 { "plumb-stale" } else { "plumb-fresh" })
+    };
+    let (old, new) = (shot(3 * 365), shot(1));
+    let (kx, kw) = layout.column(5);
+    let r = layout.row(1);
+    let differs = |x0: f32, w: f32| (x0 as u32..(x0 + w) as u32).any(|x| (r.y as u32..(r.y + r.h) as u32).any(|y| rgb_at(&old, x, y) != rgb_at(&new, x, y)));
+    assert!(differs(kx, kw), "the stale bytes are drawn in the Score column");
+    assert!(!differs(layout.column(1).0, layout.column(1).1), "the Size column does not change with age");
+}
+
+#[test]
 fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
     use plumb_core::procs::{Metric, Procs, Sample};
     use plumb_core::treemap::layout as map_layout;
@@ -833,5 +863,6 @@ fn a_row_with_an_attribute_draws_a_pill_at_the_right_of_its_name_cell_and_leaves
     let (nx, nw) = layout.column(0);
     let differing = |from: f32, to: f32| (from as u32..to as u32).flat_map(|x| (r.y as u32..(r.y + r.h) as u32).map(move |y| (x, y))).filter(|&(x, y)| rgb_at(&plain, x, y) != rgb_at(&linked, x, y)).count();
     assert!(differing(nx + nw - 90.0, nx + nw) > 20, "the pill is drawn at the right edge of the name cell");
-    assert_eq!(differing(nx, nx + 150.0), 0, "the name is untouched");
+    // Not the file icon (x 29..41): the shell can answer its lookup late, so it may differ between two shots.
+    assert_eq!(differing(nx + 48.0, nx + 150.0), 0, "the name is untouched");
 }

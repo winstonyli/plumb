@@ -35,7 +35,7 @@ use held::{Held, HELD_REFRESH_SNAPSHOTS};
 pub use marks::{CommitRequest, MarkState};
 pub use filter::FilterJob;
 
-/// What a chip opens. The row table is the same for every kind (Name plus four columns); the kind supplies the
+/// What a chip opens. The row table is the same for every kind (Name plus five columns); the kind supplies the
 /// titles, what each column sorts by, and the text of the last two.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ViewKind {
@@ -48,10 +48,27 @@ pub enum ViewKind {
 
 impl ViewKind {
     /// `metric` is what the Processes view's first number column holds; a disk ignores it.
-    pub fn titles(self, metric: Metric) -> [&'static str; 5] {
+    pub fn titles(self, metric: Metric) -> [&'static str; 6] {
         match self {
-            ViewKind::Disk => ["Name", "Size", "% of parent", "Items", "Modified"],
-            ViewKind::Processes => ["Name", metric_label(metric), "% of parent", "CPU", "I/O"],
+            ViewKind::Disk => ["Name", "Size", "% of parent", "Items", "Modified", "Stale"],
+            ViewKind::Processes => ["Name", metric_label(metric), "% of parent", "CPU", "I/O", "Load"],
+        }
+    }
+
+    /// The Score column's cell: stale bytes for a disk, a whole-percent load for processes.
+    pub fn score_text(self, tree: &Tree, id: NodeId) -> fmt::Show<'static> {
+        let v = tree.subtree_score[id];
+        match self {
+            ViewKind::Disk => fmt::size(v),
+            ViewKind::Processes => fmt::percent(v),
+        }
+    }
+
+    /// The Score header's tooltip.
+    pub fn score_help(self) -> &'static str {
+        match self {
+            ViewKind::Disk => "Size not modified for a long time (counts in from 30 days, in full after 2 years); a folder adds its files",
+            ViewKind::Processes => "The most a process uses of CPU, memory or I/O, as a share of the machine, steady over about 30 s; a parent adds its children",
         }
     }
 
@@ -67,8 +84,8 @@ impl ViewKind {
     /// The sort each header column stands for; "% of parent" orders by size.
     pub fn sort_key(self, col: usize) -> SortKey {
         match self {
-            ViewKind::Disk => [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified][col],
-            ViewKind::Processes => [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Aux(0), SortKey::Aux(1)][col],
+            ViewKind::Disk => [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified, SortKey::Score][col],
+            ViewKind::Processes => [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Aux(0), SortKey::Aux(1), SortKey::Score][col],
         }
     }
 
@@ -460,7 +477,7 @@ impl App {
 
     /// Takes the remembered column widths and sort (before any scan, so the first tree is sorted by it).
     pub fn restore(&mut self, s: &State) {
-        if let Some(Sort { column, descending }) = s.sort.filter(|s| s.column < 5) {
+        if let Some(Sort { column, descending }) = s.sort.filter(|s| s.column < 6) {
             self.sort = (column, descending);
         }
         if let Some(cols) = &s.columns {
@@ -741,6 +758,10 @@ impl App {
             self.write_status(true, true, out);
             let _ = write!(out, "\n{}", self.adapter);
             return Some(TipKey::Area(bar));
+        }
+        if let Hit::Header(5) = self.layout.hit(x, y, self.views.len()) {
+            out.push_str(self.kind().score_help());
+            return Some(TipKey::Area(self.layout.header_cell(5)));
         }
         if let Hit::Row(i) = self.layout.hit(x, y, self.views.len()) {
             let (nx, nw) = self.layout.column(0);
@@ -1517,9 +1538,9 @@ mod tests {
 
     #[test]
     fn a_disk_view_keeps_its_titles_sorts_and_last_two_columns() {
-        assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Size", "% of parent", "Items", "Modified"]);
-        let keys: Vec<_> = (0..5).map(|c| ViewKind::Disk.sort_key(c)).collect();
-        assert_eq!(keys, [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified]);
+        assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Size", "% of parent", "Items", "Modified", "Stale"]);
+        let keys: Vec<_> = (0..6).map(|c| ViewKind::Disk.sort_key(c)).collect();
+        assert_eq!(keys, [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified, SortKey::Score]);
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let f = b.push_str(r, "f", 5, plumb_core::NodeFlags::empty());
@@ -1527,6 +1548,37 @@ mod tests {
         let t = b.finish().unwrap();
         assert_eq!(ViewKind::Disk.last_two(&t, f), (fmt::count(1), Some(fmt::date(fmt::local_day(1_700_000_000)))));
         assert_eq!(ViewKind::Disk.last_two(&t, r), (fmt::count(1), None), "no date, no fourth cell");
+    }
+
+    #[test]
+    fn only_the_score_header_has_a_tooltip() {
+        let a = scanned();
+        let (l, y) = (&a.layout, a.layout.header().y + 4.0);
+        let (key, text) = target_str(&a, l.column(5).0 + 20.0, y).expect("a tip over the Score header");
+        assert_eq!(key, TipKey::Area(l.header_cell(5)));
+        assert_eq!(text, ViewKind::Disk.score_help());
+        assert!(target_str(&a, l.column(2).0 + 20.0, y).is_none());
+        let (p, _) = process_app();
+        let mut s = String::new();
+        p.tip_target(p.layout.column(5).0 + 20.0, p.layout.header().y + 4.0, &mut s);
+        assert_eq!(s, ViewKind::Processes.score_help());
+    }
+
+    #[test]
+    fn the_score_cell_reads_as_bytes_for_a_disk_and_as_a_whole_percent_for_processes() {
+        let mut t = plumb_core::TreeBuilder::new();
+        let r = t.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
+        let f = t.push_str(r, "old.bin", 4096, plumb_core::NodeFlags::empty());
+        let now = plumb_core::age::now_secs();
+        t.set_mtime(f, std::num::NonZeroU32::new(now - 3 * 365 * 86_400));
+        t.set_now(now);
+        let t = t.finish().unwrap();
+        assert_eq!(ViewKind::Disk.score_text(&t, f), fmt::size(4096));
+        let mut p = plumb_core::TreeBuilder::new();
+        let root = p.push_str(NodeId::NONE, "Processes", 0, plumb_core::NodeFlags::DIR);
+        let mut p = p.finish().unwrap();
+        p.add_score(root, 12);
+        assert_eq!(ViewKind::Processes.score_text(&p, root).to_string(), "12%");
     }
 
     /// An app with a Processes view as its third view, showing one process `ping.exe` (pid 77) under the root.
@@ -1951,8 +2003,8 @@ mod tests {
 
     #[test]
     fn a_process_view_sorts_cpu_and_io_by_aux_and_shows_them_as_rates() {
-        assert_eq!(ViewKind::Processes.titles(Metric::Memory)[3..], ["CPU", "I/O"]);
-        assert_eq!((ViewKind::Processes.sort_key(3), ViewKind::Processes.sort_key(4)), (SortKey::Aux(0), SortKey::Aux(1)));
+        assert_eq!(ViewKind::Processes.titles(Metric::Memory)[3..], ["CPU", "I/O", "Load"]);
+        assert_eq!((ViewKind::Processes.sort_key(3), ViewKind::Processes.sort_key(4), ViewKind::Processes.sort_key(5)), (SortKey::Aux(0), SortKey::Aux(1), SortKey::Score));
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let mut t = b.finish().unwrap();
@@ -2450,8 +2502,13 @@ mod tests {
         let mut d = app();
         d.restore(&State::parse("columns = [111.0, 99.0, 77.0]\n[sort]\ncolumn = 4\ndescending = true\n"));
         assert_eq!(d.layout.col_w[..3], [111.0, 99.0, 77.0]);
-        assert_eq!(d.layout.col_w[3], crate::layout::COL_W[3]);
+        assert_eq!(d.layout.col_w[3..], crate::layout::COL_W[3..]);
         assert_eq!(d.sort(), (4, true), "and the new column can be the remembered sort");
+        // A state file from before the Score column has four widths; a saved Score sort comes back.
+        let mut e = app();
+        e.restore(&State::parse("columns = [111.0, 99.0, 77.0, 88.0]\n[sort]\ncolumn = 5\ndescending = true\n"));
+        assert_eq!((e.layout.col_w[3], e.layout.col_w[4]), (88.0, crate::layout::COL_W[4]));
+        assert_eq!(e.sort(), (5, true));
     }
 
     #[test]
@@ -2763,12 +2820,12 @@ Test GPU", status_str(&a, true))));
         a.handle(Input::Click(b.x + 2.0, b.y + 2.0, Default::default()));
         assert!(!a.layout.map_on, "the status bar button toggles too");
         a.layout.map_on = true;
-        a.layout.set_map_w(170.0); // at 800 DIPs the pane can reach 247: room to grow by 50
+        a.layout.set_map_w(162.0); // at 800 DIPs the pane can reach 175: room to grow by 10
         let (d, w0) = (a.layout.map_divider().unwrap(), a.layout.map_w);
         assert!(a.over_divider(d.x + 1.0, d.y + 5.0));
         a.handle(Input::Click(d.x + 1.0, d.y + 5.0, Default::default()));
-        a.handle(Input::Drag(d.x - 49.0, d.y + 5.0));
-        assert_eq!(a.layout.map_w, w0 + 50.0, "dragging left widens the pane");
+        a.handle(Input::Drag(d.x - 9.0, d.y + 5.0));
+        assert_eq!(a.layout.map_w, w0 + 10.0, "dragging left widens the pane");
         a.handle(Input::Drag(-10_000.0, 0.0));
         assert!(a.layout.column(0).1 >= crate::layout::MIN_NAME_W, "the tree keeps its minimum");
         a.handle(Input::Drag(10_000.0, 0.0));

@@ -696,9 +696,9 @@ impl Pen<'_> {
             }
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
             // During a scan the sums are what has been found so far: "at least", said once here.
-            let atleast = if partial && (c == 1 || (c == 3 && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
+            let atleast = if partial && (c == 1 || (matches!(c, 3 | 5) && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
             let color = if arrow.is_empty() { t.dim } else { t.fg };
-            self.text_as_fmt(Role::Title, format_args!("{atleast}{name}{arrow}"), Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4));
+            self.text_as_fmt(Role::Title, format_args!("{atleast}{name}{arrow}"), Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4 | 5));
             if c > 0 {
                 // The grip for resizing: a hairline at the column's left edge.
                 self.fill(Rect { x, y: h.y + 5.0, w: 1.0, h: h.h - 10.0 }, D2D1_COLOR_F { a: 0.5, ..t.dim });
@@ -1178,6 +1178,10 @@ impl Pen<'_> {
             if let Some(text) = fourth {
                 let (mx, mw) = l.column(4);
                 self.text_fmt(format_args!("{text}"), Rect { x: mx, y: r.y, w: mw - 8.0, h: r.h }, side, true);
+            }
+            if v.tree.subtree_score[id] != 0 {
+                let (kx, kw) = l.column(5); // a zero score is left blank: most rows have none, and the numbers should stand out
+                self.text_fmt(format_args!("{}", s.kind.score_text(v.tree, id)), Rect { x: kx, y: r.y, w: kw - 8.0, h: r.h }, side, true);
             }
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {

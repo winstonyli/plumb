@@ -46,8 +46,8 @@ pub const METRIC_W: f32 = 72.0;
 pub const HELD_ROWS: usize = 6;
 pub const HELD_H: f32 = (HELD_ROWS as f32 + 1.0) * ROW_H;
 pub const INDENT: f32 = 20.0;
-/// Starting widths of the Size, % of parent, Items and Modified columns; Name takes the rest.
-pub const COL_W: [f32; 4] = [100.0, 130.0, 90.0, 96.0];
+/// Starting widths of the Size, % of parent, Items, Modified and Score columns; Name takes the rest.
+pub const COL_W: [f32; 5] = [100.0, 130.0, 90.0, 96.0, 72.0];
 /// Narrowest a dragged column may get, and narrowest the Name column may be squeezed.
 pub const MIN_COL_W: f32 = 64.0;
 pub const MIN_NAME_W: f32 = 120.0;
@@ -112,7 +112,7 @@ pub struct Layout {
     /// Lines in the toast over the bottom right of the rows; 0 for none.
     pub toast: usize,
     /// Widths of the Size, % of parent, Items and Modified columns.
-    pub col_w: [f32; 4],
+    pub col_w: [f32; 5],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
     pub chips: Vec<f32>,
     /// The map pane is wanted.
@@ -126,7 +126,7 @@ impl Layout {
         Self { w, h, banner: false, cancel: false, basket: false, metric: false, held: false, toast: 0, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
-    /// Sets the width of column `c` (1..=4), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
+    /// Sets the width of column `c` (1..=5), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
     pub fn set_col_w(&mut self, c: usize, w: f32) {
         let others: f32 = self.col_w.iter().sum::<f32>() - self.col_w[c - 1];
         let max = (self.rows_area().w - MIN_NAME_W - others).max(MIN_COL_W);
@@ -397,10 +397,10 @@ impl Layout {
             return Hit::Map;
         }
         if self.header().contains(x, y) {
-            if let Some(c) = (1..5).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
+            if let Some(c) = (1..6).find(|&c| (x - self.column(c).0).abs() <= GRIP) {
                 return Hit::Divider(c);
             }
-            return (0..5).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
+            return (0..6).find(|&c| { let (cx, cw) = self.column(c); x >= cx && x < cx + cw }).map_or(Hit::None, Hit::Header);
         }
         if self.scrollbar().contains(x, y) {
             return Hit::Scrollbar;
@@ -472,9 +472,19 @@ mod tests {
     #[test]
     fn columns_fill_the_row_width() {
         let l = Layout::new(800.0, 600.0);
-        let (x4, w4) = l.column(4);
+        let (x4, w4) = l.column(5);
         assert_eq!(x4 + w4, l.rows_area().w);
         assert_eq!(l.column(0).0 + l.column(0).1, l.column(1).0);
+    }
+
+    #[test]
+    fn the_score_column_has_a_header_and_a_divider_and_the_name_keeps_its_minimum_at_640() {
+        let l = Layout::new(640.0, 400.0);
+        assert!(l.column(0).1 >= MIN_NAME_W, "{}", l.column(0).1);
+        let y = l.header().y + 4.0;
+        assert_eq!(l.hit(l.column(5).0, y, 0), Hit::Divider(5));
+        assert_eq!(l.hit(l.column(5).0 + 20.0, y, 0), Hit::Header(5));
+        assert_eq!(l.tree_min(), MIN_NAME_W + COL_W.iter().sum::<f32>() + SCROLLBAR_W);
     }
 
     #[test]
@@ -511,7 +521,7 @@ mod tests {
         assert_eq!(l.hit(edge + 10.0, y, 0), Hit::Header(2));
         l.set_col_w(2, 200.0);
         assert_eq!(l.column(2).1, 200.0);
-        assert_eq!(l.column(4).0 + l.column(4).1, l.rows_area().w, "the right edge stays put");
+        assert_eq!(l.column(5).0 + l.column(5).1, l.rows_area().w, "the right edge stays put");
         l.set_col_w(2, 1.0);
         assert_eq!(l.column(2).1, MIN_COL_W);
         l.set_col_w(2, 10_000.0);
