@@ -100,7 +100,7 @@ would read low for about a minute after one. The rebuild fires when dead nodes p
 
 ### The column
 
-- (Moved 2026-11-11, user request: the score is now column 1, right after Name, and the default sort, descending; ties sort by size. Named by `layout::COL_SCORE` and the rest. Saved widths and sort from older versions are read in the new order, so they come out wrong once.) A fifth number column, default width 72 (not 96: at the 640 DIP minimum window five columns of 100/130/90/96/72 leave
+- (Moved 2026-11-11, user request: the score is now column 1, right after Name, then % of parent, then Size (dim, like the last two), and the default sort, descending; ties sort by size. Named by `layout::COL_SCORE` and the rest. Saved widths and sort from older versions are read in the new order, so they come out wrong once.) A fifth number column, default width 72 (not 96: at the 640 DIP minimum window five columns of 100/130/90/96/72 leave
   Name 140, against 120 for `MIN_NAME_W`; with 96 Name would be 116). A test pins `Layout::new(640, 400).column(0).1 >=
   MIN_NAME_W`.
 - Sites that hard-code four numbers or five columns, all moved to five numbers and six columns: `Layout::col_w` and its

@@ -1158,7 +1158,7 @@ impl Pen<'_> {
             }
             self.text(&name, cell, fg, false);
             let (sx, sw) = l.column(COL_SIZE);
-            self.text_fmt(format_args!("{}", s.kind.size_text(s.metric, v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
+            self.text_fmt(format_args!("{}", s.kind.size_text(s.metric, v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, side, true);
             let (px, pw) = l.column(COL_PCT);
             let (bx, bw) = (px + 4.0, pw - 8.0);
             self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);

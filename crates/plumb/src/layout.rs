@@ -49,12 +49,12 @@ pub const INDENT: f32 = 20.0;
 /// The columns after Name, left to right (the score first: it is what the view is for). The Third and Fourth columns are Items and Modified
 /// for a disk, CPU and I/O for processes.
 pub const COL_SCORE: usize = 1;
-pub const COL_SIZE: usize = 2;
-pub const COL_PCT: usize = 3;
+pub const COL_PCT: usize = 2;
+pub const COL_SIZE: usize = 3;
 pub const COL_THIRD: usize = 4;
 pub const COL_FOURTH: usize = 5;
-/// Starting widths of the Score, Size, % of parent, Third and Fourth columns; Name takes the rest.
-pub const COL_W: [f32; 5] = [72.0, 100.0, 130.0, 90.0, 96.0];
+/// Starting widths of the Score, % of parent, Size, Third and Fourth columns; Name takes the rest.
+pub const COL_W: [f32; 5] = [72.0, 130.0, 100.0, 90.0, 96.0];
 /// Narrowest a dragged column may get, and narrowest the Name column may be squeezed.
 pub const MIN_COL_W: f32 = 64.0;
 pub const MIN_NAME_W: f32 = 120.0;
@@ -118,7 +118,7 @@ pub struct Layout {
     pub held: bool,
     /// Lines in the toast over the bottom right of the rows; 0 for none.
     pub toast: usize,
-    /// Widths of the Score, Size, % of parent, Third and Fourth columns.
+    /// Widths of the Score, % of parent, Size, Third and Fourth columns.
     pub col_w: [f32; 5],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
     pub chips: Vec<f32>,

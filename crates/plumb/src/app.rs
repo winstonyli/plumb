@@ -50,8 +50,8 @@ impl ViewKind {
     /// `metric` is what the Processes view's first number column holds; a disk ignores it.
     pub fn titles(self, metric: Metric) -> [&'static str; 6] {
         match self {
-            ViewKind::Disk => ["Name", "Stale", "Size", "% of parent", "Items", "Modified"],
-            ViewKind::Processes => ["Name", "Load", metric_label(metric), "% of parent", "CPU", "I/O"],
+            ViewKind::Disk => ["Name", "Stale", "% of parent", "Size", "Items", "Modified"],
+            ViewKind::Processes => ["Name", "Load", "% of parent", metric_label(metric), "CPU", "I/O"],
         }
     }
 
@@ -1538,7 +1538,7 @@ mod tests {
 
     #[test]
     fn a_disk_view_keeps_its_titles_sorts_and_last_two_columns() {
-        assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Stale", "Size", "% of parent", "Items", "Modified"]);
+        assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Stale", "% of parent", "Size", "Items", "Modified"]);
         let keys: Vec<_> = (0..6).map(|c| ViewKind::Disk.sort_key(c)).collect();
         assert_eq!(keys, [SortKey::Name, SortKey::Score, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified]);
         let mut b = plumb_core::TreeBuilder::new();
@@ -1624,8 +1624,8 @@ mod tests {
         assert_eq!(click(&mut a), Effect::Metric(Metric::Io));
         a.slot.proc_metric = Metric::Io;
         assert_eq!(click(&mut a), Effect::Metric(Metric::Memory));
-        assert_eq!(ViewKind::Processes.titles(Metric::Io)[2], "I/O");
-        assert_eq!(ViewKind::Processes.titles(Metric::Private)[2], "Private");
+        assert_eq!(ViewKind::Processes.titles(Metric::Io)[3], "I/O");
+        assert_eq!(ViewKind::Processes.titles(Metric::Private)[3], "Private");
         assert_eq!(ViewKind::Processes.size_text(Metric::Private, 2048), fmt::size(2048));
         assert_eq!(ViewKind::Processes.size_text(Metric::Cpu, 123), "12.3%");
         assert_eq!(ViewKind::Processes.size_text(Metric::Io, 2048), fmt::rate(2048));
