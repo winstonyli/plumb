@@ -111,7 +111,7 @@ pub struct Layout {
     pub held: bool,
     /// Lines in the toast over the bottom right of the rows; 0 for none.
     pub toast: usize,
-    /// Widths of the Size, % of parent, Items and Modified columns.
+    /// Widths of the Size, % of parent, Items, Modified and Score columns.
     pub col_w: [f32; 5],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
     pub chips: Vec<f32>,

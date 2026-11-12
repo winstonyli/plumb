@@ -36,7 +36,7 @@ pub use marks::{CommitRequest, MarkState};
 pub use filter::FilterJob;
 
 /// What a chip opens. The row table is the same for every kind (Name plus five columns); the kind supplies the
-/// titles, what each column sorts by, and the text of the last two.
+/// titles, what each column sorts by, and the text of the last three.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ViewKind {
     /// A drive or mount point: the file tree.
@@ -55,12 +55,12 @@ impl ViewKind {
         }
     }
 
-    /// The Score column's cell: stale bytes for a disk, a whole-percent load for processes.
+    /// The Score column's cell: stale bytes for a disk, a load in tenths of a percent for processes.
     pub fn score_text(self, tree: &Tree, id: NodeId) -> fmt::Show<'static> {
         let v = tree.subtree_score[id];
         match self {
             ViewKind::Disk => fmt::size(v),
-            ViewKind::Processes => fmt::percent(v),
+            ViewKind::Processes => fmt::tenths(v),
         }
     }
 
@@ -1565,7 +1565,7 @@ mod tests {
     }
 
     #[test]
-    fn the_score_cell_reads_as_bytes_for_a_disk_and_as_a_whole_percent_for_processes() {
+    fn the_score_cell_reads_as_bytes_for_a_disk_and_as_a_percent_for_processes() {
         let mut t = plumb_core::TreeBuilder::new();
         let r = t.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let f = t.push_str(r, "old.bin", 4096, plumb_core::NodeFlags::empty());
@@ -1578,7 +1578,7 @@ mod tests {
         let root = p.push_str(NodeId::NONE, "Processes", 0, plumb_core::NodeFlags::DIR);
         let mut p = p.finish().unwrap();
         p.add_score(root, 12);
-        assert_eq!(ViewKind::Processes.score_text(&p, root).to_string(), "12%");
+        assert_eq!(ViewKind::Processes.score_text(&p, root).to_string(), "1.2%");
     }
 
     /// An app with a Processes view as its third view, showing one process `ping.exe` (pid 77) under the root.

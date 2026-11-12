@@ -292,7 +292,7 @@ mod tests {
             p.apply(&all(t), SECOND);
         }
         let (own, c11, c12) = (score(&p, 10) - score(&p, 11) - score(&p, 12), score(&p, 11), score(&p, 12));
-        assert!((39..=40).contains(&own) && (39..=40).contains(&c11) && (39..=40).contains(&c12), "{own} {c11} {c12}");
+        assert!((395..=400).contains(&own) && (395..=400).contains(&c11) && (395..=400).contains(&c12), "{own} {c11} {c12}");
         let before = score(&p, 10);
         p.apply(&[busy(10, 1, 1, 301, 40), busy(11, 10, 2, 301, 40)], SECOND);
         assert_eq!(score(&p, 10), before - c12, "the exited child takes exactly its score with it");
@@ -314,10 +314,23 @@ mod tests {
     }
 
     #[test]
+    fn many_small_children_add_up_to_a_visible_family_load() {
+        // 25 renderers at 0.73% of RAM each: rounding each to a whole percent would show the family as nearly idle.
+        let mut p = ProcTree::with(4, 100_000);
+        let mut all = vec![s(10, 1, 1, "browser.exe", 0)];
+        for i in 0..25 {
+            all.push(s(100 + i, 10, 2 + u64::from(i), "renderer.exe", 1460)); // private 730 of 100000
+        }
+        p.apply(&all, 0);
+        let tenths = score(&p, 10);
+        assert!((170..=180).contains(&tenths), "the family's load in tenths of a percent: {tenths}");
+    }
+
+    #[test]
     fn memory_share_is_not_smoothed() {
         let mut p = ProcTree::with(4, 1000);
         p.apply(&[s(10, 1, 1, "a.exe", 500)], 0); // private = 250 of 1000
-        assert_eq!(score(&p, 10), 25);
+        assert_eq!(score(&p, 10), 250);
     }
 
     #[test]
@@ -338,13 +351,13 @@ mod tests {
             old.apply(&[busy(10, 1, 1, t, 40)], SECOND);
         }
         let shown = score(&old, 10);
-        assert!(shown >= 30, "{shown}");
+        assert!(shown >= 300, "{shown}");
         let (mut sync, mut tree) = Procs::new(Metric::Memory, 1, 1 << 30);
         sync.carry_from(old.sync);
         sync.apply(&mut tree, &[busy(10, 1, 1, 61, 40)], SECOND);
         let fresh = ProcTree { sync, tree, root: NodeId(0) };
         let carried = score(&fresh, 10);
-        assert!(carried + 1 >= shown && carried <= shown + 1, "carried {carried}, was {shown}");
+        assert!(carried + 10 >= shown && carried <= shown + 10, "carried {carried}, was {shown}");
     }
 
     #[test]

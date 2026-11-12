@@ -44,18 +44,20 @@ pub fn io_share(io_rate: u64) -> f64 {
     io_rate as f64 * 100.0 / IO_FULL as f64
 }
 
-/// The whole percent to show: it moves only when `x` is a full point away, and an idle `x` shows 0.
+/// The tenths of a percent to show for the percent `x`: it moves only when `x` is half a point away, and an idle
+/// `x` (under 0.05%) shows 0. Tenths, so many small children still add up to a visible family.
 pub fn settle(shown: u64, x: f64) -> u64 {
-    if x < 0.5 {
+    let t = x * 10.0;
+    if t < 0.5 {
         0
-    } else if (x - shown as f64).abs() >= 1.0 {
-        x.round() as u64
+    } else if (t - shown as f64).abs() >= 5.0 {
+        t.round() as u64
     } else {
         shown
     }
 }
 
-/// One process's smoothed load: exponential averages of its CPU and I/O shares, and the whole percent shown.
+/// One process's smoothed load: exponential averages of its CPU and I/O shares, and the tenths of a percent shown.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Load {
     cpu: f64,
@@ -118,21 +120,21 @@ mod tests {
 
     #[test]
     fn the_dead_band_holds_small_moves_and_snaps_idle_to_zero() {
-        assert_eq!(settle(5, 5.9), 5);
-        assert_eq!(settle(5, 6.0), 6);
-        assert_eq!(settle(5, 4.0), 4);
-        assert_eq!(settle(1, 0.49), 0);
-        assert_eq!(settle(1, 0.5), 1);
-        assert_eq!(settle(0, 0.9), 0);
-        assert_eq!(settle(0, 1.0), 1);
+        assert_eq!(settle(50, 5.4), 50);
+        assert_eq!(settle(50, 5.5), 55);
+        assert_eq!(settle(50, 4.5), 45);
+        assert_eq!(settle(1, 0.049), 0);
+        assert_eq!(settle(1, 0.05), 1);
+        assert_eq!(settle(0, 0.29), 0);
+        assert_eq!(settle(0, 0.9), 9);
     }
 
     #[test]
     fn the_average_follows_the_hand_computed_sequence() {
         let mut l = Load::default();
-        assert_eq!(l.step(1.0, 100.0, 0.0, 0.0), 3, "ema 3.278");
-        assert_eq!(l.step(1.0, 100.0, 0.0, 0.0), 6, "ema 6.449");
-        assert_eq!(l.step(0.0, 0.0, 0.0, 0.0), 6, "dt = 0 moves nothing");
+        assert_eq!(l.step(1.0, 100.0, 0.0, 0.0), 33, "ema 3.278 %");
+        assert_eq!(l.step(1.0, 100.0, 0.0, 0.0), 64, "ema 6.449 %");
+        assert_eq!(l.step(0.0, 0.0, 0.0, 0.0), 64, "dt = 0 moves nothing");
     }
 
     #[test]
@@ -141,7 +143,7 @@ mod tests {
         for _ in 0..3000 {
             l.step(1.0, 40.0, 0.0, 0.0);
         }
-        assert!((39..=40).contains(&l.shown()), "within a point of 40: {}", l.shown());
+        assert!((395..=400).contains(&l.shown()), "within half a point of 40%: {}", l.shown());
         for _ in 0..3000 {
             l.step(1.0, 0.0, 0.0, 0.0);
         }
@@ -151,6 +153,6 @@ mod tests {
     #[test]
     fn memory_is_not_smoothed_and_the_largest_term_wins() {
         let mut l = Load::default();
-        assert_eq!(l.step(1.0, 0.0, 0.0, 30.0), 30);
+        assert_eq!(l.step(1.0, 0.0, 0.0, 30.0), 300);
     }
 }

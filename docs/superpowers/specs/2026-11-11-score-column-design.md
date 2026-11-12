@@ -84,7 +84,7 @@ exponential average over real elapsed time, `ema += (x - ema) * (1 - exp(-dt / T
 The score is the largest of the three. Whole percent resolution means most processes read 0-2%; ties sort by id as
 today.
 
-**Dead band.** The shown score is a whole percent that moves only when the underlying value is a full point away:
+**Dead band.** The shown score (since the final review, in tenths of a percent, so a family of many small processes still adds up) moves only when the underlying value is half a point away and shows 0 under 0.05%; the text below was written for whole percents and a full point:
 `if x < 0.5 { shown = 0 } else if (x - shown).abs() >= 1.0 { shown = x.round() }`: the snap to 0 lets an idle process leave 1% (the average only decays toward 0), so idle processes add nothing to their parents. An unchanged shown value is not sent to the tree, so the displayed
 number, the sort order and the repaint all stay quiet. (This replaces the Low/Medium/High bands floated in the
 discussion: one rule instead of thresholds plus a hold time.)

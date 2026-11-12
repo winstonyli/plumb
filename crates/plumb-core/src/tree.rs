@@ -197,10 +197,13 @@ impl Tree {
 
     /// Adds a signed `delta` to `id`'s score and every ancestor's, and counts `id` as changed.
     pub fn add_score(&mut self, id: NodeId, delta: i64) {
-        if delta == 0 {
-            return;
+        if delta != 0 && !self.flags[id].contains(NodeFlags::DEAD) {
+            self.change_score(id, delta.unsigned_abs(), delta > 0);
         }
-        self.bump(id, 0, 0, delta.unsigned_abs(), delta > 0);
+    }
+
+    fn change_score(&mut self, id: NodeId, by: u64, add: bool) {
+        self.bump(id, 0, 0, by, add);
         self.touched.push(id);
         self.rev += 1;
     }
@@ -214,8 +217,10 @@ impl Tree {
         }
         debug_assert!(!self.has_children(id), "only a file has a score of its own");
         let new = crate::score::file_score(self.size[id], self.mtime[id], now);
-        let delta = i64::try_from(new).expect("a score is a size") - i64::try_from(self.subtree_score[id]).expect("a score is a size");
-        self.add_score(id, delta);
+        let old = self.subtree_score[id];
+        if new != old {
+            self.change_score(id, new.abs_diff(old), new > old);
+        }
     }
 
     /// Replaces the node's `TRAITS` flags (reparse, system, cloud) with those of `traits`.
@@ -656,6 +661,24 @@ pub(crate) mod tests {
         t.add_score(c, -3);
         assert_eq!((t.subtree_score[c], t.subtree_score[r]), (4, 1482));
         assert!(t.touched().contains(&c));
+    }
+
+    #[test]
+    fn an_oversized_file_size_neither_panics_nor_breaks_the_sums() {
+        let (mut t, [r, _d, a, _b, _e, _c]) = scored();
+        t.set_size(a, 1 << 63); // garbage from a corrupt record: three years old, so it all counts
+        assert_eq!(t.subtree_score[a], 1 << 63);
+        t.set_size(a, 1000);
+        assert_eq!((t.subtree_score[a], t.subtree_score[r]), (1000, 1478));
+    }
+
+    #[test]
+    fn add_score_ignores_a_dead_node() {
+        let (mut t, [r, _d, _a, _b, _e, c]) = scored();
+        t.remove(c);
+        let before = t.subtree_score[r];
+        t.add_score(c, 50);
+        assert_eq!(t.subtree_score[r], before);
     }
 
     /// The score of `id` by walking: its own file score plus its live children's.

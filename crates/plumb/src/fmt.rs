@@ -15,8 +15,6 @@ pub enum Show<'a> {
     Count(u64),
     /// A share held in tenths of a percent: 255 is "25.5%".
     Tenths(u64),
-    /// A whole percent: 12 is "12%".
-    Percent(u64),
     Date(u32),
     Age { now: u32, day: u32 },
     Noun { n: u64, one: &'a str, many: &'a str },
@@ -43,11 +41,6 @@ pub fn count(n: u64) -> Show<'static> {
 /// A share in tenths of a percent, as "25.5%".
 pub fn tenths(t: u64) -> Show<'static> {
     Show::Tenths(t)
-}
-
-/// A whole percent, as "12%".
-pub fn percent(p: u64) -> Show<'static> {
-    Show::Percent(p)
 }
 
 /// `YYYY-MM-DD` for a day count since 1601-01-01.
@@ -85,7 +78,6 @@ impl Display for Show<'_> {
             }
             Show::Count(n) => write_count(f, n),
             Show::Tenths(t) => write!(f, "{:.1}%", t as f64 / 10.0),
-            Show::Percent(p) => write!(f, "{p}%"),
             Show::Date(day) => write_date(f, day),
             Show::Age { now, day } => {
                 let d = now.saturating_sub(day);
