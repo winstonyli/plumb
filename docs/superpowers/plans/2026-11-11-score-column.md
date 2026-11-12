@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Score column Implementation Plan

@@ -31,6 +31,11 @@ pub fn selftest() -> Result<String> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).ok();
     std::fs::write(dir.join("sub").join("f.bin"), vec![1u8; 100_000]).ok();
+    // Written three years ago, so the Stale column counts all of it.
+    let three_years = Duration::from_secs(3 * 365 * 86_400);
+    if let Ok(f) = std::fs::File::options().write(true).open(dir.join("sub").join("f.bin")) {
+        let _ = f.set_modified(std::time::SystemTime::now() - three_years);
+    }
     let hwnd = create_window()?;
     let win = Win::new(hwnd, crate::drives::list())?;
     STATE.with(|s| *s.borrow_mut() = Some(win));
@@ -82,6 +87,11 @@ pub fn selftest() -> Result<String> {
     let done = with(|w| w.app.slot.tree.is_some() && w.app.slot.model.is_some() && w.run.preview.is_none() && matches!(w.app.slot.scan, crate::app::Scan::Idle));
     if done != Some(true) {
         return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "a scan that finished while parked came back without a finished tree"));
+    }
+    // The file is three years old: the root's Stale score is all of the file's bytes.
+    let stale = with(|w| w.app.slot.tree.as_ref().map(|t| (t.subtree_score[NodeId(0)], t.subtree_size[NodeId(0)]))).flatten();
+    if !matches!(stale, Some((score, size)) if score > 0 && score == size) {
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, format!("a three-year-old file should score all its bytes, got (score, size) {stale:?}")));
     }
     // Selecting several rows, through the real window state: open every folder, then Shift+Down twice from the first row.
     let picked = with(|w| {
