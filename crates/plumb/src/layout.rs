@@ -113,10 +113,9 @@ pub struct Layout {
     pub cancel: bool,
     /// The marked-items chip sits in the status bar, left of Cancel and the map button.
     pub basket: bool,
-    /// The metric button sits in the status bar, left of where Cancel shows (the Processes view).
-    pub metric: bool,
-    /// The "Files held" pane sits under the rows (the Processes view).
-    pub held: bool,
+    /// The Processes view: the metric button sits in the status bar, left of where Cancel shows, and the "Files held"
+    /// pane sits under the rows.
+    pub procs: bool,
     /// Lines in the toast over the bottom right of the rows; 0 for none.
     pub toast: usize,
     /// Widths of the Score, % of parent, Size, Third and Fourth columns.
@@ -131,7 +130,7 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(w: f32, h: f32) -> Self {
-        Self { w, h, banner: false, cancel: false, basket: false, metric: false, held: false, toast: 0, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
+        Self { w, h, banner: false, cancel: false, basket: false, procs: false, toast: 0, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
     /// Sets the width of column `c` (1..=5), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
@@ -192,35 +191,15 @@ impl Layout {
         Rect { x: (c.x - 4.0 - METRIC_W).max(0.0), w: METRIC_W, ..c }
     }
 
-    pub fn with_held(&self, held: bool) -> Self {
-        Self { held, ..self.clone() }
-    }
-
     /// The "Files held" pane, across the tree's width above the status bar.
     pub fn held_pane(&self) -> Rect {
         Rect { x: 0.0, y: (self.h - STATUS_H - HELD_H).max(0.0), w: self.tree_w(), h: HELD_H }
-    }
-
-    pub fn with_metric(&self, metric: bool) -> Self {
-        Self { metric, ..self.clone() }
-    }
-
-    pub fn with_basket(&self, basket: bool) -> Self {
-        Self { basket, ..self.clone() }
     }
 
     /// The marked-items chip in the status bar, left of the Cancel button (or of the map button when there is none).
     pub fn basket_chip(&self) -> Rect {
         let right = if self.cancel { self.cancel_button().x } else { self.map_button().x } - 4.0;
         Rect { x: (right - BASKET_W).max(0.0), w: BASKET_W, ..self.map_button() }
-    }
-
-    pub fn with_cancel(&self, cancel: bool) -> Self {
-        Self { cancel, ..self.clone() }
-    }
-
-    pub fn with_banner(&self, banner: bool) -> Self {
-        Self { banner, ..self.clone() }
     }
 
     /// Top edge of the header: below the picker bar, and below the banner when there is one.
@@ -294,7 +273,7 @@ impl Layout {
     /// Row area, excluding the header and scrollbar.
     pub fn rows_area(&self) -> Rect {
         let y = self.top() + HEADER_H;
-        let pane = if self.held { HELD_H } else { 0.0 };
+        let pane = if self.procs { HELD_H } else { 0.0 };
         Rect { x: 0.0, y, w: (self.tree_w() - SCROLLBAR_W).max(0.0), h: (self.h - y - STATUS_H - pane).max(0.0) }
     }
 
@@ -380,7 +359,7 @@ impl Layout {
         if self.basket && self.basket_chip().contains(x, y) {
             return Hit::Basket;
         }
-        if self.metric && self.metric_button().contains(x, y) {
+        if self.procs && self.metric_button().contains(x, y) {
             return Hit::MetricButton;
         }
         if self.banner && self.rescan_button().contains(x, y) {
@@ -438,7 +417,7 @@ mod tests {
 
     #[test]
     fn the_status_bar_has_two_rows_and_the_buttons_sit_in_the_first() {
-        let l = Layout::new(800.0, 600.0).with_cancel(true).with_basket(true);
+        let l = Layout { cancel: true, basket: true, ..Layout::new(800.0, 600.0) };
         let (bar, top) = (l.status(), l.status_top());
         assert_eq!((bar.h, top.h * 2.0, top.y), (STATUS_H, STATUS_H, bar.y));
         for r in [l.map_button(), l.cancel_button(), l.basket_chip()] {
@@ -453,12 +432,12 @@ mod tests {
         assert!(b.x + b.w <= l.cancel_button().x, "left of the Cancel slot");
         assert_eq!((b.y, b.h), (l.map_button().y, l.map_button().h), "in the status bar's first row");
         assert_ne!(l.hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton, "not shown by default");
-        assert_eq!(l.with_metric(true).hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton);
+        assert_eq!(Layout { procs: true, ..l.clone() }.hit(b.x + 2.0, b.y + 2.0, 0), Hit::MetricButton);
     }
 
     #[test]
     fn every_icon_button_is_the_same_square_inside_its_band() {
-        let l = Layout::new(900.0, 600.0).with_banner(true).with_cancel(true);
+        let l = Layout { banner: true, cancel: true, ..Layout::new(900.0, 600.0) };
         let bands = [(l.admin_button(), 0.0, PICKER_H), (l.rescan_button(), PICKER_H, PICKER_H + BANNER_H), (l.cancel_button(), l.status_top().y, l.status_top().y + STATUS_ROW_H), (l.map_button(), l.status_top().y, l.status_top().y + STATUS_ROW_H)];
         for (b, top, bottom) in bands {
             assert_eq!((b.w, b.h), (ICON_BTN, ICON_BTN));
@@ -470,7 +449,7 @@ mod tests {
     #[test]
     fn the_held_pane_takes_height_from_the_rows_only_when_shown() {
         let l = Layout::new(900.0, 600.0);
-        let h = l.with_held(true);
+        let h = Layout { procs: true, ..l.clone() };
         assert_eq!(l.rows_area().h - h.rows_area().h, HELD_H);
         let (rows, pane) = (h.rows_area(), h.held_pane());
         assert_eq!(rows.y + rows.h, pane.y, "the pane starts where the rows end");
@@ -546,7 +525,7 @@ mod tests {
     #[test]
     fn a_banner_pushes_the_table_down_and_has_a_button() {
         let l = Layout::new(800.0, 600.0);
-        let b = l.with_banner(true);
+        let b = Layout { banner: true, ..l.clone() };
         assert_eq!(b.header().y, l.header().y + BANNER_H);
         assert_eq!(b.rows_area().y + b.rows_area().h + STATUS_H, 600.0);
         assert_eq!(b.hit(b.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
@@ -573,7 +552,7 @@ mod tests {
         assert_eq!(l.hit(c.x + 2.0, c.y + 2.0, 3), Hit::FilterClear);
         assert_eq!(l.hit(r.x + 2.0, r.y + 2.0, 3), Hit::FilterRegex);
         assert_eq!(l.hit(n.x + 2.0, n.y + 2.0, 3), Hit::None);
-        let banner = l.with_banner(true);
+        let banner = Layout { banner: true, ..l.clone() };
         assert_eq!(banner.header().y, PICKER_H + BANNER_H);
         assert_eq!(banner.hit(banner.rescan_button().x + 1.0, PICKER_H + 5.0, 3), Hit::Rescan);
     }
@@ -630,10 +609,10 @@ mod tests {
 
     #[test]
     fn the_basket_chip_sits_left_of_cancel_and_the_map_button_without_overlap() {
-        let l = Layout::new(900.0, 600.0).with_basket(true);
+        let l = Layout { basket: true, ..Layout::new(900.0, 600.0) };
         let chip = l.basket_chip();
         assert!(chip.x + chip.w <= l.map_button().x, "left of the map button");
-        let with_cancel = l.with_cancel(true);
+        let with_cancel = Layout { cancel: true, ..l.clone() };
         assert!(with_cancel.basket_chip().x + with_cancel.basket_chip().w <= with_cancel.cancel_button().x, "left of Cancel when it shows");
         assert_eq!(l.hit(chip.x + 3.0, chip.y + 3.0, 0), Hit::Basket);
         assert_ne!(Layout::new(900.0, 600.0).hit(chip.x + 3.0, chip.y + 3.0, 0), Hit::Basket, "hidden unless something is marked");

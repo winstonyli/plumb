@@ -437,8 +437,7 @@ impl App {
         swap(&mut self.slot, p);
         swap(&mut self.slot.filter.ui, &mut p.filter.ui); // the query text belongs to the window
         self.basket_rev += 1;
-        let procs = self.kind() == ViewKind::Processes;
-        self.layout = self.layout.with_banner(matches!(self.slot.live, LiveStatus::Stale(_))).with_cancel(self.cancelable()).with_metric(procs).with_held(procs);
+        self.layout = self.layout_now();
         self.set_scroll(self.slot.scroll);
         self.map_reset();
     }
@@ -571,9 +570,14 @@ impl App {
         self.map_dirty = true;
     }
 
+    /// The layout with every flag taken from the app's state (`toast` is kept: `dismiss_toast` owns it).
+    fn layout_now(&self) -> Layout {
+        Layout { cancel: self.cancelable(), basket: self.basket_active(), procs: self.kind() == ViewKind::Processes, banner: matches!(self.slot.live, LiveStatus::Stale(_)), ..self.layout.clone() }
+    }
+
     pub fn set_live(&mut self, live: LiveStatus) {
-        self.layout = self.layout.with_banner(matches!(live, LiveStatus::Stale(_)));
         self.slot.live = live;
+        self.layout = self.layout_now();
         self.set_scroll(self.slot.scroll);
     }
 
@@ -1038,10 +1042,7 @@ impl App {
     }
 
     pub fn handle(&mut self, input: Input) -> Effect {
-        self.layout.cancel = self.cancelable();
-        self.layout.basket = self.basket_active();
-        self.layout.metric = self.kind() == ViewKind::Processes;
-        self.layout.held = self.kind() == ViewKind::Processes;
+        self.layout = self.layout_now();
         if self.modal().is_some() && !matches!(input, Input::Resize(..) | Input::Release) {
             return self.modal_input(input);
         }
@@ -1050,7 +1051,7 @@ impl App {
                 (self.layout.w, self.layout.h) = (w, h);
                 self.set_scroll(self.slot.scroll);
             }
-            Input::Wheel(rows, x, y) if self.layout.held && self.layout.held_pane().contains(x, y) => self.held_scroll(rows),
+            Input::Wheel(rows, x, y) if self.layout.procs && self.layout.held_pane().contains(x, y) => self.held_scroll(rows),
             Input::Wheel(rows, ..) => self.set_scroll((self.slot.scroll as i64 + rows as i64).max(0) as usize),
             Input::Key(k, mods) => {
                 if self.slot.filter.ui.focus
@@ -1402,7 +1403,7 @@ impl App {
         };
         let map = self.layout.map_shown().then(|| MapView { tiles: &self.map_tiles, generation: self.map_gen, now: self.map_now, selected: self.map_selected_tile(), hover: self.map_hover, classes: &self.map_classes, marked: &self.basket_view.tiles });
         f(&Scene {
-            layout: Layout { toast: toast.len(), ..self.layout.with_cancel(self.cancelable()).with_basket(self.basket_active()).with_metric(self.kind() == ViewKind::Processes).with_held(self.kind() == ViewKind::Processes) },
+            layout: Layout { toast: toast.len(), ..self.layout_now() },
             metric: self.slot.proc_metric,
             held: held.as_ref().map(|(h, l)| (h.as_str(), *l)),
             theme: Theme::with_accent(dark, self.accent),
@@ -1547,7 +1548,7 @@ mod tests {
         let (mut a, _) = process_app();
         a.layout.map_on = true;
         let click = |a: &mut App| {
-            let b = a.layout.with_metric(true).metric_button();
+            let b = Layout { procs: true, ..a.layout.clone() }.metric_button();
             a.handle(Input::Click(b.x + 5.0, b.y + 5.0, Default::default()))
         };
         assert_eq!(a.slot.proc_metric, Metric::Memory);
@@ -2035,11 +2036,24 @@ mod tests {
     }
 
     #[test]
+    fn layout_now_follows_the_app_state() {
+        let mut a = app();
+        let l = a.layout_now();
+        assert!(!l.procs && !l.banner, "a disk view has neither the Processes flags nor a banner");
+        a.set_live(LiveStatus::Stale("x".into()));
+        assert!(a.layout_now().banner);
+        assert_eq!(a.layout_now().cancel, a.cancelable());
+        assert_eq!(a.layout_now().toast, a.layout.toast);
+        let (p, _) = process_app();
+        assert!(p.layout_now().procs);
+    }
+
+    #[test]
     fn the_cancel_button_and_escape_cancel_a_scan_only_while_one_runs() {
         let mut a = app();
         assert_eq!(a.handle(Input::Escape), Effect::None);
         a.begin_scan(0);
-        let b = a.layout.with_cancel(true).cancel_button();
+        let b = Layout { cancel: true, ..a.layout.clone() }.cancel_button();
         assert_eq!(a.handle(Input::Click(b.x + 5.0, b.y + 5.0, Default::default())), Effect::Cancel);
         assert_eq!(a.handle(Input::Escape), Effect::Cancel);
         // Esc that clears the filter does not cancel.
@@ -2998,7 +3012,7 @@ Test GPU", status_str(&a, true))));
     fn the_chip_is_clickable_only_while_something_is_marked() {
         let mut a = scanned();
         let (file, ..) = picks(&a);
-        let chip = a.layout.with_basket(true).basket_chip();
+        let chip = Layout { basket: true, ..a.layout.clone() }.basket_chip();
         assert!(matches!(a.handle(Input::Click(chip.x + 5.0, chip.y + 5.0, Default::default())), Effect::None), "nothing marked: no chip, no effect");
         a.toggle_mark(file);
         a.update_map(1.0);

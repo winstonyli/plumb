@@ -716,7 +716,7 @@ impl Pen<'_> {
                 self.text_as(Role::Caption, hint, line(1.0), t.dim, false);
             }
         }
-        if let (true, Some((head, lines))) = (l.held, s.held) {
+        if let (true, Some((head, lines))) = (l.procs, s.held) {
             let pane = l.held_pane();
             self.fill(pane, t.panel);
             self.fill(Rect { h: 1.0, ..pane }, t.border);
@@ -734,7 +734,7 @@ impl Pen<'_> {
         self.fill(Rect { h: 1.0, ..st }, t.border);
         // Row 1: the selection, the legend and the buttons; row 2: the scan and live state, the full width.
         let row1 = l.status_top();
-        let reserved = ICON_BTN + 8.0 + if l.cancel || l.metric { ICON_BTN + 4.0 } else { 0.0 } + if l.metric { METRIC_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
+        let reserved = ICON_BTN + 8.0 + if l.cancel || l.procs { ICON_BTN + 4.0 } else { 0.0 } + if l.procs { METRIC_W + 4.0 } else { 0.0 } + if l.basket { BASKET_W + 4.0 } else { 0.0 };
         // 8 DIPs of margin each side, and 8 more between the legend and the buttons so they do not read as one cluster.
         let right = Rect { x: row1.x + 8.0, w: (row1.w - 24.0 - reserved).max(0.0), ..row1 };
         let legend_w = self.legend(s, right, right.w * 0.6);
@@ -754,7 +754,7 @@ impl Pen<'_> {
             self.centered(label, r, rgb(0xffffff));
         }
         self.toggle_button(l.map_button(), "\u{E80A}", l.map_on, s); // grid
-        if l.metric {
+        if l.procs {
             let r = l.metric_button();
             let c = self.control(r, s, false, false);
             self.centered(crate::app::metric_label(s.metric), r, c);

@@ -459,7 +459,7 @@ fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows
     };
     let frame = |marked: &[usize], chip: Option<&str>| {
         let scene = Scene {
-            layout: layout.with_basket(chip.is_some()), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
+            layout: Layout { basket: chip.is_some(), ..layout.clone() }, theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
             view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: chip,
             map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked }),
             modal: None,
@@ -473,7 +473,7 @@ fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows
     let marked = frame(&[big], Some("1 marked, up to 900 KB"));
     assert_eq!(painter.map_builds(), 1, "a mark is drawn over the cached tiles, not into them");
     assert_ne!(rgb_at(&plain, mid.0, mid.1), rgb_at(&marked, mid.0, mid.1), "the marked tile is tinted");
-    let chip = layout.with_basket(true).basket_chip();
+    let chip = Layout { basket: true, ..layout.clone() }.basket_chip();
     let (cx, cy) = ((chip.x + 4.0) as u32, (chip.y + chip.h / 2.0) as u32);
     assert_ne!(rgb_at(&plain, cx, cy), rgb_at(&marked, cx, cy), "the chip is drawn in the status bar");
 }
@@ -638,7 +638,7 @@ fn the_processes_map_follows_the_metric_button() {
         model.set_sort(&tree, plumb_core::rows::SortKey::Size, true);
         let root = model.rows()[0].id;
         model.expand(&tree, root);
-        let layout = Layout { chips: chip_widths(&gfx, &chips), map_on: true, ..Layout::new(W as f32, H as f32) }.with_metric(true).with_held(true);
+        let layout = Layout { chips: chip_widths(&gfx, &chips), map_on: true, procs: true, ..Layout::new(W as f32, H as f32) } ;
         let tiles = plumb_core::treemap::layout(&tree, root, layout.map().unwrap(), 1.0);
         // a process too small to draw folds into the "rest" tile and has none of its own
         areas.push(tiles.iter().find(|t| t.kind != plumb_core::treemap::Kind::Rest && tree.name_string(t.node) == "big-memory.exe").map_or(0.0, |t| t.rect.w * t.rect.h));
@@ -684,7 +684,7 @@ fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme:
     let chips = [Chip { label: "C:  123 GB".into(), used: 0.7, mark: Mark::None }, Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
     let held_lines = vec!["C:/Users/me/notes.txt".to_string(), "C:/Windows/Temp/x.log".to_string()];
     let toast: Vec<String> = if notice.0.is_empty() { Vec::new() } else { vec![notice.0.to_string()] };
-    let layout = Layout { chips: chip_widths(gfx, &chips), map_on: true, toast: toast.len(), ..Layout::new(w as f32, h as f32) }.with_metric(true).with_held(true);
+    let layout = Layout { chips: chip_widths(gfx, &chips), map_on: true, procs: true, toast: toast.len(), ..Layout::new(w as f32, h as f32) } ;
     // A narrow window has no map pane at all.
     let has_map = layout.map().is_some();
     let tiles = layout.map().map(|m| plumb_core::treemap::layout(&tree, root, m, 1.0)).unwrap_or_default();
@@ -820,7 +820,7 @@ fn a_failure_notice_is_drawn_in_the_danger_colour_and_a_success_in_the_text_colo
         let t = Theme::new(dark);
         let (danger, fg) = (expect(t.danger), expect(t.fg));
         // Count pixels close to a colour in the toast's rectangle.
-        let r = Layout { map_on: true, toast: 1, ..Layout::new(W as f32, H as f32) }.with_metric(true).with_held(true).toast_rect();
+        let r = Layout { map_on: true, toast: 1, procs: true, ..Layout::new(W as f32, H as f32) }.toast_rect();
         let near = |buf: &[u8], c: [i32; 3]| {
             let mut n = 0;
             for y in r.y as u32 + 2..(r.y + r.h) as u32 - 2 {
