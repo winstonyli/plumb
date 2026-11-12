@@ -32,7 +32,7 @@ pub fn selftest() -> Result<String> {
     std::fs::create_dir_all(dir.join("sub")).ok();
     std::fs::write(dir.join("sub").join("f.bin"), vec![1u8; 100_000]).ok();
     // Written three years ago, so the Stale column counts all of it.
-    let three_years = Duration::from_secs(3 * 365 * 86_400);
+    let three_years = Duration::from_secs(3 * 365 * u64::from(plumb_core::age::SECS_PER_DAY));
     if let Ok(f) = std::fs::File::options().write(true).open(dir.join("sub").join("f.bin")) {
         let _ = f.set_modified(std::time::SystemTime::now() - three_years);
     }

@@ -20,7 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use usn::UsnBatch;
 
-const RECORD: usize = 1024;
+use plumb_core::mft::RECORD_SIZE as RECORD;
 /// A blocking read that comes back sooner than this with nothing new is not really blocking.
 const MIN_IDLE_WAIT: Duration = Duration::from_millis(20);
 

@@ -3,7 +3,7 @@
 use crate::node::{NodeFlags, NodeId};
 use crate::tree::{Tree, TreeBuilder};
 
-pub const RECORD_SIZE: usize = 1024;
+pub use crate::mft::RECORD_SIZE;
 
 fn align8(n: usize) -> usize {
     (n + 7) & !7

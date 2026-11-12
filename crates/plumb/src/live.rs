@@ -6,8 +6,7 @@ use plumb_scan::journal::state::FileState;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-/// NTFS keeps the volume root in file record 5.
-const ROOT_RECORD: u64 = 5;
+const ROOT_RECORD: u64 = plumb_core::mft::ROOT_RECORD as u64;
 /// Settle passes an upsert may wait for its parent before it goes under `<orphans>`.
 const ORPHAN_AFTER: u8 = 2;
 /// Deltas applied between two looks at the clock.

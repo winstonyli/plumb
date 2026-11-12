@@ -4,9 +4,9 @@
 use std::num::NonZeroU32;
 
 /// A file younger than this (seconds) weighs nothing.
-pub const STALE_FROM: u32 = 30 * 86_400;
+pub const STALE_FROM: u32 = 30 * crate::age::SECS_PER_DAY;
 /// A file at least this old (seconds) counts in full.
-pub const STALE_FULL: u32 = 730 * 86_400;
+pub const STALE_FULL: u32 = 730 * crate::age::SECS_PER_DAY;
 /// The I/O rate (bytes a second) that counts as a full machine: a SATA SSD's sequential speed.
 pub const IO_FULL: u64 = 500_000_000;
 /// The time constant (seconds) of the CPU and I/O averages.
@@ -88,7 +88,7 @@ impl Load {
 mod tests {
     use super::*;
 
-    const DAY: u32 = 86_400;
+    const DAY: u32 = crate::age::SECS_PER_DAY;
     const N: u32 = 2_000_000_000;
 
     #[test]

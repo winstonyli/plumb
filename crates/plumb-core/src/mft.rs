@@ -1,5 +1,9 @@
 //! NTFS `$MFT` file-record parser: bytes in, plain structs out. No I/O.
 
+/// Bytes in one NTFS file record.
+pub const RECORD_SIZE: usize = 1024;
+/// Record number of the root directory of every NTFS volume.
+pub const ROOT_RECORD: usize = 5;
 const REF_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const ATTR_STANDARD_INFORMATION: u32 = 0x10;
 const ATTR_FILE_NAME: u32 = 0x30;

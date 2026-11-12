@@ -562,7 +562,7 @@ pub(crate) mod tests {
         assert!(t.find(r"D:\Mounts\DataX").is_none() && t.find(r"D:\Mounts").is_none(), "only at a path boundary");
     }
 
-    const DAY: u32 = 86_400;
+    const DAY: u32 = crate::age::SECS_PER_DAY;
     const NOW: u32 = 2_000_000_000;
     fn ago(days: u32) -> Option<NonZeroU32> {
         NonZeroU32::new(NOW - days * DAY)

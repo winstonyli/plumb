@@ -5,8 +5,7 @@
 use plumb_core::mft::ParsedRecord;
 use plumb_core::{NodeFlags, NodeId, TreeBuilder};
 
-/// Record number of the root directory of every NTFS volume.
-const ROOT_RECORD: usize = 5;
+use plumb_core::mft::ROOT_RECORD;
 const NONE: u32 = u32::MAX;
 const REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
 const REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;

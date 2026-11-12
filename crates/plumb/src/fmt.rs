@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn the_local_day_is_the_utc_day_moved_by_the_zone_and_the_same_for_two_instants_in_one_local_day() {
-        let day = 86_400;
+        let day = plumb_core::age::SECS_PER_DAY;
         let t = 12 * 3600; // noon UTC on 1970-01-01
         let d = i64::from(local_day(t)) - i64::from(UNIX_EPOCH_DAYS);
         assert!((-1..=1).contains(&d), "within a day of UTC, got {d}");

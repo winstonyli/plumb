@@ -3,6 +3,8 @@
 
 use std::num::NonZeroU32;
 
+/// Seconds in a day.
+pub const SECS_PER_DAY: u32 = 86_400;
 /// 100 ns FILETIME ticks in a day.
 pub const DAY_TICKS: u64 = 864_000_000_000;
 /// 100 ns FILETIME ticks in a second.
@@ -20,13 +22,13 @@ pub fn secs_of(filetime: u64) -> Option<NonZeroU32> {
     if filetime == 0 {
         return None;
     }
-    let secs = (filetime / SEC_TICKS).saturating_sub(u64::from(UNIX_EPOCH_DAYS) * 86_400);
+    let secs = (filetime / SEC_TICKS).saturating_sub(u64::from(UNIX_EPOCH_DAYS) * u64::from(SECS_PER_DAY));
     NonZeroU32::new(u32::try_from(secs).unwrap_or(u32::MAX).max(1))
 }
 
 /// The FILETIME of unix time `secs`.
 pub fn filetime_of(secs: u32) -> u64 {
-    (u64::from(secs) + u64::from(UNIX_EPOCH_DAYS) * 86_400) * SEC_TICKS
+    (u64::from(secs) + u64::from(UNIX_EPOCH_DAYS) * u64::from(SECS_PER_DAY)) * SEC_TICKS
 }
 
 /// Now, in unix seconds.
@@ -38,7 +40,7 @@ pub fn now_secs() -> u32 {
 /// [`AGE_FULL_DAYS`] and staying there.
 pub fn shade(now: u32, mtime: Option<NonZeroU32>) -> f32 {
     let Some(m) = mtime else { return 0.0 };
-    let age = now.saturating_sub(m.get()) as f32 / 86_400.0;
+    let age = now.saturating_sub(m.get()) as f32 / SECS_PER_DAY as f32;
     ((1.0 + age).ln() / (1.0 + AGE_FULL_DAYS).ln()).clamp(0.0, 1.0)
 }
 
@@ -63,7 +65,7 @@ mod tests {
     #[test]
     fn shade_is_zero_for_unknown_and_fresh_rises_and_stops() {
         let now = 2_000_000_000;
-        let ago = |days: u32| d(now - days * 86_400);
+        let ago = |days: u32| d(now - days * SECS_PER_DAY);
         assert_eq!(shade(now, None), 0.0);
         assert_eq!(shade(now, d(now)), 0.0);
         assert_eq!(shade(now, d(now + 5)), 0.0); // a future time

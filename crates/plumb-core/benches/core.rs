@@ -5,7 +5,8 @@ use plumb_core::filter::{Keep, Names, Query};
 use std::sync::atomic::AtomicU64;
 use plumb_core::mft::{ParsedRecord, parse_record};
 use plumb_core::rows::RowModel;
-use plumb_core::synth::{RECORD_SIZE, RecordBuilder, flat_tree, kary_builder};
+use plumb_core::mft::RECORD_SIZE;
+use plumb_core::synth::{RecordBuilder, flat_tree, kary_builder};
 use std::hint::black_box;
 
 /// 1024 records, each with two names and a data stream, back to back (1 MiB).

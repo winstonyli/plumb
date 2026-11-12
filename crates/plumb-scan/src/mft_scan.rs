@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-const RECORD: usize = 1024;
+use plumb_core::mft::RECORD_SIZE as RECORD;
 
 pub trait VolumeRead: Sync {
     /// Fills `buf` from byte `offset`. Offset and length are multiples of the sector size.
