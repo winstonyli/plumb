@@ -206,17 +206,15 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// The spike: the numbers below are recorded in the views design. `cargo test -p plumb-scan handles -- --ignored --nocapture`.
     #[test]
-    #[ignore]
     fn a_file_this_process_holds_is_listed_and_a_blocked_pipe_does_not_hang_the_call() {
         use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
         use windows::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, PIPE_TYPE_BYTE, PIPE_WAIT};
-        let path = std::env::temp_dir().join(format!("plumb-handles-{}.tmp", std::process::id()));
+        let path = std::env::temp_dir().join(format!("plumb-handles-hang-{}.tmp", std::process::id()));
         std::fs::write(&path, b"x").unwrap();
         let _held = std::fs::File::open(&path).unwrap();
         // A synchronous pipe server with ConnectNamedPipe pending on another thread: the classic hang for name queries.
-        let name = plumb_core::wide(&format!(r"\\.\pipe\plumb-spike-{}", std::process::id()));
+        let name = plumb_core::wide(&format!(r"\\.\pipe\plumb-hang-{}", std::process::id()));
         let pipe = unsafe { CreateNamedPipeW(windows::core::PCWSTR(name.as_ptr()), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, None) };
         assert!(!pipe.is_invalid());
         let raw = pipe.0 as isize;
@@ -227,16 +225,10 @@ mod tests {
         let t = Instant::now();
         let list = open_files(std::process::id(), Duration::from_millis(500)).unwrap();
         let took = t.elapsed();
-        eprintln!("HANDLES own process: {} files, {} skipped, {:?}", list.files.len(), list.skipped, took);
         let long = std::fs::canonicalize(&path).unwrap().to_string_lossy().into_owned();
         let want = long.strip_prefix(r"\\?\").unwrap_or(&long).to_lowercase();
         assert!(list.files.iter().any(|f| f.to_lowercase() == want), "the held file is listed: {:?}", list.files);
         assert!(took < Duration::from_secs(10), "the pipe did not hang the call: {took:?}");
-        if let Some(pid) = std::env::var("PLUMB_SPIKE_PID").ok().and_then(|v| v.parse().ok()) {
-            let t = Instant::now();
-            let r = open_files(pid, Duration::from_millis(500));
-            eprintln!("HANDLES pid {pid}: {:?} in {:?}", r.as_ref().map(|l| (l.files.len(), l.skipped)), t.elapsed());
-        }
         let _ = std::fs::remove_file(&path);
     }
 }
