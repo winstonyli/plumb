@@ -2,6 +2,29 @@
 
 All notable changes to plumb. Format follows [Common Changelog](https://common-changelog.org/) from 0.10.0 on (older entries are in Keep a Changelog form); all crates share one version and are bumped together at each tag.
 
+## 0.13.0 - 2026-11-11
+
+*Upgrade note: the saved sort column and column widths are read in the new column order, so the first start shows the old sort and widths on different columns; click a header once to reset.*
+
+### Changed
+
+- Put a Score column right after Name and sort by it, largest first, by default; ties go to the larger size ([9eb79b8](https://github.com/winstonyli/plumb/commit/9eb79b8))
+- Move Size (Memory in Processes) to the right of % of parent and draw it dim like Items, CPU and I/O ([4735a84](https://github.com/winstonyli/plumb/commit/4735a84))
+
+### Added
+
+- Show Stale in the Disk view: the bytes of a file that have not been modified for 30 days to 2 years, rolled up through folders; the header tooltip explains it ([cc8867e](https://github.com/winstonyli/plumb/commit/cc8867e), [0bc4426](https://github.com/winstonyli/plumb/commit/0bc4426))
+- Show Load in the Processes view: the largest of a process's averaged CPU, averaged I/O and memory share, summed up its process family and kept across rebuilds ([135f380](https://github.com/winstonyli/plumb/commit/135f380), [4cbf2fe](https://github.com/winstonyli/plumb/commit/4cbf2fe))
+- Hold a shown Load steady until it moves 15% (at least half a point), so it does not flicker ([9f0afbd](https://github.com/winstonyli/plumb/commit/9f0afbd))
+
+### Fixed
+
+- Show small steady loads under half a percent and many tiny children as a visible family load ([7a4ba8c](https://github.com/winstonyli/plumb/commit/7a4ba8c), [4cbf2fe](https://github.com/winstonyli/plumb/commit/4cbf2fe))
+
+### Internal
+
+- Name the column indices (`COL_*`, `COL_COUNT`), share one reparse-link predicate, merge near-duplicate tests and delete the retired journal spike example ([b288d86](https://github.com/winstonyli/plumb/commit/b288d86), [166bc13](https://github.com/winstonyli/plumb/commit/166bc13), [9719c1a](https://github.com/winstonyli/plumb/commit/9719c1a))
+
 ## 0.12.0 - 2026-11-11
 
 ### Changed
