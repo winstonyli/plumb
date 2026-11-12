@@ -1,7 +1,7 @@
 use super::*;
 
 fn class_of(name: &str) -> Class {
-    classify(&name.encode_utf16().collect::<Vec<u16>>())
+    classify(&crate::synth::u(name))
 }
 
 #[test]

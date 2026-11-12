@@ -83,7 +83,7 @@ fn bench_mutation(c: &mut Criterion) {
         b.iter_batched_ref(
             || kary_builder(5_000_000, 8).finish().unwrap(),
             |t| {
-                let name: Vec<u16> = "renamed".encode_utf16().collect();
+                let name = plumb_core::synth::u("renamed");
                 for i in 0..100_000u32 {
                     let leaf = NodeId(625_000 + i * 37);
                     match i % 4 {

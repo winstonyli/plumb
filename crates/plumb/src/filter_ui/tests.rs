@@ -175,7 +175,7 @@ fn byte_at_picks_the_nearest_boundary() {
 fn utf16_units_combine_into_characters() {
     let mut p = None;
     assert_eq!(push_utf16(&mut p, 'a' as u16), Some('a'));
-    let pair: Vec<u16> = "\u{1F600}".encode_utf16().collect();
+    let pair = plumb_core::synth::u("\u{1F600}");
     assert_eq!(push_utf16(&mut p, pair[0]), None);
     assert_eq!(push_utf16(&mut p, pair[1]), Some('\u{1F600}'));
     assert_eq!(push_utf16(&mut p, pair[1]), None); // a lone low half is dropped

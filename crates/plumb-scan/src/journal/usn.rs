@@ -63,7 +63,7 @@ pub fn parse_usn_buffer(buf: &[u8]) -> Option<UsnBatch> {
 pub(crate) fn encode(next_usn: i64, entries: &[(u64, u32)]) -> Vec<u8> {
     let mut b = (next_usn as u64).to_le_bytes().to_vec();
     for (i, &(frn, reason)) in entries.iter().enumerate() {
-        let name: Vec<u16> = format!("f{i}").encode_utf16().collect();
+        let name = plumb_core::synth::u(&format!("f{i}"));
         let len = (V2_FIXED + name.len() * 2).next_multiple_of(8);
         let mut r = vec![0u8; len];
         r[0..4].copy_from_slice(&(len as u32).to_le_bytes());

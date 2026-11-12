@@ -1826,7 +1826,7 @@ fn a_renamed_marked_item_drops_off_the_chip_and_the_tiles() {
     a.toggle_mark(file);
     a.update_map(1.0);
     assert!(a.basket_label().is_some());
-    let n: Vec<u16> = "renamed".encode_utf16().collect();
+    let n = plumb_core::synth::u("renamed");
     a.slot.tree.as_mut().unwrap().rename(file, &n);
     a.update_map(1.0);
     assert!(a.basket_label().is_none(), "the mark no longer names anything, so no chip");

@@ -1,6 +1,7 @@
 use super::*;
 use plumb_scan::journal::state::FileState;
 use plumb_scan::preview::{channel, PreviewMsg};
+use plumb_core::synth::u;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ fn far() -> Instant {
 }
 
 fn state(record: u64, parent: u64, name: &str, size: u64, is_dir: bool) -> FileState {
-    FileState { record, sequence: 1, parent, name: name.encode_utf16().collect(), size, is_dir, traits: plumb_core::NodeFlags::empty(), links: 1, mtime: None }
+    FileState { record, sequence: 1, parent, name: u(name), size, is_dir, traits: plumb_core::NodeFlags::empty(), links: 1, mtime: None }
 }
 
 /// path -> (size, is_dir) for every node but the root's own name.
@@ -36,7 +37,7 @@ fn the_walker_replay_equals_the_builder_tree() {
     let mut b = TreeBuilder::new();
     let mut seed = 7;
     let push = |b: &mut TreeBuilder, parent: NodeId, name: &str, size: u64, flags: NodeFlags| {
-        let units: Vec<u16> = name.encode_utf16().collect();
+        let units = u(name);
         let mtime = std::num::NonZeroU32::new(size as u32);
         tx.send(PreviewMsg::Add { parent, name: units.clone(), size, flags, mtime });
         let id = b.push(parent, &units, size, flags);
@@ -69,7 +70,7 @@ fn the_walker_replay_equals_the_builder_tree() {
 #[test]
 fn a_preview_tree_scores_old_files_as_they_arrive() {
     let (tx, rx) = channel(1 << 10);
-    let name = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+    let name = u;
     let three_years_ago = std::num::NonZeroU32::new(plumb_core::age::now_secs() - 3 * 365 * 86_400);
     tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: name("C:"), size: 0, flags: NodeFlags::DIR, mtime: None });
     tx.send(PreviewMsg::Add { parent: NodeId(0), name: name("old.bin"), size: 4096, flags: NodeFlags::empty(), mtime: three_years_ago });
@@ -154,7 +155,7 @@ fn reset_drops_the_tree_and_a_new_scanner_starts_clean() {
     tx.send(PreviewMsg::Begin { root: "C:".into(), nodes: 10 });
     tx.send(PreviewMsg::Upsert(state(6, 5, "a", 1, false)));
     tx.send(PreviewMsg::Reset);
-    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: "C:".encode_utf16().collect(), size: 0, flags: NodeFlags::DIR, mtime: None });
+    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: u("C:"), size: 0, flags: NodeFlags::DIR, mtime: None });
     let (mut p, mut tree) = (Preview::new(rx), None);
     let a = p.apply(&mut tree, far());
     assert!(a.created && a.reset, "the old tree was dropped and the walker's root created");
@@ -166,9 +167,9 @@ fn a_reset_unfreezes_a_frozen_preview() {
     // A file parent keeps the child parked; MAX_PARKED is too big to hit, so freeze by an
     // out-of-step walker id instead.
     let (tx, rx) = channel(64);
-    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: "C:".encode_utf16().collect(), size: 0, flags: NodeFlags::DIR, mtime: None });
-    tx.send(PreviewMsg::Add { parent: NodeId(9), name: "x".encode_utf16().collect(), size: 1, flags: NodeFlags::empty(), mtime: None });
-    tx.send(PreviewMsg::Add { parent: NodeId(0), name: "after".encode_utf16().collect(), size: 1, flags: NodeFlags::empty(), mtime: None });
+    tx.send(PreviewMsg::Add { parent: NodeId::NONE, name: u("C:"), size: 0, flags: NodeFlags::DIR, mtime: None });
+    tx.send(PreviewMsg::Add { parent: NodeId(9), name: u("x"), size: 1, flags: NodeFlags::empty(), mtime: None });
+    tx.send(PreviewMsg::Add { parent: NodeId(0), name: u("after"), size: 1, flags: NodeFlags::empty(), mtime: None });
     let (mut p, mut tree) = (Preview::new(rx), None);
     p.apply(&mut tree, far());
     assert_eq!(tree.as_ref().unwrap().len(), 1, "frozen at the bad id; the later add is ignored");

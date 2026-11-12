@@ -484,7 +484,7 @@ mod tests {
                 for _ in 0..1 + rnd(3) {
                     match rnd(5) {
                         0 => {
-                            let name = format!("n{step}x{}", rnd(100)).encode_utf16().collect::<Vec<u16>>();
+                            let name = crate::synth::u(&format!("n{step}x{}", rnd(100)));
                             let (dir, size) = (pick(&dirs, rnd(1000)), rnd(5000));
                             tree.add_child(dir, &name, size, NodeFlags::empty());
                         }
@@ -494,7 +494,7 @@ mod tests {
                             tree.remove(id);
                         }
                         3 => {
-                            let name = format!("r{step}{}", rnd(100)).encode_utf16().collect::<Vec<u16>>();
+                            let name = crate::synth::u(&format!("r{step}{}", rnd(100)));
                             tree.rename(pick(&live, rnd(1000)), &name);
                         }
                         _ => {
