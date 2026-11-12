@@ -315,28 +315,18 @@ mod tests {
 
     #[test]
     fn many_small_children_add_up_to_a_visible_family_load() {
-        // 25 renderers at 0.73% of RAM each: rounding each to a whole percent would show the family as nearly idle.
-        let mut p = ProcTree::with(4, 100_000);
-        let mut all = vec![s(10, 1, 1, "browser.exe", 0)];
-        for i in 0..25 {
-            all.push(s(100 + i, 10, 2 + u64::from(i), "renderer.exe", 1460)); // private 730 of 100000
+        // (children, private bytes each, expected family tenths): rounding each child to a whole percent, or leaving
+        // a sub-half-point child at zero, would show these families as nearly idle.
+        for (n, private, expect) in [(25u32, 730u64, 170..=180u64), (40, 300, 110..=130)] {
+            let mut p = ProcTree::with(4, 100_000);
+            let mut all = vec![s(10, 1, 1, "parent.exe", 0)];
+            for i in 0..n {
+                all.push(s(100 + i, 10, 2 + u64::from(i), "child.exe", private * 2));
+            }
+            p.apply(&all, 0);
+            let tenths = score(&p, 10);
+            assert!(expect.contains(&tenths), "{n} children of {private}/100000: family tenths {tenths}");
         }
-        p.apply(&all, 0);
-        let tenths = score(&p, 10);
-        assert!((170..=180).contains(&tenths), "the family's load in tenths of a percent: {tenths}");
-    }
-
-    #[test]
-    fn many_tiny_children_still_show_in_the_family() {
-        // 40 services at 0.3% of RAM each: below half a point, but together 12%.
-        let mut p = ProcTree::with(4, 100_000);
-        let mut all = vec![s(10, 1, 1, "services.exe", 0)];
-        for i in 0..40 {
-            all.push(s(100 + i, 10, 2 + u64::from(i), "svc.exe", 600)); // private 300 of 100000
-        }
-        p.apply(&all, 0);
-        let tenths = score(&p, 10);
-        assert!((110..=130).contains(&tenths), "the family load in tenths of a percent: {tenths}");
     }
 
     #[test]
