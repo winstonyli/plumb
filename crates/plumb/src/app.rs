@@ -2434,13 +2434,18 @@ mod tests {
         let mut a = scanned();
         let name = |a: &App, i: usize| a.slot.tree.as_ref().unwrap().name_string(a.slot.model.as_ref().unwrap().rows()[i].id);
         let hy = PICKER_H + 2.0;
-        assert_eq!(a.sort(), (COL_SCORE, true)); // default: Size descending
+        assert_eq!(a.sort(), (COL_SCORE, true)); // default: Score descending
         a.handle(Input::Click(5.0, hy, Default::default()));
         assert_eq!(a.sort(), (0, false)); // Name ascending
         let first = name(&a, 1);
         a.handle(Input::Click(5.0, hy, Default::default()));
         assert_eq!(a.sort(), (0, true)); // Name descending
         assert_ne!(name(&a, 1), first);
+        let score_x = a.layout.column(COL_SCORE).0 + 20.0;
+        a.handle(Input::Click(score_x, hy, Default::default()));
+        assert_eq!(a.sort(), (COL_SCORE, true), "the Score header sorts by Score, largest first");
+        a.handle(Input::Click(score_x, hy, Default::default()));
+        assert_eq!(a.sort(), (COL_SCORE, false));
     }
 
     #[test]
