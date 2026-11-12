@@ -1153,112 +1153,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             LRESULT(0)
         }
-        WM_TIMER if wp.0 == TIMER_DRAG => {
-            // The button is down on a row: replay the pointer's position, so holding it past an edge keeps scrolling. A
-            // button let go after the window lost the capture sends no WM_LBUTTONUP, so end the drag here.
-            // The asynchronous state: this thread's own input state never sees a release over another window. It is
-            // physical, so with the buttons swapped the primary button is the right one.
-            let primary = primary_button(unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0);
-            let down = unsafe { GetAsyncKeyState(primary.0 as i32) } < 0;
-            let mut p = POINT::default();
-            let at = if unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(hwnd, &mut p).as_bool() } {
-                with(|w| (p.x as f32 * 96.0 / w.dpi, p.y as f32 * 96.0 / w.dpi - w.inset))
-            } else {
-                None
-            };
-            if let Some(input) = drag_step(down, at) {
-                send(hwnd, input);
-            }
+        WM_TIMER => {
+            timers::on_timer(hwnd, wp.0);
             LRESULT(0)
         }
-        WM_TIMER if wp.0 == TIMER_HELD => {
-            let _ = unsafe { KillTimer(Some(hwnd), TIMER_HELD) };
-            if let Some(Some((epoch, pid))) = with(|w| w.app.held_request()) {
-                spawn_held(hwnd, epoch, pid);
-            }
-            LRESULT(0)
-        }
-        WM_HELD => {
-            let (epoch, result) = *unsafe { Box::from_raw(lp.0 as *mut (u64, std::result::Result<plumb_scan::handles::HandleList, plumb_scan::handles::HandleError>)) };
-            with(|w| {
-                w.app.held_done(epoch, result);
-                w.invalidate();
-            });
-            LRESULT(0)
-        }
-        WM_TIMER if wp.0 == TIMER_FILTER => {
-            with(|w| w.run_filter());
-            LRESULT(0)
-        }
-        WM_FILTER => {
-            with(|w| w.filter_done());
-            LRESULT(0)
-        }
-        WM_TIMER if wp.0 == TIMER_PREVIEW => {
-            with(|w| w.preview_tick());
-            LRESULT(0)
-        }
-        WM_TIMER if wp.0 == TIMER_PROGRESS => {
-            with(|w| w.poll_progress());
-            LRESULT(0)
-        }
-        WM_TIMER if wp.0 == TIMER_TOAST => {
-            with(|w| {
-                w.app.toast_tick(Instant::now());
-                w.sync_timers();
-                w.invalidate();
-            });
-            LRESULT(0)
-        }
-        WM_TIMER if wp.0 == TIMER_FLASH => {
-            with(|w| w.flash_tick());
-            LRESULT(0)
-        }
-        WM_TIMER if wp.0 == TIMER_LIVE => {
-            with(|w| w.live_tick());
-            LRESULT(0)
-        }
-        WM_JOURNAL => {
-            with(|w| w.journal_event());
-            LRESULT(0)
-        }
-        WM_DELETED => {
-            let raw = lp.0 as *mut (usize, bool, Vec<trash::Outcome>);
-            let done = with(|w| {
-                let (view, permanent, out) = *unsafe { Box::from_raw(raw) };
-                // What failed and why, to retry only those.
-                if let Some((failure, paths)) = w.finish_delete(view, out) {
-                    w.ask(Modal::failed(view, permanent, &failure, paths));
-                    w.invalidate();
-                }
-            });
-            // The state was borrowed (the box is gone only once taken): try again rather than lose the result.
-            if done.is_none() {
-                let _ = unsafe { PostMessageW(Some(hwnd), WM_DELETED, WPARAM(0), lp) };
-            }
-            LRESULT(0)
-        }
-        WM_HOLDERS => {
-            let (path, found) = *unsafe { Box::from_raw(lp.0 as *mut (String, Vec<plumb_scan::holders::Holder>)) };
-            with(|w| {
-                w.ask(Modal::holders(&path, &found));
-                w.invalidate();
-            });
-            LRESULT(0)
-        }
-        WM_PROCS => {
-            let snap = unsafe { Box::from_raw(lp.0 as *mut procs::Snapshot) };
-            with(move |w| {
-                let view = snap.view;
-                w.in_slot(view, |w| w.procs_update(*snap));
-            });
-            LRESULT(0)
-        }
-        WM_SCAN_DONE => {
-            with(|w| {
-                w.in_slot(wp.0, |w| w.scan_done());
-                w.sync_timers(); // a kept view's preview may have ended
-            });
+        WM_HELD | WM_FILTER | WM_JOURNAL | WM_DELETED | WM_HOLDERS | WM_PROCS | WM_SCAN_DONE => {
+            posted::on_posted(hwnd, msg, wp, lp);
             LRESULT(0)
         }
         WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
@@ -1329,6 +1229,8 @@ use tooltip::TIP_FRAME;
 use watch::{open_journal, ScanResult, Scanned, Watch};
 mod frame;
 mod input;
+mod posted;
+mod timers;
 mod menu;
 mod procs;
 mod selftest;
