@@ -226,7 +226,7 @@ impl Win {
     /// `WM_JOURNAL`: moves what the source has queued into its queue and applies some of it.
     pub(super) fn journal_event(&mut self) {
         self.posted.store(false, Ordering::Release);
-        for d in 0..self.parked.len().max(self.app.active.map_or(0, |a| a + 1)) {
+        for d in 0..self.parked.len().max(self.app.active().map_or(0, |a| a + 1)) {
             // The watches of views off screen keep their trees current too.
             self.in_slot(d, |w| {
                 let ended = w.run.watch.as_mut().and_then(Watch::drain);
@@ -319,7 +319,7 @@ impl Win {
         if self.run.rx.is_some() {
             return true;
         }
-        let Some(i) = self.app.active else { return false };
+        let Some(i) = self.app.active() else { return false };
         if !self.policy.allow(&self.app.views[i].root, Instant::now(), self.last_input) {
             return false;
         }

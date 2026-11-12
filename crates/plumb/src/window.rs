@@ -501,14 +501,14 @@ impl Win {
     /// that kept running), else a new scan of `root`. The view on screen is kept, not cancelled.
     /// Choosing the view already on screen scans it afresh.
     fn open(&mut self, view: usize, root: String) {
-        if self.app.active == Some(view) && self.run.procs.is_some() {
+        if self.app.active() == Some(view) && self.run.procs.is_some() {
             // The Processes view has nothing to rescan: look again now.
             if let Some(p) = &self.run.procs {
                 p.kick();
             }
             return;
         }
-        if self.app.active != Some(view) {
+        if self.app.active() != Some(view) {
             self.park_active();
             if self.unpark(view) {
                 return;
@@ -531,7 +531,8 @@ impl Win {
     /// Takes the view on screen away, keeping its tree, scan and watch unless there is nothing
     /// worth coming back to. A running scan keeps building its partial tree (`preview_tick`).
     fn park_active(&mut self) {
-        let Some(old) = self.app.active.take() else { return };
+        let Some(old) = self.app.active() else { return };
+        self.app.set_active(None);
         let mut d = View::default();
         self.swap_view(&mut d);
         if let Some(p) = &mut d.run.procs {
@@ -553,7 +554,7 @@ impl Win {
     fn unpark(&mut self, view: usize) -> bool {
         let Some(mut d) = self.parked.get_mut(view).and_then(Option::take) else { return false };
         self.swap_view(&mut d);
-        self.app.active = Some(view);
+        self.app.set_active(Some(view));
         if let Some(p) = &mut self.run.procs {
             p.start(self.hwnd, view, WM_PROCS);
         }
@@ -589,17 +590,17 @@ impl Win {
     /// Runs `f` with the kept state of `view` swapped in, then puts it back; `f` sees that view as
     /// the one on screen. `None` if nothing is kept for it. Timers and the filter are not touched.
     fn in_slot<R>(&mut self, view: usize, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
-        if self.app.active == Some(view) {
+        if self.app.active() == Some(view) {
             return Some(f(self));
         }
         let mut d = self.parked.get_mut(view).and_then(Option::take)?;
-        let shown = self.app.active;
+        let shown = self.app.active();
         self.borrowed = true;
         self.app.swap_slot(&mut d.app);
         self.swap_window_fields(&mut d);
-        self.app.active = Some(view);
+        self.app.set_active(Some(view));
         let r = f(self);
-        self.app.active = shown;
+        self.app.set_active(shown);
         self.app.swap_slot(&mut d.app);
         self.swap_window_fields(&mut d);
         self.borrowed = false;
@@ -620,7 +621,7 @@ impl Win {
                 _ => None,
             })
             .collect();
-        let shown = self.app.active == Some(view);
+        let shown = self.app.active() == Some(view);
         let failure = self.in_slot(view, |w| w.app.finish_delete(&gone, missing, &failed));
         self.sync_timers();
         if failure.is_none() {
@@ -775,7 +776,7 @@ impl Win {
     /// is not the foreground window polls every 2 s, see `ProcState::set_background`) and
     /// restoring it starts a new one (whose first snapshot has no rates).
     fn follow_processes(&mut self, on: bool) {
-        let (Some(p), Some(view)) = (&mut self.run.procs, self.app.active) else { return };
+        let (Some(p), Some(view)) = (&mut self.run.procs, self.app.active()) else { return };
         if on { p.start(self.hwnd, view, WM_PROCS) } else { p.stop() }
     }
 
@@ -878,7 +879,7 @@ impl Win {
             Ok(sc) => {
                 let files = sc.tree.subtree_files[NodeId(0)] as u64;
                 let corrupt = sc.report.mft.as_ref().map(|m| m.stats.corrupt);
-                let found = self.app.active.and_then(|v| self.app.used(v)).filter(|&u| u > 0).map(|u| (sc.tree.subtree_size[NodeId(0)].saturating_mul(1000) / u).min(1000));
+                let found = self.app.active().and_then(|v| self.app.used(v)).filter(|&u| u > 0).map(|u| (sc.tree.subtree_size[NodeId(0)].saturating_mul(1000) / u).min(1000));
                 let unreadable = sc.tree.flags.iter().filter(|f| f.contains(plumb_core::NodeFlags::DENIED)).count() as u64;
                 let s = summary(sc.report.used, files, sc.elapsed, found, corrupt, unreadable, sc.report.note.as_deref());
                 // `begin_scan` cleared the tree, so one on screen is the preview (or the tree
@@ -1040,7 +1041,7 @@ fn effect(hwnd: HWND, e: Effect, at: (i32, i32)) {
             });
         }
         Effect::Elevate => {
-            let title = with(|w| w.app.active.map(|i| w.app.views[i].title().to_string())).flatten();
+            let title = with(|w| w.app.active().map(|i| w.app.views[i].title().to_string())).flatten();
             if relaunch_elevated(title.as_deref()) {
                 let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
             }

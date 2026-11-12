@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # One descriptor per view kind
@@ -99,7 +99,7 @@ meaning two things; `ColId` only protects against a reorder inside a kind, which
   things.
 
 **Decide D3 (order and releases).**
-- f1 **Three commits, one release** (recommended; chosen 2026-11-12 as i1): S1 `ViewSpec`, S2 `layout_now`, S3 per-kind state with the 0.14.0
+- f1 **Three commits, one release** (recommended; chosen 2026-11-12 as i1): S1 `ViewSpec`, S2 `layout_now`, S3 per-kind state with the 0.14.0 (superseded: the bump happens on the user's request)
   bump; each step passes the render and selftest suites alone.
 - f2 **S1+S2 as 0.13.1, S3 as 0.14.0**. Pro: the refactor ships alone; Con: a release with no visible change.
 

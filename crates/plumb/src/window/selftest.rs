@@ -765,6 +765,12 @@ pub fn selftest_processes() -> Result<String> {
         press(hwnd, crate::modal::Pick::Yes)?;
         wait("the shell and its child gone", 10, &|w| pids.iter().all(|&p| node(w, p).is_none()))?;
         let _ = shell.wait();
+        // The Processes view sorts by its CPU column: that sort belongs to the kind, so a disk keeps its own and this one comes back.
+        with(|w| {
+            let (x, y) = (w.app.layout.column(4).0 + 20.0, w.app.layout.header().y + 4.0);
+            w.app.handle(Input::Click(x, y, Default::default()));
+        });
+        let procs_sort = with(|w| w.app.sort()).unwrap_or_default();
         // Another view on screen: the list is not followed, and comes back whole.
         let z = with(|w| {
             w.app.views.push(ViewInfo { root: "Z:\\".into(), total: 0, free: 0, kind: ViewKind::Disk });
@@ -773,12 +779,19 @@ pub fn selftest_processes() -> Result<String> {
             z
         })
         .unwrap_or(0);
-        wait("the other view's scan", 30, &|w| w.app.slot.tree.is_some() && w.app.active == Some(z) && matches!(w.app.slot.scan, crate::app::Scan::Idle))?;
+        wait("the other view's scan", 30, &|w| w.app.slot.tree.is_some() && w.app.active() == Some(z) && matches!(w.app.slot.scan, crate::app::Scan::Idle))?;
+        let disk_sort = with(|w| w.app.sort()).unwrap_or_default();
+        if disk_sort == procs_sort || disk_sort != (crate::layout::COL_SCORE, true) {
+            return Err(fail(format!("the disk view took the Processes sort: {disk_sort:?} vs {procs_sort:?}")));
+        }
         let parked_polling = with(|w| w.parked[pi].as_ref().and_then(|d| d.run.procs.as_ref()).map(procs::ProcState::polling)).flatten();
         if parked_polling != Some(false) || with(|w| w.procs_polling()) != Some(false) {
             return Err(fail(format!("polling while away: {parked_polling:?}")));
         }
         with(|w| w.open(pi, String::new()));
+        if with(|w| w.app.sort()) != Some(procs_sort) {
+            return Err(fail(format!("the Processes sort did not come back: {:?}", with(|w| w.app.sort()))));
+        }
         let before = with(|w| w.run.procs.as_ref().map_or(0, procs::ProcState::updates)).unwrap_or(0);
         wait("polling again", 10, &|w| w.procs_polling() && w.run.procs.as_ref().is_some_and(|p| p.updates() > before))?;
         // Minimised, the list is not followed; restored, it is again.

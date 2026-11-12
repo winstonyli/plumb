@@ -1,6 +1,7 @@
-//! What plumb remembers between runs: window placement, column widths and sort, as TOML in
+//! What plumb remembers between runs: window placement, and each view kind's column widths and sort, as TOML in
 //! `%LOCALAPPDATA%\plumb\state.toml`. A missing or unreadable file means defaults; unknown keys are ignored.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// The window's restored rectangle in screen pixels (what `GetWindowPlacement` reports).
@@ -20,11 +21,22 @@ impl Placement {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Sort {
-    /// Header column: 0 Name, 1 Score, 2 % of parent, 3 Size, 4 Items (CPU), 5 Modified (I/O).
-    pub column: usize,
+/// A saved sort: the column by its id (`ColId::name`), so a reordered table cannot change what it means.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SortPref {
+    pub col: String,
     pub descending: bool,
+}
+
+/// What one view kind remembers. Ids are strings, so an id this build does not know is skipped, not a damaged file.
+/// `widths` is declared first so TOML writes the `sort` sub-table last.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewPrefs {
+    /// Widths in DIPs of the Score through last columns, by id.
+    pub widths: BTreeMap<String, f32>,
+    pub sort: Option<SortPref>,
 }
 
 /// The treemap pane: shown or hidden, and its wanted width in DIPs.
@@ -45,9 +57,8 @@ impl Default for MapState {
 #[serde(default)]
 pub struct State {
     pub window: Option<Placement>,
-    /// Widths in DIPs of the Score, % of parent, Size, Items and Modified columns; a shorter list (an older file) sets the first few.
-    pub columns: Option<Vec<f32>>,
-    pub sort: Option<Sort>,
+    pub disk: ViewPrefs,
+    pub processes: ViewPrefs,
     /// The treemap pane.
     pub map: MapState,
 }
@@ -83,14 +94,17 @@ pub fn save(state: &State) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{COL_PCT, COL_SIZE};
+
+    fn prefs(col: &str, descending: bool, widths: &[(&str, f32)]) -> ViewPrefs {
+        ViewPrefs { widths: widths.iter().map(|(k, w)| (k.to_string(), *w)).collect(), sort: Some(SortPref { col: col.into(), descending }) }
+    }
 
     #[test]
-    fn a_state_survives_a_round_trip() {
+    fn a_state_round_trips_per_kind() {
         let s = State {
             window: Some(Placement { x: -20, y: 40, w: 1100, h: 760, maximized: true }),
-            columns: Some(vec![120.0, 90.5, 80.0]),
-            sort: Some(Sort { column: COL_SIZE, descending: false }),
+            disk: prefs("items", false, &[("score", 120.0), ("size", 90.5)]),
+            processes: prefs("cpu", true, &[("io", 80.0)]),
             map: MapState { visible: false, width: 333.5 },
         };
         assert_eq!(State::parse(&s.to_text()), s);
@@ -98,12 +112,29 @@ mod tests {
     }
 
     #[test]
+    fn a_0_13_state_file_gives_defaults() {
+        let s = State::parse("columns = [1.0]
+[sort]
+column = 4
+descending = true
+[map]
+visible = false
+");
+        assert_eq!((s.disk, s.processes), Default::default(), "the old sort and widths are dropped");
+        assert!(!s.map.visible, "the rest of the file still loads");
+    }
+
+    #[test]
     fn damaged_partial_and_newer_files_fall_back_to_what_they_can() {
         assert_eq!(State::parse("this is not toml {{"), State::default());
         assert_eq!(State::parse(""), State::default());
-        let partial = State::parse("[sort]\ncolumn = 2\ndescending = true\nfuture_key = 1\n");
-        assert_eq!(partial.sort, Some(Sort { column: COL_PCT, descending: true }));
-        assert_eq!((partial.window, partial.columns), (None, None));
+        let partial = State::parse("[disk.sort]
+col = \"pct\"
+descending = true
+future_key = 1
+");
+        assert_eq!(partial.disk.sort, Some(SortPref { col: "pct".into(), descending: true }));
+        assert_eq!((partial.window, partial.processes), (None, Default::default()));
         assert_eq!(partial.map, MapState::default());
     }
 

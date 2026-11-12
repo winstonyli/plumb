@@ -24,6 +24,28 @@ pub enum ColId {
     Io,
 }
 
+impl ColId {
+    const ALL: [ColId; 8] = [ColId::Name, ColId::Score, ColId::Pct, ColId::Size, ColId::Items, ColId::Modified, ColId::Cpu, ColId::Io];
+
+    /// The id as saved in the state file.
+    pub fn name(self) -> &'static str {
+        match self {
+            ColId::Name => "name",
+            ColId::Score => "score",
+            ColId::Pct => "pct",
+            ColId::Size => "size",
+            ColId::Items => "items",
+            ColId::Modified => "modified",
+            ColId::Cpu => "cpu",
+            ColId::Io => "io",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ColId> {
+        Self::ALL.into_iter().find(|c| c.name() == s)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct ColSpec {
     pub id: ColId,
@@ -117,6 +139,14 @@ mod tests {
     use super::*;
 
     const KINDS: [ViewKind; 2] = [ViewKind::Disk, ViewKind::Processes];
+
+    #[test]
+    fn every_id_round_trips_through_its_saved_name() {
+        for id in ColId::ALL {
+            assert_eq!(ColId::parse(id.name()), Some(id));
+        }
+        assert_eq!(ColId::parse("nope"), None);
+    }
 
     #[test]
     fn every_kind_has_six_distinct_column_ids() {

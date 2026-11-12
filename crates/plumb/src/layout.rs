@@ -133,6 +133,14 @@ impl Layout {
         Self { w, h, banner: false, cancel: false, basket: false, procs: false, toast: 0, col_w: COL_W, chips: Vec::new(), map_on: false, map_w: MAP_W }
     }
 
+    /// Replaces all five widths at once, clamping them as a group (one at a time they would clamp against a mix of old and new).
+    pub fn set_widths(&mut self, w: [f32; 5]) {
+        self.col_w = w.map(|x| x.max(MIN_COL_W));
+        for c in 1..=5 {
+            self.set_col_w(c, self.col_w[c - 1]);
+        }
+    }
+
     /// Sets the width of column `c` (1..=5), keeping it at least `MIN_COL_W` and the Name column at least `MIN_NAME_W`.
     pub fn set_col_w(&mut self, c: usize, w: f32) {
         let others: f32 = self.col_w.iter().sum::<f32>() - self.col_w[c - 1];

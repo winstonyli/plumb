@@ -14,12 +14,13 @@ use crate::describe::{self, Description};
 use crate::draw::{Chip, MapView, Mark, Scene, Theme, View};
 use crate::filter_ui::Edit;
 use crate::fmt;
-use crate::layout::{chip_width, COL_COUNT, Hit, Layout, Rect, CHIP_W, INDENT, MAP_MIN_W, PICKER_H, ROW_H};
+use crate::layout::{chip_width, Hit, Layout, Rect, CHIP_W, COL_SCORE, COL_W, INDENT, MAP_MIN_W, MIN_COL_W, PICKER_H, ROW_H};
 use crate::modal::{Ask, Modal, Pick, Victim};
 use crate::outcome::Outcome;
 use toast::Toast;
 use crate::restore::Snapshot;
-use crate::state::{MapState, Sort, State};
+use crate::state::{MapState, SortPref, State, ViewPrefs};
+use crate::view_spec::ColId;
 use plumb_core::basket::{self, Basket};
 use plumb_core::rows::{Key, RowModel, SortKey};
 use plumb_core::procs::Metric;
@@ -314,10 +315,23 @@ impl Slot {
     }
 }
 
+/// One view kind's sort (a position in its columns) and the widths of its five resizable columns.
+#[derive(Clone, Copy)]
+struct Prefs {
+    sort: (usize, bool),
+    col_w: [f32; 5],
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self { sort: (COL_SCORE, true), col_w: COL_W }
+    }
+}
+
 pub struct App {
     pub layout: Layout,
     pub views: Vec<ViewInfo>,
-    pub active: Option<usize>,
+    active: Option<usize>,
     /// What each view off screen holds, shown on its chip; set by the window.
     pub marks: Vec<Mark>,
     /// The visible row under the mouse.
@@ -333,8 +347,8 @@ pub struct App {
     /// The system's accent colour (`0xRRGGBB`), set by the window; `None` keeps plumb's blue.
     pub accent: Option<u32>,
     pub adapter: String,
-    /// Header column last clicked (see `layout::COL_SCORE` and the rest) and direction.
-    sort: (usize, bool),
+    /// Each view kind's sort and widths, indexed by `ViewKind`: the truth `layout.col_w` is loaded from (`set_active`).
+    prefs: [Prefs; 2],
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
     grab: Option<f32>,
     /// The pointer is over the scrollbar thumb.
@@ -386,7 +400,7 @@ impl App {
         let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
             layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), slot: Slot::default(),
-            can_elevate: false, accent: None, sort: (crate::layout::COL_SCORE, true), grab: None, col_drag: None,
+            can_elevate: false, accent: None, prefs: [Prefs::default(); 2], grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None, row_drag: false,
             held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, toast: Toast::default(), toast_hot: false, stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
@@ -398,26 +412,43 @@ impl App {
         self.layout.chips = self.chips().iter().map(|c| chip_width(measure(&c.label))).collect();
     }
 
-    /// The header column the rows are sorted by, and whether descending.
     /// The kind of the view on screen (a disk when none is).
     pub fn kind(&self) -> ViewKind {
         self.active.and_then(|i| self.views.get(i)).map_or(ViewKind::Disk, |d| d.kind)
     }
 
+    /// The view on screen, if any.
+    pub fn active(&self) -> Option<usize> {
+        self.active
+    }
+
+    /// The one writer of `active`: the kind decides which sort and widths apply, so `layout.col_w` follows it.
+    pub fn set_active(&mut self, a: Option<usize>) {
+        self.active = a;
+        self.layout.set_widths(self.prefs[self.kind() as usize].col_w);
+    }
+
+    /// The header column the rows are sorted by (for the view on screen), and whether descending.
     pub fn sort(&self) -> (usize, bool) {
-        self.sort
+        self.prefs[self.kind() as usize].sort
     }
 
     /// Takes the remembered column widths and sort (before any scan, so the first tree is sorted by it).
     pub fn restore(&mut self, s: &State) {
-        if let Some(Sort { column, descending }) = s.sort.filter(|s| s.column < COL_COUNT) {
-            self.sort = (column, descending);
-        }
-        if let Some(cols) = &s.columns {
-            for (i, &w) in cols.iter().take(self.layout.col_w.len()).enumerate().filter(|(_, w)| w.is_finite()) {
-                self.layout.set_col_w(i + 1, w);
+        for (kind, saved) in [(ViewKind::Disk, &s.disk), (ViewKind::Processes, &s.processes)] {
+            let cols = &kind.spec().cols;
+            let pos = |name: &str| ColId::parse(name).and_then(|id| cols.iter().position(|c| c.id == id));
+            let p = &mut self.prefs[kind as usize];
+            if let Some(i) = saved.sort.as_ref().and_then(|s| pos(&s.col)) {
+                p.sort = (i, saved.sort.as_ref().is_some_and(|s| s.descending));
+            }
+            for (name, &w) in &saved.widths {
+                if let Some(i) = pos(name).filter(|&i| i > 0 && w.is_finite()) {
+                    p.col_w[i - 1] = w.clamp(MIN_COL_W, 4000.0);
+                }
             }
         }
+        self.set_active(self.active);
         self.layout.map_on = s.map.visible;
         if s.map.width.is_finite() {
             self.layout.map_w = s.map.width.clamp(MAP_MIN_W, 4000.0);
@@ -426,8 +457,14 @@ impl App {
 
     /// The part of the remembered state the app owns; the window fills in its placement.
     pub fn remembered(&self) -> State {
-        let (column, descending) = self.sort;
-        State { window: None, columns: Some(self.layout.col_w.to_vec()), sort: Some(Sort { column, descending }), map: MapState { visible: self.layout.map_on, width: self.layout.map_w } }
+        let saved = |kind: ViewKind| {
+            let (cols, p) = (&kind.spec().cols, &self.prefs[kind as usize]);
+            ViewPrefs {
+                widths: (1..cols.len()).map(|i| (cols[i].id.name().to_string(), p.col_w[i - 1])).collect(),
+                sort: Some(SortPref { col: cols[p.sort.0].id.name().to_string(), descending: p.sort.1 }),
+            }
+        };
+        State { window: None, disk: saved(ViewKind::Disk), processes: saved(ViewKind::Processes), map: MapState { visible: self.layout.map_on, width: self.layout.map_w } }
     }
 
     /// Exchanges the per-view state with `p`. The result is consistent on its own (banner and
@@ -461,7 +498,7 @@ impl App {
             self.slot.basket = self.stash.remove(&view).unwrap_or_default();
             self.basket_rev += 1;
         }
-        self.active = Some(view);
+        self.set_active(Some(view));
         self.slot.tree = None;
         self.slot.model = None;
         self.slot.scroll = 0;
@@ -500,7 +537,7 @@ impl App {
     pub fn finish_scan(&mut self, tree: Tree, summary: String) {
         self.filter_reset();
         self.map_reset();
-        let model = Self::fresh_model(&tree, self.kind().spec().cols[self.sort.0].sort, self.sort.1);
+        let model = Self::fresh_model(&tree, self.kind().spec().cols[self.sort().0].sort, self.sort().1);
         self.slot.tree = Some(tree);
         self.slot.model = Some(model);
         self.slot.scroll = 0;
@@ -516,10 +553,10 @@ impl App {
         self.slot.scroll = 0;
         self.slot.model = None;
         self.slot.flash.clear();
-        let key = self.kind().spec().cols[self.sort.0].sort;
+        let (key, desc) = (self.kind().spec().cols[self.sort().0].sort, self.sort().1);
         let Some(tree) = &mut self.slot.tree else { return };
         tree.take_touched(); // the model is built from the tree as it is now
-        self.slot.model = Some(Self::fresh_model(tree, key, self.sort.1));
+        self.slot.model = Some(Self::fresh_model(tree, key, desc));
     }
 
     /// Replaces the tree with a rescanned one, keeping the sort, the expanded folders and the
@@ -535,7 +572,7 @@ impl App {
         };
         self.map_reset();
         let Some(snap) = kept else { return self.finish_scan(tree, summary) };
-        let (model, scroll) = snap.apply(&tree, self.kind().spec().cols[self.sort.0].sort, self.sort.1, self.layout.rows_visible());
+        let (model, scroll) = snap.apply(&tree, self.kind().spec().cols[self.sort().0].sort, self.sort().1, self.layout.rows_visible());
         self.slot.tree = Some(tree);
         self.slot.model = Some(model);
         self.slot.scroll = scroll;
@@ -1151,7 +1188,12 @@ impl App {
                 self.row_drag = false;
                 self.pressed = false;
                 self.grab = None;
-                self.col_drag = None;
+                if let Some((c, ..)) = self.col_drag.take() {
+                    // Only the column the user dragged is stored: the others may be clamped narrow by a small window.
+                    let k = self.kind() as usize;
+                    self.prefs[k].col_w[c - 1] = self.layout.col_w[c - 1];
+                }
+
                 self.map_drag = None;
             }
         }
@@ -1208,8 +1250,9 @@ impl App {
                 }
             }
             Hit::Header(c) => {
-                let desc = if self.sort.0 == c { !self.sort.1 } else { c != 0 };
-                self.sort = (c, desc);
+                let desc = if self.sort().0 == c { !self.sort().1 } else { c != 0 };
+                let k = self.kind() as usize;
+                self.prefs[k].sort = (c, desc);
                 let kind = self.kind();
                 if let (Some(t), Some(m)) = (&self.slot.tree, &mut self.slot.model) {
                     m.set_sort(t, kind.spec().cols[c].sort, desc);
@@ -1409,7 +1452,7 @@ impl App {
             theme: Theme::with_accent(dark, self.accent),
             chips: &chips,
             active_chip: self.active,
-            sort: self.sort,
+            sort: self.sort(),
             kind: self.kind(),
             admin: self.can_elevate.then(|| self.layout.admin_button()),
             // The scrollbar thumb counts as a control under the pointer, and is pressed while it is dragged.
@@ -1435,7 +1478,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{COL_LAST, COL_PCT, COL_SCORE};
+    use crate::layout::{COL_COUNT, COL_PCT, COL_SCORE};
     use crate::outcome::Failure;
 
     /// The text-returning forms of the tooltip and status builders, which write into a buffer.
@@ -2338,12 +2381,12 @@ mod tests {
         let mut a = scanned();
         let h = a.layout.column(COL_SCORE).0 + 20.0;
         let y = a.layout.header().y + 4.0;
-        let first = a.sort;
+        let first = a.sort();
         a.handle(Input::Click(h, y, Default::default()));
-        let once = a.sort;
+        let once = a.sort();
         a.handle(Input::DoubleClick(h, y));
         assert_ne!(first, once);
-        assert_ne!(once, a.sort, "the second press of the pair flips the sort again");
+        assert_ne!(once, a.sort(), "the second press of the pair flips the sort again");
     }
 
     #[test]
@@ -2439,29 +2482,87 @@ mod tests {
     }
 
     #[test]
-    fn remembered_columns_and_sort_come_back_and_nonsense_is_ignored() {
+    fn remembered_columns_and_sort_come_back_per_kind() {
         let mut a = app();
-        a.layout.set_col_w(COL_PCT, 140.0);
-        a.sort = (3, false);
+        a.prefs[ViewKind::Disk as usize] = Prefs { sort: (4, false), col_w: [101.0, 140.0, 103.0, 104.0, 105.0] };
+        a.prefs[ViewKind::Processes as usize] = Prefs { sort: (5, true), col_w: [201.0, 202.0, 203.0, 204.0, 205.0] };
         let mut b = app();
         b.restore(&a.remembered());
-        assert_eq!((b.sort(), b.layout.col_w), (a.sort(), a.layout.col_w));
+        for k in [ViewKind::Disk, ViewKind::Processes] {
+            let (x, y) = (a.prefs[k as usize], b.prefs[k as usize]);
+            assert_eq!((x.sort, x.col_w), (y.sort, y.col_w), "{k:?}");
+        }
+        assert_eq!(b.layout.col_w, a.prefs[0].col_w, "the working widths are the active kind's (a disk when none is)");
+    }
+
+    #[test]
+    fn nonsense_in_a_state_file_is_ignored() {
         let mut c = app();
-        let before = (c.sort(), c.layout.col_w);
-        c.restore(&State { window: None, columns: Some(vec![f32::NAN, 1.0e9, -5.0]), sort: Some(Sort { column: 9, descending: true }), map: Default::default() });
-        assert_eq!(c.sort(), before.0, "an unknown column is ignored");
-        assert!(c.layout.col_w.iter().all(|w| w.is_finite() && *w > 0.0), "widths stay clamped");
-        // A state file from before the Modified column has three widths: they apply, and the new column keeps its default.
-        let mut d = app();
-        d.restore(&State::parse("columns = [111.0, 99.0, 77.0]\n[sort]\ncolumn = 4\ndescending = true\n"));
-        assert_eq!(d.layout.col_w[..3], [111.0, 99.0, 77.0]);
-        assert_eq!(d.layout.col_w[3..], crate::layout::COL_W[3..]);
-        assert_eq!(d.sort(), (4, true), "and the new column can be the remembered sort");
-        // A state file from before the Score column has four widths; a saved Score sort comes back.
-        let mut e = app();
-        e.restore(&State::parse("columns = [111.0, 99.0, 77.0, 88.0]\n[sort]\ncolumn = 5\ndescending = true\n"));
-        assert_eq!((e.layout.col_w[3], e.layout.col_w[4]), (88.0, crate::layout::COL_W[4]));
-        assert_eq!(e.sort(), (COL_LAST, true));
+        c.restore(&State::parse("[disk.widths]\nscore = nan\npct = 1.0e9\nsize = -5.0\nbogus = 7.0\n[disk.sort]\ncol = \"cpu\"\ndescending = false\n"));
+        let p = c.prefs[ViewKind::Disk as usize];
+        assert_eq!(p.sort, (COL_SCORE, true), "a column the kind lacks leaves the default sort");
+        assert_eq!(p.col_w[0], crate::layout::COL_W[0], "a non-finite width is skipped");
+        assert_eq!(p.col_w[1], 4000.0, "an absurd width is clamped");
+        assert_eq!(p.col_w[2], MIN_COL_W);
+    }
+
+    #[test]
+    fn restore_applies_both_kinds_before_any_view_is_active() {
+        let mut a = app();
+        a.views.push(ViewInfo { root: "Processes".into(), total: 16 << 30, free: 4 << 30, kind: ViewKind::Processes });
+        a.restore(&State::parse("[disk.sort]\ncol = \"items\"\ndescending = false\n[processes.sort]\ncol = \"io\"\ndescending = true\n[processes.widths]\nio = 111.0\n"));
+        assert_eq!(a.sort(), (4, false), "no view is active, so the disk's");
+        a.set_active(Some(2));
+        assert_eq!((a.sort(), a.layout.col_w[4]), ((5, true), 111.0));
+    }
+
+    #[test]
+    fn each_view_kind_keeps_its_own_sort_and_widths() {
+        let (mut a, _) = process_app();
+        assert_eq!((a.kind(), a.sort(), a.layout.col_w), (ViewKind::Processes, (COL_SCORE, true), crate::layout::COL_W));
+        let click = |a: &mut App, c: usize| {
+            let (x, y) = (a.layout.column(c).0 + 20.0, a.layout.header().y + 4.0);
+            a.handle(Input::Click(x, y, Default::default()));
+        };
+        a.set_active(Some(0));
+        click(&mut a, 4);
+        a.prefs[ViewKind::Disk as usize].col_w[0] = 150.0;
+        a.set_active(Some(0));
+        assert_eq!((a.sort(), a.layout.col_w[0]), ((4, true), 150.0));
+        a.set_active(Some(2));
+        assert_eq!((a.sort(), a.layout.col_w), ((COL_SCORE, true), crate::layout::COL_W), "the Processes view is untouched");
+        click(&mut a, 5);
+        a.set_active(None);
+        assert_eq!((a.sort(), a.layout.col_w[0]), ((4, true), 150.0), "back on the disk");
+        a.set_active(Some(2));
+        assert_eq!(a.sort(), (5, true));
+    }
+
+    #[test]
+    fn a_column_drag_then_a_switch_is_remembered() {
+        let mut a = app();
+        let w0 = a.layout.col_w[COL_PCT - 1];
+        a.col_drag = Some((COL_PCT, 500.0, w0));
+        a.handle(Input::Drag(450.0, 0.0));
+        a.handle(Input::Release);
+        a.set_active(Some(1));
+        a.set_active(Some(0));
+        assert_eq!(a.layout.col_w[COL_PCT - 1], w0 + 50.0);
+        assert_eq!(a.remembered().disk.widths["pct"], w0 + 50.0);
+        assert_eq!(a.remembered().processes.widths["pct"], crate::layout::COL_W[COL_PCT - 1], "the other kind keeps its default");
+    }
+
+    #[test]
+    fn a_small_window_does_not_shrink_the_stored_widths() {
+        let mut a = app();
+        a.prefs[ViewKind::Disk as usize].col_w = [200.0; 5];
+        a.layout.w = 600.0;
+        a.set_active(Some(0));
+        assert!(a.layout.col_w.iter().sum::<f32>() < 1000.0, "the narrow window clamps the working copy");
+        a.layout.w = 3000.0;
+        a.set_active(Some(0));
+        assert_eq!(a.layout.col_w, [200.0; 5]);
+        assert_eq!(a.prefs[ViewKind::Disk as usize].col_w, [200.0; 5]);
     }
 
     #[test]
