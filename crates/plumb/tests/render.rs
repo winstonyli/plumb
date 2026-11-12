@@ -17,6 +17,40 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 const W: u32 = 800;
 const H: u32 = 600;
 
+/// A scene with nothing in it; a test sets what it looks at: `Scene { map, ..blank(layout, theme) }`.
+fn blank<'a>(layout: Layout, theme: Theme) -> Scene<'a> {
+    Scene {
+        layout, theme, chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
+        view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None,
+        filter: FilterBar::default(), basket: None, map: None, modal: None,
+    }
+}
+
+/// The rows of `tree` as `model` shows them, nothing marked, found or flashing. The marks and the flash are leaked: a few bytes per frame in a test.
+fn view<'a>(tree: &'a plumb_core::Tree, model: &'a RowModel) -> View<'a> {
+    View { tree, model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: Box::leak(Box::default()), flash: Box::leak(Box::default()), procs: None }
+}
+
+/// The map of `tiles`, first generation, nothing selected, hovered or marked.
+fn map_view<'a>(tiles: &'a [plumb_core::treemap::Tile], classes: &'a [(plumb_core::treemap::Class, u64)]) -> MapView<'a> {
+    MapView { tiles, generation: 1, now: 0, selected: None, hover: None, classes, marked: &[] }
+}
+
+/// A folder `root` holding one file for each `(name, bytes)`.
+fn folder(files: &[(&str, u64)]) -> (plumb_core::Tree, plumb_core::NodeId) {
+    let mut b = plumb_core::TreeBuilder::new();
+    let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
+    for &(name, bytes) in files {
+        b.push_str(root, name, bytes, plumb_core::NodeFlags::empty());
+    }
+    (b.finish().unwrap(), root)
+}
+
+/// A process sample; its private bytes are half its memory.
+fn sample(pid: u32, parent: u32, name: &str, memory: u64, cpu: u64, io: u64) -> plumb_core::procs::Sample {
+    plumb_core::procs::Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io }
+}
+
 fn bitmap(gfx: &Gfx, options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OPTIONS) -> ID2D1Bitmap1 {
     bitmap_sized(gfx, options, W, H, 96.0)
 }
@@ -49,22 +83,14 @@ fn render_with(dark: bool, filter: FilterBar) -> Vec<u8> {
     let found = plumb_core::filter::Query { text: "n1".into(), regex: false }.compile().unwrap();
     let admin = layout.admin_button();
     let scene = Scene {
-        layout,
-        theme: Theme::new(dark),
         chips: &chips,
         active_chip: Some(0),
-        sort: (plumb::layout::COL_SCORE, true),
         admin: Some(admin),
-        hot: None, pressed: false,
-        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: true, unscanned: Some(30_000_000), used: None, hover: Some(2), found: found.as_ref(), basket: &Basket::default(), flash: &Default::default(), procs: None }),
-        message: "",
-        loading: false, kind: Default::default(), metric: Default::default(), held: None,
-        status: "MFT scan: 200 files", toast: &[], toast_ok: false, selection: "C:\\Users\\someone\\Documents  (1.2 GB, 300 items)",
-        banner: None,
+        view: Some(View { partial: true, unscanned: Some(30_000_000), hover: Some(2), found: found.as_ref(), ..view(&tree, &model) }),
+        status: "MFT scan: 200 files",
+        selection: "C:\\Users\\someone\\Documents  (1.2 GB, 300 items)",
         filter,
-        basket: None,
-        map: None,
-        modal: None,
+        ..blank(layout, Theme::new(dark))
     };
     render_scene(&gfx, &scene, &format!("plumb-{}{}", if dark { "dark" } else { "light" }, if filter.error { "-error" } else { "" }))
 }
@@ -243,12 +269,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
     use plumb_core::treemap::{layout as map_layout, Kind};
     for dark in [true, false] {
         let gfx = Gfx::warp().expect("WARP device");
-        let mut b = plumb_core::TreeBuilder::new();
-        let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
-        b.push_str(root, "movie.mp4", 900_000, plumb_core::NodeFlags::empty());
-        b.push_str(root, "song.flac", 400_000, plumb_core::NodeFlags::empty());
-        b.push_str(root, "notes.txt", 100_000, plumb_core::NodeFlags::empty());
-        let tree = b.finish().unwrap();
+        let (tree, root) = folder(&[("movie.mp4", 900_000), ("song.flac", 400_000), ("notes.txt", 100_000)]);
         let model = RowModel::new(&tree);
         let mut layout = Layout::new(W as f32, H as f32);
         layout.map_on = true;
@@ -259,13 +280,7 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
         let video = tiles.iter().position(|t| t.kind == Kind::File && t.bytes == 900_000).unwrap();
         let plain = tiles.iter().position(|t| t.kind == Kind::File && t.bytes == 100_000).unwrap();
         let shoot = |selected: Option<usize>, stem: &str| {
-            let scene = Scene {
-                layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-                view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-                message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
-                map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
-                modal: None,
-            };
+            let scene = Scene { view: Some(view(&tree, &model)), map: Some(MapView { selected, ..map_view(&tiles, &classes) }), ..blank(layout.clone(), theme) };
             render_scene(&gfx, &scene, stem)
         };
         let stem = if dark { "plumb-map-dark" } else { "plumb-map-light" };
@@ -287,24 +302,14 @@ fn the_map_paints_a_tile_in_its_class_colour_and_outlines_the_selection() {
 fn the_map_tiles_are_drawn_once_per_generation_and_the_cached_frame_matches() {
     use plumb_core::treemap::layout as map_layout;
     let gfx = Gfx::warp().expect("WARP device");
-    let mut b = plumb_core::TreeBuilder::new();
-    let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
-    for (i, size) in [900_000u64, 400_000, 100_000, 50_000].into_iter().enumerate() {
-        b.push_str(root, &format!("f{i}.mp4"), size, plumb_core::NodeFlags::empty());
-    }
-    let tree = b.finish().unwrap();
+    let (tree, root) = folder(&[("f0.mp4", 900_000), ("f1.mp4", 400_000), ("f2.mp4", 100_000), ("f3.mp4", 50_000)]);
     let mut layout = Layout::new(W as f32, H as f32);
     layout.map_on = true;
     let tiles = map_layout(&tree, root, layout.map().unwrap(), 1.0);
     let classes = plumb_core::treemap::class_bytes(&tiles);
     let painter = Painter::new(&gfx).unwrap();
     let frame = |generation: u64, selected: Option<usize>| {
-        let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
-            map: Some(MapView { tiles: &tiles, generation, now: 0, selected, hover: None, classes: &classes, marked: &[] }),
-            modal: None,
-        };
+        let scene = Scene { map: Some(MapView { generation, selected, ..map_view(&tiles, &classes) }), ..blank(layout.clone(), Theme::new(true)) };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
         painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
         read_back(&gfx, &target)
@@ -326,10 +331,7 @@ fn placeholder_rows_are_drawn_while_the_first_scan_has_no_tree() {
     let gfx = Gfx::warp().expect("WARP device");
     let layout = Layout::new(W as f32, H as f32);
     let frame = |loading: bool| {
-        let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-            view: None, message: if loading { "" } else { "Scan failed\nThe volume could not be opened." }, loading, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
-        };
+        let scene = Scene { message: if loading { "" } else { "Scan failed\nThe volume could not be opened." }, loading, ..blank(layout.clone(), Theme::new(true)) };
         render_scene(&gfx, &scene, if loading { "plumb-loading" } else { "plumb-empty" })
     };
     let (empty, loading) = (frame(false), frame(true));
@@ -365,12 +367,7 @@ fn age_shot(dark: bool, old: Option<u32>) -> (Vec<u8>, [(u32, u32); 2], Theme) {
         let r = tiles.iter().find(|t| t.kind == Kind::File && t.bytes == bytes).unwrap().rect;
         ((r.x + r.w / 2.0) as u32, (r.y + r.h / 2.0) as u32)
     };
-    let scene = Scene {
-        layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-        view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
-        map: Some(MapView { tiles: &tiles, generation: 1, now, selected: None, hover: None, classes: &classes, marked: &[] }),
-        modal: None,
-    };
+    let scene = Scene { map: Some(MapView { now, ..map_view(&tiles, &classes) }), ..blank(layout.clone(), theme) };
     (render_scene(&gfx, &scene, "plumb-map-age"), [mid(600_000), mid(500_000)], theme)
 }
 
@@ -412,21 +409,13 @@ fn every_pair_of_classes_stays_apart_at_the_oldest_shade() {
 fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
     let strip_pixels = |width: f32| {
         let gfx = Gfx::warp().expect("WARP device");
-        let mut b = plumb_core::TreeBuilder::new();
-        let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
-        b.push_str(root, "movie.mp4", 900_000, plumb_core::NodeFlags::empty());
-        let tree = b.finish().unwrap();
+        let (tree, root) = folder(&[("movie.mp4", 900_000)]);
         let mut layout = Layout::new(width, H as f32);
         layout.map_on = true;
         let tiles = plumb_core::treemap::layout(&tree, root, layout.map().unwrap_or(Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 }), 1.0);
         let classes = plumb_core::treemap::class_bytes(&tiles);
         let theme = Theme::new(true);
-        let scene = Scene {
-            layout: layout.clone(), theme, chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None,
-            map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
-            modal: None,
-        };
+        let scene = Scene { map: Some(map_view(&tiles, &classes)), ..blank(layout.clone(), theme) };
         let buf = render_scene(&gfx, &scene, "plumb-legend");
         // The strip's first swatch is the foreground colour itself, which nothing else in the status bar uses.
         let st = layout.status_top();
@@ -441,12 +430,7 @@ fn the_legend_draws_an_age_strip_when_wide_and_leaves_it_out_when_narrow() {
 fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows() {
     use plumb_core::treemap::layout as map_layout;
     let gfx = Gfx::warp().expect("WARP device");
-    let mut b = plumb_core::TreeBuilder::new();
-    let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
-    for (i, size) in [900_000u64, 400_000].into_iter().enumerate() {
-        b.push_str(root, &format!("f{i}.mp4"), size, plumb_core::NodeFlags::empty());
-    }
-    let tree = b.finish().unwrap();
+    let (tree, root) = folder(&[("f0.mp4", 900_000), ("f1.mp4", 400_000)]);
     let mut layout = Layout::new(W as f32, H as f32);
     layout.map_on = true;
     let tiles = map_layout(&tree, root, layout.map().unwrap(), 1.0);
@@ -458,12 +442,7 @@ fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows
         ((r.x + r.w / 2.0) as u32, (r.y + r.h / 2.0) as u32)
     };
     let frame = |marked: &[usize], chip: Option<&str>| {
-        let scene = Scene {
-            layout: Layout { basket: chip.is_some(), ..layout.clone() }, theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-            view: None, message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: chip,
-            map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked }),
-            modal: None,
-        };
+        let scene = Scene { basket: chip, map: Some(MapView { marked, ..map_view(&tiles, &classes) }), ..blank(Layout { basket: chip.is_some(), ..layout.clone() }, Theme::new(true)) };
         let target = bitmap(&gfx, D2D1_BITMAP_OPTIONS_TARGET);
         painter.paint(&gfx, &target, 96.0, 0.0, &scene).expect("EndDraw");
         read_back(&gfx, &target)
@@ -481,19 +460,12 @@ fn a_marked_tile_is_tinted_without_redrawing_the_cached_tiles_and_the_chip_shows
 #[test]
 fn a_marked_row_is_tinted() {
     let gfx = Gfx::warp().expect("WARP device");
-    let mut b = plumb_core::TreeBuilder::new();
-    let root = b.push_str(plumb_core::NodeId::NONE, "root", 0, plumb_core::NodeFlags::DIR);
-    b.push_str(root, "target.bin", 5_000, plumb_core::NodeFlags::empty());
-    let tree = b.finish().unwrap();
+    let (tree, _) = folder(&[("target.bin", 5_000)]);
     let mut model = RowModel::new(&tree);
     model.reveal(&tree, plumb_core::NodeId(1));
     let layout = Layout::new(W as f32, H as f32);
     let shot = |basket: &Basket| {
-        let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket, flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
-        };
+        let scene = Scene { view: Some(View { basket, ..view(&tree, &model) }), ..blank(layout.clone(), Theme::new(true)) };
         render_scene(&gfx, &scene, "plumb-marked-row")
     };
     let mut basket = Basket::default();
@@ -523,11 +495,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
         let tree = b.finish().unwrap();
         let mut model = RowModel::new(&tree);
         model.reveal(&tree, plumb_core::NodeId(1));
-        let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
-        };
+        let scene = Scene { view: Some(view(&tree, &model)), ..blank(layout.clone(), Theme::new(true)) };
         render_on(&painter, &gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
     };
     let (known, unknown) = (shot(Some(154_000)), shot(None));
@@ -556,11 +524,7 @@ fn the_stale_column_is_drawn_for_an_old_file() {
         let tree = b.finish().unwrap();
         let mut model = RowModel::new(&tree);
         model.reveal(&tree, plumb_core::NodeId(1));
-        let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_LAST, true), admin: None, hot: None, pressed: false,
-            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
-        };
+        let scene = Scene { sort: (plumb::layout::COL_LAST, true), view: Some(view(&tree, &model)), ..blank(layout.clone(), Theme::new(true)) };
         render_on(&painter, &gfx, &scene, if age_days > 365 { "plumb-stale" } else { "plumb-fresh" })
     };
     let (old, new) = (shot(3 * 365), shot(1));
@@ -573,10 +537,9 @@ fn the_stale_column_is_drawn_for_an_old_file() {
 
 #[test]
 fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
-    use plumb_core::procs::{Metric, Procs, Sample};
+    use plumb_core::procs::{Metric, Procs};
     use plumb_core::treemap::layout as map_layout;
     let gfx = Gfx::warp().expect("WARP device");
-    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
     let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
     let list = |cpu: u64, io: u64| {
         vec![
@@ -603,12 +566,8 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
     let chips = [Chip { label: "C:  123 GB".into(), used: 0.7, mark: Mark::None }, Chip { label: "Processes  9.1 GB".into(), used: 0.4, mark: Mark::None }];
     let layout = Layout { chips: chip_widths(&gfx, &chips), ..layout };
     let scene = Scene {
-        layout, theme: Theme::new(false), chips: &chips, active_chip: Some(1), sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-        message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Default::default(), held: None, status: "6 processes, 1.1 GB in use of 16 GB", toast: &[], toast_ok: false, selection: "", banner: None,
-        filter: FilterBar::default(), basket: None,
-        map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
-        modal: None,
+        chips: &chips, active_chip: Some(1), view: Some(view(&tree, &model)), kind: plumb::app::ViewKind::Processes, status: "6 processes, 1.1 GB in use of 16 GB",
+        map: Some(map_view(&tiles, &classes)), ..blank(layout, Theme::new(false))
     };
     let shot = render_scene(&gfx, &scene, "plumb-processes");
     assert_eq!(shot.len(), (W * H * 4) as usize);
@@ -616,9 +575,8 @@ fn the_processes_view_paints_its_columns_and_a_map_of_memory() {
 
 #[test]
 fn the_processes_map_follows_the_metric_button() {
-    use plumb_core::procs::{Metric, Procs, Sample};
+    use plumb_core::procs::{Metric, Procs};
     let gfx = Gfx::warp().expect("WARP device");
-    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
     let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
     let list = |k: u64| {
         vec![
@@ -644,12 +602,8 @@ fn the_processes_map_follows_the_metric_button() {
         areas.push(tiles.iter().find(|t| t.kind != plumb_core::treemap::Kind::Rest && tree.name_string(t.node) == "big-memory.exe").map_or(0.0, |t| t.rect.w * t.rect.h));
         let classes = plumb_core::treemap::class_bytes(&tiles);
         let scene = Scene {
-            layout, theme: Theme::new(false), chips: &chips, active_chip: Some(0), sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: m, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "", toast: &[], toast_ok: false, selection: "", banner: None,
-            filter: FilterBar::default(), basket: None,
-            map: Some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
-            modal: None,
+            chips: &chips, active_chip: Some(0), view: Some(view(&tree, &model)), kind: plumb::app::ViewKind::Processes, metric: m,
+            held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), map: Some(map_view(&tiles, &classes)), ..blank(layout, Theme::new(false))
         };
         render_scene(&gfx, &scene, &format!("plumb-processes-{m:?}").to_lowercase());
     }
@@ -670,8 +624,7 @@ fn processes_shot_with(gfx: &Gfx, painter: &Painter, theme: Theme, scale: f32, h
 
 #[allow(clippy::too_many_arguments)]
 fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme: Theme, scale: f32, hot: &dyn Fn(&Layout) -> Rect, pressed: bool, modal: Option<&plumb::modal::Modal>, notice: (&str, bool), stem: &str) -> Vec<u8> {
-    use plumb_core::procs::{Metric, Procs, Sample};
-    let sample = |pid, parent, name: &str, memory, cpu, io| Sample { pid, parent, created: 1, name: name.into(), memory, private: memory / 2, cpu_100ns: cpu, io_bytes: io };
+    use plumb_core::procs::{Metric, Procs};
     let (mut procs, mut tree) = Procs::new(Metric::Memory, 4, 1 << 30);
     let list = |k: u64| vec![sample(2000, 1, "big-memory.exe", 900_000_000, k, 0), sample(2200, 1, "chatty.exe", 10_000_000, k, 400 * k)];
     procs.apply(&mut tree, &list(0), 0);
@@ -691,12 +644,10 @@ fn processes_shot_sized(gfx: &Gfx, painter: &Painter, (w, h): (u32, u32), theme:
     let classes = plumb_core::treemap::class_bytes(&tiles);
     let hot = Some(hot(&layout));
     let scene = Scene {
-        layout, theme, chips: &chips, active_chip: Some(1), sort: (plumb::layout::COL_SCORE, true), admin: None, hot, pressed,
-        view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-        message: "", loading: false, kind: plumb::app::ViewKind::Processes, metric: Metric::Memory, held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB", selection: "", banner: None,
-        filter: FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() }, basket: None,
-        map: has_map.then_some(MapView { tiles: &tiles, generation: 1, now: 0, selected: None, hover: None, classes: &classes, marked: &[] }),
-        modal, toast: &toast, toast_ok: notice.1,
+        chips: &chips, active_chip: Some(1), hot, pressed, view: Some(view(&tree, &model)), kind: plumb::app::ViewKind::Processes,
+        held: Some(("Files held by chatty.exe (PID 2200): 2 files", &held_lines)), status: "2 processes, 910 MB in use of 16 GB",
+        filter: FilterBar { text: "chr", caret: 3, regex: true, focus: true, count: "2 matches", ..Default::default() },
+        map: has_map.then_some(map_view(&tiles, &classes)), modal, toast: &toast, toast_ok: notice.1, ..blank(layout, theme)
     };
     let (pw, ph) = ((w as f32 * scale) as u32, (h as f32 * scale) as u32);
     let target = bitmap_sized(gfx, D2D1_BITMAP_OPTIONS_TARGET, pw, ph, 96.0 * scale);
@@ -851,11 +802,7 @@ fn a_row_with_an_attribute_draws_a_pill_at_the_right_of_its_name_cell_and_leaves
         let tree = b.finish().unwrap();
         let mut model = RowModel::new(&tree);
         model.reveal(&tree, plumb_core::NodeId(1));
-        let scene = Scene {
-            layout: layout.clone(), theme: Theme::new(true), chips: &[], active_chip: None, sort: (plumb::layout::COL_SCORE, true), admin: None, hot: None, pressed: false,
-            view: Some(View { tree: &tree, model: &model, scroll: 0, partial: false, unscanned: None, used: None, hover: None, found: None, basket: &Basket::default(), flash: &Default::default(), procs: None }),
-            message: "", loading: false, kind: Default::default(), metric: Default::default(), held: None, status: "", toast: &[], toast_ok: false, selection: "", banner: None, filter: FilterBar::default(), basket: None, map: None, modal: None,
-        };
+        let scene = Scene { view: Some(view(&tree, &model)), ..blank(layout.clone(), Theme::new(true)) };
         render_scene(&gfx, &scene, "plumb-pill")
     };
     let (plain, linked) = (shot(plumb_core::NodeFlags::empty()), shot(plumb_core::NodeFlags::REPARSE));
