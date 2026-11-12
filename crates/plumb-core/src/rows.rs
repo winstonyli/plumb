@@ -187,12 +187,12 @@ impl RowModel {
         rc
     }
 
-    /// The sort: by the key in the chosen direction, ties by id so the order is total.
+    /// The sort: by the key in the chosen direction (the score ties by size), then by id so the order is total.
     fn order(&self, tree: &Tree, a: NodeId, b: NodeId) -> Ordering {
         let o = match self.key {
             SortKey::Size => tree.subtree_size[a].cmp(&tree.subtree_size[b]),
             SortKey::Items => tree.subtree_files[a].cmp(&tree.subtree_files[b]),
-            SortKey::Score => tree.subtree_score[a].cmp(&tree.subtree_score[b]),
+            SortKey::Score => tree.subtree_score[a].cmp(&tree.subtree_score[b]).then(tree.subtree_size[a].cmp(&tree.subtree_size[b])),
             SortKey::Modified => tree.mtime[a].cmp(&tree.mtime[b]),
             SortKey::Name => cmp_names(tree.name(a), tree.name(b)),
             SortKey::Aux(i) => {
@@ -589,12 +589,12 @@ mod tests {
     }
 
     #[test]
-    fn score_sort_orders_by_the_rolled_up_score_and_ties_by_id() {
+    fn score_sort_orders_by_the_rolled_up_score_and_ties_by_size_then_id() {
         let (t, [r, ..]) = crate::tree::tests::scored();
         let mut m = RowModel::new(&t);
         m.set_sort(&t, SortKey::Score, true);
         m.expand(&t, r);
-        assert_eq!(ids(&m), vec![0, 1, 4, 5], "d (1478) first, then e and c (0) by id");
+        assert_eq!(ids(&m), vec![0, 1, 5, 4], "d (1478) first, then the two with no score, the bigger first");
     }
 
     #[test]

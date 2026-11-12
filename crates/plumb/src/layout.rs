@@ -46,8 +46,15 @@ pub const METRIC_W: f32 = 72.0;
 pub const HELD_ROWS: usize = 6;
 pub const HELD_H: f32 = (HELD_ROWS as f32 + 1.0) * ROW_H;
 pub const INDENT: f32 = 20.0;
-/// Starting widths of the Size, % of parent, Items, Modified and Score columns; Name takes the rest.
-pub const COL_W: [f32; 5] = [100.0, 130.0, 90.0, 96.0, 72.0];
+/// The columns after Name, left to right (the score first: it is what the view is for). The Third and Fourth columns are Items and Modified
+/// for a disk, CPU and I/O for processes.
+pub const COL_SCORE: usize = 1;
+pub const COL_SIZE: usize = 2;
+pub const COL_PCT: usize = 3;
+pub const COL_THIRD: usize = 4;
+pub const COL_FOURTH: usize = 5;
+/// Starting widths of the Score, Size, % of parent, Third and Fourth columns; Name takes the rest.
+pub const COL_W: [f32; 5] = [72.0, 100.0, 130.0, 90.0, 96.0];
 /// Narrowest a dragged column may get, and narrowest the Name column may be squeezed.
 pub const MIN_COL_W: f32 = 64.0;
 pub const MIN_NAME_W: f32 = 120.0;
@@ -65,7 +72,7 @@ fn icon_button(right: f32, band: Rect) -> Rect {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
     Chip(usize),
-    /// Column header: 0 Name, 1 Size, 2 % of parent, 3 Items, 4 Modified.
+    /// Column header: 0 Name, then `COL_SCORE`..=`COL_FOURTH`.
     Header(usize),
     /// The left edge of column 1..=4 in the header, where a drag resizes that column.
     Divider(usize),
@@ -111,7 +118,7 @@ pub struct Layout {
     pub held: bool,
     /// Lines in the toast over the bottom right of the rows; 0 for none.
     pub toast: usize,
-    /// Widths of the Size, % of parent, Items, Modified and Score columns.
+    /// Widths of the Score, Size, % of parent, Third and Fourth columns.
     pub col_w: [f32; 5],
     /// The width of each drive chip, left to right: their sum decides where the filter box starts.
     pub chips: Vec<f32>,

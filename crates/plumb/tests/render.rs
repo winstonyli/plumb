@@ -531,7 +531,7 @@ fn a_rows_last_write_date_is_drawn_in_the_modified_column_and_an_unknown_one_lea
         render_on(&painter, &gfx, &scene, if mtime.is_some() { "plumb-modified" } else { "plumb-unmodified" })
     };
     let (known, unknown) = (shot(Some(154_000)), shot(None));
-    let (mx, mw) = layout.column(4);
+    let (mx, mw) = layout.column(plumb::layout::COL_FOURTH);
     let r = layout.row(1);
     let differs = |x0: f32, w: f32| (x0 as u32..(x0 + w) as u32).any(|x| (r.y as u32..(r.y + r.h) as u32).any(|y| rgb_at(&known, x, y) != rgb_at(&unknown, x, y)));
     assert!(differs(mx, mw), "the date is drawn in the Modified column");
@@ -564,11 +564,11 @@ fn the_stale_column_is_drawn_for_an_old_file() {
         render_on(&painter, &gfx, &scene, if age_days > 365 { "plumb-stale" } else { "plumb-fresh" })
     };
     let (old, new) = (shot(3 * 365), shot(1));
-    let (kx, kw) = layout.column(5);
+    let (kx, kw) = layout.column(plumb::layout::COL_SCORE);
     let r = layout.row(1);
     let differs = |x0: f32, w: f32| (x0 as u32..(x0 + w) as u32).any(|x| (r.y as u32..(r.y + r.h) as u32).any(|y| rgb_at(&old, x, y) != rgb_at(&new, x, y)));
     assert!(differs(kx, kw), "the stale bytes are drawn in the Score column");
-    assert!(!differs(layout.column(1).0, layout.column(1).1), "the Size column does not change with age");
+    assert!(!differs(layout.column(plumb::layout::COL_SIZE).0, layout.column(plumb::layout::COL_SIZE).1), "the Size column does not change with age");
 }
 
 #[test]

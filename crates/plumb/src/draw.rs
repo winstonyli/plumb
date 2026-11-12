@@ -5,7 +5,7 @@ use crate::icons;
 use plumb_core::basket::Basket;
 use plumb_core::age::{shade, FADE_MAX};
 use plumb_core::filter::Matcher;
-use crate::layout::{Layout, Rect, BASKET_W, CAPTION_RESERVE, FILTER_PAD, ICON_BTN, INDENT, METRIC_W, PICKER_H, ROW_H, TOAST_LINE_H, TOAST_PAD};
+use crate::layout::{COL_FOURTH, COL_PCT, COL_SCORE, COL_SIZE, COL_THIRD, Layout, Rect, BASKET_W, CAPTION_RESERVE, FILTER_PAD, ICON_BTN, INDENT, METRIC_W, PICKER_H, ROW_H, TOAST_LINE_H, TOAST_PAD};
 use plumb_core::treemap::{Class, Kind, Tile};
 use plumb_core::rows::RowModel;
 use std::cell::{Cell, RefCell};
@@ -696,9 +696,9 @@ impl Pen<'_> {
             }
             let arrow = if s.sort.0 == c { if s.sort.1 { " \u{25BE}" } else { " \u{25B4}" } } else { "" };
             // During a scan the sums are what has been found so far: "at least", said once here.
-            let atleast = if partial && (c == 1 || (matches!(c, 3 | 5) && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
+            let atleast = if partial && (c == COL_SIZE || (matches!(c, COL_SCORE | COL_THIRD) && s.kind == crate::app::ViewKind::Disk)) { "\u{2265} " } else { "" };
             let color = if arrow.is_empty() { t.dim } else { t.fg };
-            self.text_as_fmt(Role::Title, format_args!("{atleast}{name}{arrow}"), Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, matches!(c, 1 | 3 | 4 | 5));
+            self.text_as_fmt(Role::Title, format_args!("{atleast}{name}{arrow}"), Rect { x: x + 8.0, y: h.y, w: w - 16.0, h: h.h }, color, c != 0 && c != COL_PCT);
             if c > 0 {
                 // The grip for resizing: a hairline at the column's left edge.
                 self.fill(Rect { x, y: h.y + 5.0, w: 1.0, h: h.h - 10.0 }, D2D1_COLOR_F { a: 0.5, ..t.dim });
@@ -1060,7 +1060,7 @@ impl Pen<'_> {
     fn skeleton(&self, s: &Scene) {
         let (t, l) = (&s.theme, &s.layout);
         let n = l.rows_visible();
-        let ((nx, nw), (sx, sw), (ix, iw)) = (l.column(0), l.column(1), l.column(3));
+        let ((nx, nw), (sx, sw), (ix, iw)) = (l.column(0), l.column(COL_SIZE), l.column(COL_THIRD));
         for i in 0..n {
             let r = l.row(i);
             let c = D2D1_COLOR_F { a: 0.22 * (1.0 - i as f32 / n as f32), ..t.dim };
@@ -1157,9 +1157,9 @@ impl Pen<'_> {
                 }
             }
             self.text(&name, cell, fg, false);
-            let (sx, sw) = l.column(1);
+            let (sx, sw) = l.column(COL_SIZE);
             self.text_fmt(format_args!("{}", s.kind.size_text(s.metric, v.tree.subtree_size[id])), Rect { x: sx, y: r.y, w: sw - 8.0, h: r.h }, fg, true);
-            let (px, pw) = l.column(2);
+            let (px, pw) = l.column(COL_PCT);
             let (bx, bw) = (px + 4.0, pw - 8.0);
             self.fill(Rect { x: bx, y: r.y + 3.0, w: bw * frac, h: r.h - 6.0 }, t.bar);
             // While scanning, the share could still grow: at most to where all the unscanned bytes land in this row
@@ -1173,15 +1173,15 @@ impl Pen<'_> {
             }
             self.text_fmt(format_args!("{}", fmt::tenths((frac * 1000.0).round() as u64)), Rect { x: px + 8.0, y: r.y, w: pw - 16.0, h: r.h }, fg, false);
             let (third, fourth) = s.kind.last_two(v.tree, id);
-            let (ix, iw) = l.column(3);
+            let (ix, iw) = l.column(COL_THIRD);
             self.text_fmt(format_args!("{third}"), Rect { x: ix, y: r.y, w: iw - 8.0, h: r.h }, side, true);
             if let Some(text) = fourth {
-                let (mx, mw) = l.column(4);
+                let (mx, mw) = l.column(COL_FOURTH);
                 self.text_fmt(format_args!("{text}"), Rect { x: mx, y: r.y, w: mw - 8.0, h: r.h }, side, true);
             }
             if v.tree.subtree_score[id] != 0 {
-                let (kx, kw) = l.column(5); // a zero score is left blank: most rows have none, and the numbers should stand out
-                self.text_fmt(format_args!("{}", s.kind.score_text(v.tree, id)), Rect { x: kx, y: r.y, w: kw - 8.0, h: r.h }, side, true);
+                let (kx, kw) = l.column(COL_SCORE); // a zero score is left blank: most rows have none, and the numbers should stand out
+                self.text_fmt(format_args!("{}", s.kind.score_text(v.tree, id)), Rect { x: kx, y: r.y, w: kw - 8.0, h: r.h }, fg, true);
             }
         }
         if let Some(th) = l.thumb(v.model.rows().len(), v.scroll) {

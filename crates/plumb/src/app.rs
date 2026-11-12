@@ -50,8 +50,8 @@ impl ViewKind {
     /// `metric` is what the Processes view's first number column holds; a disk ignores it.
     pub fn titles(self, metric: Metric) -> [&'static str; 6] {
         match self {
-            ViewKind::Disk => ["Name", "Size", "% of parent", "Items", "Modified", "Stale"],
-            ViewKind::Processes => ["Name", metric_label(metric), "% of parent", "CPU", "I/O", "Load"],
+            ViewKind::Disk => ["Name", "Stale", "Size", "% of parent", "Items", "Modified"],
+            ViewKind::Processes => ["Name", "Load", metric_label(metric), "% of parent", "CPU", "I/O"],
         }
     }
 
@@ -84,8 +84,8 @@ impl ViewKind {
     /// The sort each header column stands for; "% of parent" orders by size.
     pub fn sort_key(self, col: usize) -> SortKey {
         match self {
-            ViewKind::Disk => [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified, SortKey::Score][col],
-            ViewKind::Processes => [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Aux(0), SortKey::Aux(1), SortKey::Score][col],
+            ViewKind::Disk => [SortKey::Name, SortKey::Score, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified][col],
+            ViewKind::Processes => [SortKey::Name, SortKey::Score, SortKey::Size, SortKey::Size, SortKey::Aux(0), SortKey::Aux(1)][col],
         }
     }
 
@@ -400,7 +400,7 @@ pub struct App {
     /// The system's accent colour (`0xRRGGBB`), set by the window; `None` keeps plumb's blue.
     pub accent: Option<u32>,
     pub adapter: String,
-    /// Header column last clicked (0 Name, 1 Size, 2 % of parent, 3 Items, 4 Modified) and direction.
+    /// Header column last clicked (see `layout::COL_SCORE` and the rest) and direction.
     sort: (usize, bool),
     /// While dragging the scrollbar thumb: distance from the thumb's top to the grab point.
     grab: Option<f32>,
@@ -453,7 +453,7 @@ impl App {
         let layout = Layout { chips: vec![CHIP_W; views.len()], ..layout };
         Self {
             layout, views, adapter, active: None, marks: Vec::new(), hover: None, hot: None, pressed: false, thumb_hover: false, modals: VecDeque::new(), slot: Slot::default(),
-            can_elevate: false, accent: None, sort: (1, true), grab: None, col_drag: None,
+            can_elevate: false, accent: None, sort: (crate::layout::COL_SCORE, true), grab: None, col_drag: None,
             map_root: None, map_seen: None, map_tiles: Vec::new(), map_key: None, map_dirty: true, map_gen: 0, map_now: 0, map_classes: Vec::new(), map_hover: None, map_drag: None, row_drag: false,
             held: Held::default(), basket_rev: 0, basket_view: BasketView::default(), deleting: false, toast: Toast::default(), toast_hot: false, stash: HashMap::new(), skipped: Vec::new(),
             system_root: std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
@@ -759,9 +759,9 @@ impl App {
             let _ = write!(out, "\n{}", self.adapter);
             return Some(TipKey::Area(bar));
         }
-        if let Hit::Header(5) = self.layout.hit(x, y, self.views.len()) {
+        if let Hit::Header(crate::layout::COL_SCORE) = self.layout.hit(x, y, self.views.len()) {
             out.push_str(self.kind().score_help());
-            return Some(TipKey::Area(self.layout.header_cell(5)));
+            return Some(TipKey::Area(self.layout.header_cell(crate::layout::COL_SCORE)));
         }
         if let Hit::Row(i) = self.layout.hit(x, y, self.views.len()) {
             let (nx, nw) = self.layout.column(0);
@@ -1538,9 +1538,9 @@ mod tests {
 
     #[test]
     fn a_disk_view_keeps_its_titles_sorts_and_last_two_columns() {
-        assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Size", "% of parent", "Items", "Modified", "Stale"]);
+        assert_eq!(ViewKind::Disk.titles(Metric::Cpu), ["Name", "Stale", "Size", "% of parent", "Items", "Modified"]);
         let keys: Vec<_> = (0..6).map(|c| ViewKind::Disk.sort_key(c)).collect();
-        assert_eq!(keys, [SortKey::Name, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified, SortKey::Score]);
+        assert_eq!(keys, [SortKey::Name, SortKey::Score, SortKey::Size, SortKey::Size, SortKey::Items, SortKey::Modified]);
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let f = b.push_str(r, "f", 5, plumb_core::NodeFlags::empty());
@@ -1554,13 +1554,13 @@ mod tests {
     fn only_the_score_header_has_a_tooltip() {
         let a = scanned();
         let (l, y) = (&a.layout, a.layout.header().y + 4.0);
-        let (key, text) = target_str(&a, l.column(5).0 + 20.0, y).expect("a tip over the Score header");
-        assert_eq!(key, TipKey::Area(l.header_cell(5)));
+        let (key, text) = target_str(&a, l.column(crate::layout::COL_SCORE).0 + 20.0, y).expect("a tip over the Score header");
+        assert_eq!(key, TipKey::Area(l.header_cell(crate::layout::COL_SCORE)));
         assert_eq!(text, ViewKind::Disk.score_help());
-        assert!(target_str(&a, l.column(2).0 + 20.0, y).is_none());
+        assert!(target_str(&a, l.column(crate::layout::COL_SIZE).0 + 20.0, y).is_none());
         let (p, _) = process_app();
         let mut s = String::new();
-        p.tip_target(p.layout.column(5).0 + 20.0, p.layout.header().y + 4.0, &mut s);
+        p.tip_target(p.layout.column(crate::layout::COL_SCORE).0 + 20.0, p.layout.header().y + 4.0, &mut s);
         assert_eq!(s, ViewKind::Processes.score_help());
     }
 
@@ -1624,8 +1624,8 @@ mod tests {
         assert_eq!(click(&mut a), Effect::Metric(Metric::Io));
         a.slot.proc_metric = Metric::Io;
         assert_eq!(click(&mut a), Effect::Metric(Metric::Memory));
-        assert_eq!(ViewKind::Processes.titles(Metric::Io)[1], "I/O");
-        assert_eq!(ViewKind::Processes.titles(Metric::Private)[1], "Private");
+        assert_eq!(ViewKind::Processes.titles(Metric::Io)[2], "I/O");
+        assert_eq!(ViewKind::Processes.titles(Metric::Private)[2], "Private");
         assert_eq!(ViewKind::Processes.size_text(Metric::Private, 2048), fmt::size(2048));
         assert_eq!(ViewKind::Processes.size_text(Metric::Cpu, 123), "12.3%");
         assert_eq!(ViewKind::Processes.size_text(Metric::Io, 2048), fmt::rate(2048));
@@ -2003,8 +2003,8 @@ mod tests {
 
     #[test]
     fn a_process_view_sorts_cpu_and_io_by_aux_and_shows_them_as_rates() {
-        assert_eq!(ViewKind::Processes.titles(Metric::Memory)[3..], ["CPU", "I/O", "Load"]);
-        assert_eq!((ViewKind::Processes.sort_key(3), ViewKind::Processes.sort_key(4), ViewKind::Processes.sort_key(5)), (SortKey::Aux(0), SortKey::Aux(1), SortKey::Score));
+        assert_eq!(ViewKind::Processes.titles(Metric::Memory)[4..], ["CPU", "I/O"]);
+        assert_eq!((ViewKind::Processes.sort_key(1), ViewKind::Processes.sort_key(4), ViewKind::Processes.sort_key(5)), (SortKey::Score, SortKey::Aux(0), SortKey::Aux(1)));
         let mut b = plumb_core::TreeBuilder::new();
         let r = b.push_str(NodeId::NONE, "r", 0, plumb_core::NodeFlags::DIR);
         let mut t = b.finish().unwrap();
