@@ -74,7 +74,7 @@ pub enum Hit {
     Chip(usize),
     /// Column header: 0 Name, then `COL_SCORE`..=`COL_FOURTH`.
     Header(usize),
-    /// The left edge of column 1..=4 in the header, where a drag resizes that column.
+    /// The left edge of column 1..=5 in the header, where a drag resizes that column.
     Divider(usize),
     /// Index into the visible window (0 is the first drawn row).
     Row(usize),

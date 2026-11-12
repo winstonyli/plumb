@@ -1,5 +1,6 @@
 ---
 status: done
+# Note 2026-11-11: the shipped layout differs from this plan (score is column 1, tenths of a percent, relative dead band); the spec is current.
 ---
 
 # Score column Implementation Plan

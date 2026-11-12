@@ -280,7 +280,7 @@ mod tests {
         }
         assert!(changes <= 10, "the shown load changed {changes} times");
         assert!(raw_changes > 60, "the raw value jitters ({raw_changes} changes)");
-        assert!(last >= 1, "a busy process shows something");
+        assert!((30..=45).contains(&last), "15% of one of 4 cores is about 3.75% of the machine: {last}");
     }
 
     #[test]
@@ -324,6 +324,19 @@ mod tests {
         p.apply(&all, 0);
         let tenths = score(&p, 10);
         assert!((170..=180).contains(&tenths), "the family's load in tenths of a percent: {tenths}");
+    }
+
+    #[test]
+    fn many_tiny_children_still_show_in_the_family() {
+        // 40 services at 0.3% of RAM each: below half a point, but together 12%.
+        let mut p = ProcTree::with(4, 100_000);
+        let mut all = vec![s(10, 1, 1, "services.exe", 0)];
+        for i in 0..40 {
+            all.push(s(100 + i, 10, 2 + u64::from(i), "svc.exe", 600)); // private 300 of 100000
+        }
+        p.apply(&all, 0);
+        let tenths = score(&p, 10);
+        assert!((110..=130).contains(&tenths), "the family load in tenths of a percent: {tenths}");
     }
 
     #[test]

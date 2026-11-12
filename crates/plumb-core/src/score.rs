@@ -46,13 +46,14 @@ pub fn io_share(io_rate: u64) -> f64 {
     io_rate as f64 * 100.0 / IO_FULL as f64
 }
 
-/// The tenths of a percent to show for the percent `x`: it moves only when `x` is [`BAND`] of the shown value (at least half a point) away, and an idle
+/// The tenths of a percent to show for the percent `x`: it moves only when `x` is [`BAND`] of the shown value (at least half a point) away, except
+/// that it leaves 0 at once (so tiny children still add up), and an idle
 /// `x` (under 0.05%) shows 0. Tenths, so many small children still add up to a visible family.
 pub fn settle(shown: u64, x: f64) -> u64 {
     let t = x * 10.0;
     if t < 0.5 {
         0
-    } else if (t - shown as f64).abs() >= (shown as f64 * BAND).max(5.0) {
+    } else if shown == 0 || (t - shown as f64).abs() >= (shown as f64 * BAND).max(5.0) {
         t.round() as u64
     } else {
         shown
@@ -130,7 +131,8 @@ mod tests {
         assert_eq!(settle(10, 1.5), 15);
         assert_eq!(settle(1, 0.049), 0);
         assert_eq!(settle(1, 0.05), 1);
-        assert_eq!(settle(0, 0.29), 0);
+        assert_eq!(settle(0, 0.29), 3, "leaving zero has no band: a steady 0.3% shows");
+        assert_eq!(settle(0, 0.05), 1);
         assert_eq!(settle(0, 0.9), 9);
     }
 
