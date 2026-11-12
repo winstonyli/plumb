@@ -9,6 +9,7 @@ pub mod node;
 pub mod procs;
 pub mod rect;
 pub mod rows;
+pub mod score;
 #[doc(hidden)]
 pub mod synth;
 pub mod treemap;
