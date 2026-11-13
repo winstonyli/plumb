@@ -131,11 +131,44 @@ pub fn selftest() -> Result<String> {
             format!("filter \"bin\" should show 3 rows (root, sub, f.bin), got {filtered:?}"),
         ));
     }
+    // The filter box's mouse path through the real wndproc: press at the text's start, drag past its end, release;
+    // then a double-click on the word. Synthetic messages, so no focus is taken.
+    let px = |w: &Win, x: f32, y: f32| LPARAM(((x * w.dpi / 96.0) as i32 as isize & 0xffff) | ((((y + w.inset) * w.dpi / 96.0) as i32 as isize & 0xffff) << 16));
+    let (down, far, mid, after) = with(|w| {
+        w.resize();
+        w.app.fit_chips(&|s| w.painter.text_width(&w.gfx, Role::Title, s)); // the test pushed a view, so refit: the box sits where the real window puts it
+        let b = w.app.filter_box();
+        let y = b.y + b.h / 2.0;
+        let o = w.app.filter_origin();
+        (px(w, o + 1.0, y), px(w, b.x + b.w - 50.0, y), px(w, o + 8.0, y), px(w, o + 36.0, y))
+    })
+    .expect("state present");
+    let step = |msg: u32, wp: usize, lp: LPARAM| unsafe { SendMessageW(hwnd, msg, Some(WPARAM(wp)), Some(lp)) };
+    let (mut dragging, mut selected) = (false, None);
+    step(WM_LBUTTONDOWN, 1, down);
+    step(WM_MOUSEMOVE, 1, far);
+    with(|w| (dragging, selected) = (w.app.filter_dragging(), w.app.filter_ui().selection()));
+    step(WM_LBUTTONUP, 0, far);
+    let released = with(|w| !w.app.filter_dragging()).unwrap_or(false);
+    if !(dragging && selected == Some((0, 3)) && released) {
+        return Err(windows::core::Error::new(
+            windows::Win32::Foundation::E_FAIL,
+            format!("filter-box drag: dragging {dragging}, selection {selected:?} (want (0, 3)), released {released}"),
+        ));
+    }
+    step(WM_LBUTTONDOWN, 1, after); // past the text, before the buttons: the caret goes to the end
+    step(WM_LBUTTONUP, 0, after);
+    step(WM_LBUTTONDBLCLK, 1, mid);
+    step(WM_LBUTTONUP, 0, mid);
+    let word = with(|w| w.app.filter_ui().selection()).flatten();
+    if word != Some((0, 3)) {
+        return Err(windows::core::Error::new(windows::Win32::Foundation::E_FAIL, format!("filter-box double-click should select the word (0, 3), got {word:?}")));
+    }
     let out = with(|w| {
         w.resize();
         let sub = w.app.slot.tree.as_ref().map(|t| t.subtree_size[NodeId(0)]);
         w.try_render().map(|_| {
-            format!("{}; {}; root {:?} bytes; filter ok: {} rows; shift-extend ok",w.gfx.adapter, w.app.slot.summary, sub, filtered.unwrap_or(0))
+            format!("{}; {}; root {:?} bytes; filter ok: {} rows; shift-extend ok; filter mouse drag and double-click ok",w.gfx.adapter, w.app.slot.summary, sub, filtered.unwrap_or(0))
         })
     });
     let _ = std::fs::remove_dir_all(&dir);
