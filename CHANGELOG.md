@@ -2,6 +2,27 @@
 
 All notable changes to plumb. Format follows [Common Changelog](https://common-changelog.org/) from 0.10.0 on (older entries are in Keep a Changelog form); all crates share one version and are bumped together at each tag.
 
+## 0.14.0 - 2026-11-12
+
+*Upgrade note: the saved sort and column widths are now kept per view kind (Disk and Processes), so the first start shows the default sort and widths once; the old saved values are ignored.*
+
+### Changed
+
+- Keep the sort column and column widths separately for the Disk and Processes views, keyed by column id ([b3b4d38](https://github.com/winstonyli/plumb/commit/b3b4d38315b8c04a785a3e706be29003f008683c))
+
+### Fixed
+
+- Store a dragged column's width as it moves, so a click on a divider in a small window no longer keeps the squeezed width and a view change during a drag no longer reverts it ([916655d](https://github.com/winstonyli/plumb/commit/916655d07777e826944fdea458d116432573441b))
+- Count only the rows that have a path in "Copy paths (N)" ([5106559](https://github.com/winstonyli/plumb/commit/5106559bc7f83f00e152814c2f60188d31c820b4))
+
+### Internal
+
+- Describe each view kind with one const table instead of seven methods, and derive the layout flags from the app in one place ([c367d00](https://github.com/winstonyli/plumb/commit/c367d00a5c7ad8dfc71d762de01fe0232702bafb), [3aed5d9](https://github.com/winstonyli/plumb/commit/3aed5d92ed34334c01a49c7e83e3c897d3e26976))
+- Hold what the left button is doing as one `Pointer` value instead of six fields, and route the filter box's keyboard through one `App::typing` split ([4cbd757](https://github.com/winstonyli/plumb/commit/4cbd757f80ad634847d5628b2b2210d493405a51), [81580f5](https://github.com/winstonyli/plumb/commit/81580f541ee5775baabdbb92894538d638eb5c8f))
+- Split the window procedure into timer, posted-message, mouse, key, input and frame modules, and move the app tests to their own file ([8416239](https://github.com/winstonyli/plumb/commit/8416239078b5570c1927293259e6cd5ff4115c7b), [c0afc3b](https://github.com/winstonyli/plumb/commit/c0afc3bd56f154ed8026d56400c78804861ec46e), [1cc7a0c](https://github.com/winstonyli/plumb/commit/1cc7a0c20ca08836f4d55fdb201d0e3ed67d8b97), [5d4d29c](https://github.com/winstonyli/plumb/commit/5d4d29ced150013656614a2272839ee2d5e156aa))
+- Use `windows::core::Owned` for handles, define the NTFS record constants once in `plumb-core`, and share the render test helpers ([df7f18e](https://github.com/winstonyli/plumb/commit/df7f18e9dea4ef4653e2092447b6acd802308472), [3c6ed0c](https://github.com/winstonyli/plumb/commit/3c6ed0cf43040d60a52158f0d38e14cb0190f114), [6a9c737](https://github.com/winstonyli/plumb/commit/6a9c737d79bbcaaf4974baf87c0ceb7504c1aa6e))
+- Cover the filter box's drag and double-click in the hidden-window selftest and pin the map pane's 785 DIP threshold ([178a4b5](https://github.com/winstonyli/plumb/commit/178a4b52612d2b1671bbe9d2562d3be0129ebea6), [37152fc](https://github.com/winstonyli/plumb/commit/37152fcb34eea08ab851a463a0be9bf4d04189bf))
+
 ## 0.13.0 - 2026-11-11
 
 *Upgrade note: the saved sort column and column widths are read in the new column order, so the first start shows the old sort and widths on different columns; click a header once to reset.*
