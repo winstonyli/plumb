@@ -57,7 +57,7 @@ pub(super) fn context_menu(hwnd: HWND, menu: RowMenu, at: (i32, i32)) {
             let _ = AppendMenuW(menu, MF_STRING, CMD_PROPS, w!("Properties"));
         }
         if copy_set {
-            let text = wide(&format!("Copy paths ({count})"));
+            let text = wide(&format!("Copy paths ({})", paths.len())); // the rows with a path, not every picked row
             let _ = AppendMenuW(menu, MF_STRING, CMD_COPY, PCWSTR(text.as_ptr()));
         }
         if who {
