@@ -946,83 +946,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             };
             LRESULT(0)
         }
-        WM_LBUTTONDOWN => {
-            unsafe { SetCapture(hwnd) };
-            let mods = mods_now();
-            dispatch(hwnd, lp, |x, y| Input::Click(x, y, mods));
-            with(|w| w.filter_press(lp, false));
-            LRESULT(0)
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONUP | WM_RBUTTONUP | WM_MOUSEMOVE | WM_SETCURSOR | WM_MOUSELEAVE | WM_MOUSEWHEEL => {
+            mouse::on_mouse(hwnd, msg, wp, lp).unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
         }
-        WM_LBUTTONDBLCLK => {
-            unsafe { SetCapture(hwnd) };
-            let mods = mods_now();
-            if mods.shift || mods.ctrl {
-                // Two quick presses with Shift or Ctrl held are two selections; they must not open the folder.
-                dispatch(hwnd, lp, |x, y| Input::Click(x, y, mods));
-            } else {
-                dispatch(hwnd, lp, Input::DoubleClick);
-            }
-            with(|w| w.filter_press(lp, true));
-            LRESULT(0)
-        }
-        WM_LBUTTONUP => {
-            let _ = unsafe { ReleaseCapture() };
-            dispatch(hwnd, lp, |_, _| Input::Release);
-            LRESULT(0)
-        }
-        WM_RBUTTONUP => {
-            dispatch(hwnd, lp, Input::RightClick);
-            LRESULT(0)
-        }
-        WM_MOUSEMOVE => {
-            if wp.0 & 1 != 0 {
-                with(|w| {
-                    if w.app.filter_dragging() {
-                        let at = w.filter_byte(w.dip(lp).0);
-                        w.app.handle(Input::Edit(Edit::Place { at, extend: true }));
-                        w.invalidate();
-                    }
-                });
-                dispatch(hwnd, lp, Input::Drag);
-            } else {
-                let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
-                let _ = unsafe { TrackMouseEvent(&mut t) }; // asks for WM_MOUSELEAVE
-                with(|w| {
-                    let (x, y) = w.dip(lp);
-                    let before = (w.app.hover, w.app.hot, w.app.map_hover, w.app.thumb_hover);
-                    w.app.handle(Input::Hover(x, y));
-                    if (w.app.hover, w.app.hot, w.app.map_hover, w.app.thumb_hover) != before {
-                        w.invalidate();
-                    }
-                    // Moving onto another target (or off one) hides the old tip so the next rest asks again; the same
-                    // target whose text changed (a scan adds to its totals) is refreshed in place, not hidden.
-                    let key = w.app.tip_target(x, y, &mut w.tip_scratch);
-                    if key != w.tip {
-                        w.tip = key;
-                        unsafe { SendMessageW(w.tooltip, TTM_POP, None, None) };
-                    } else if key.is_some() && w.tip_scratch != w.tip_last {
-                        w.refresh_tip();
-                    }
-                    let msg = MSG { hwnd, message: WM_MOUSEMOVE, wParam: wp, lParam: lp, ..Default::default() };
-                    unsafe { SendMessageW(w.tooltip, TTM_RELAYEVENT, None, Some(LPARAM(&msg as *const _ as isize))) };
-                });
-            }
-            LRESULT(0)
-        }
-        WM_SETCURSOR if (lp.0 & 0xffff) as u32 == HTCLIENT => {
-            let mut p = POINT::default();
-            let over = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(hwnd, &mut p).as_bool() }
-                && with(|w| {
-                    let (x, y) = w.dip(LPARAM((p.x as isize & 0xffff) | ((p.y as isize & 0xffff) << 16)));
-                    w.app.over_divider(x, y)
-                })
-                .unwrap_or(false);
-            if over {
-                unsafe { SetCursor(LoadCursorW(None, IDC_SIZEWE).ok()) };
-                LRESULT(1)
-            } else {
-                unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
-            }
+        WM_IME_STARTCOMPOSITION | WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION | WM_CHAR | WM_KEYDOWN | WM_SYSKEYDOWN => {
+            keys::on_key(hwnd, msg, wp, lp).unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
         }
         // The tooltip is the only control that reports custom draw here. It frames itself in the system's frame colour;
         // paint the theme's border over that 1 px frame once the control is done (no `with`: a selftest prints it from inside one).
@@ -1044,112 +972,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_NOTIFY if unsafe { (*(lp.0 as *const NMHDR)).code } == TTN_GETDISPINFOW => {
             let text = with(|w| w.tip_text());            if let Some(text) = text {
                 unsafe { (*(lp.0 as *mut NMTTDISPINFOW)).lpszText = PWSTR(text as *mut u16) };
-            }
-            LRESULT(0)
-        }
-        WM_MOUSELEAVE => {
-            with(|w| {
-                if w.app.hover.take().is_some() | w.app.hot.take().is_some() | w.app.map_hover.take().is_some() | std::mem::take(&mut w.app.thumb_hover) {
-                    w.invalidate();
-                }
-            });
-            LRESULT(0)
-        }
-        WM_MOUSEWHEEL => {
-            let delta = (wp.0 >> 16) as i16 as i32;
-            let mut lines = 3u32;
-            let _ = unsafe { SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, Some(&mut lines as *mut u32 as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)) };
-            with(|w| {
-                w.last_input = Instant::now();
-                // The setting is lines per notch, or (u32::MAX, WHEEL_PAGESCROLL) a whole page.
-                let per_notch = if lines == u32::MAX { w.app.layout.rows_visible() as i32 } else { lines as i32 };
-                let rows = wheel_rows(&mut w.wheel_rem, delta, per_notch);
-                // The wheel message carries screen coordinates.
-                let mut p = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
-                let _ = unsafe { ScreenToClient(w.hwnd, &mut p) };
-                let k = 96.0 / w.dpi;
-                w.app.handle(Input::Wheel(rows, p.x as f32 * k, p.y as f32 * k - w.inset));
-                w.invalidate();
-            });
-            LRESULT(0)
-        }
-        WM_IME_STARTCOMPOSITION if with(|w| w.app.filter_ui().focus).unwrap_or(false) => {
-            // A selection is replaced by what is composed, as with typing.
-            if with(|w| w.app.filter_ui().selection().is_some()).unwrap_or(false) {
-                send(hwnd, Input::Edit(Edit::Backspace));
-            }
-            with(|w| {
-                w.place_ime();
-                w.invalidate();
-            });
-            LRESULT(0)
-        }
-        WM_IME_COMPOSITION if with(|w| w.app.filter_ui().focus).unwrap_or(false) => {
-            let flags = IME_COMPOSITION_STRING(lp.0 as u32);
-            let (done, composing) = (ime_string(hwnd, GCS_RESULTSTR, flags), ime_string(hwnd, GCS_COMPSTR, flags));
-            with(|w| w.app.set_preedit(composing.clone().unwrap_or_default()));
-            if let Some(s) = done.filter(|s| !s.is_empty()) {
-                send(hwnd, Input::Edit(Edit::Paste(s)));
-            }
-            with(|w| {
-                w.place_ime();
-                w.invalidate();
-            });
-            LRESULT(0)
-        }
-        WM_IME_ENDCOMPOSITION if with(|w| w.app.filter_ui().focus).unwrap_or(false) => {
-            with(|w| {
-                w.app.set_preedit(String::new());
-                w.invalidate();
-            });
-            LRESULT(0)
-        }
-        WM_CHAR => {
-            if let Some(Some(c)) = with(|w| push_utf16(&mut w.high_surrogate, wp.0 as u16)) {
-                send(hwnd, Input::Edit(Edit::Char(c)));
-            }
-            LRESULT(0)
-        }
-        WM_KEYDOWN => {
-            let Mods { shift, ctrl } = mods_now();
-            let in_box = with(|w| w.app.filter_ui().focus).unwrap_or(false);
-            let picked = with(|w| w.app.filter_ui().selected_text().map(str::to_owned)).flatten();
-            let motion = match key_of(wp.0 as u16) {
-                Some(Key::Left) => Some(Motion::Left),
-                Some(Key::Right) => Some(Motion::Right),
-                Some(Key::Home) => Some(Motion::Home),
-                Some(Key::End) => Some(Motion::End),
-                _ => None,
-            };
-            if ctrl && (wp.0 == 'C' as usize || wp.0 == 'X' as usize) && in_box && picked.is_some() {
-                if let Err(why) = copy_to_clipboard(hwnd, &picked.unwrap_or_default()) {
-                    menu::say(crate::outcome::Outcome::problem(format!("could not copy: {why}")));
-                }
-                if wp.0 == 'X' as usize {
-                    send(hwnd, Input::Edit(Edit::Backspace));
-                }
-            } else if ctrl && wp.0 == 'C' as usize {
-                if let Some(Some(text)) = with(|w| w.app.copy_text()) {
-                    copy_rows(hwnd, &text);
-                }
-            } else if let (true, true, Some(to)) = (shift, in_box, motion) {
-                send(hwnd, Input::Edit(Edit::Move { to, extend: true }));
-            } else if lp.0 & (1 << 30) != 0 && !in_box && once_per_press(wp.0 as u16, ctrl) {
-                // A held Del, Enter, F5, Backspace or Ctrl+A acts once, not on every repeat.
-            } else if wp.0 == VK_APPS.0 as usize {
-                if lp.0 & (1 << 30) == 0 {
-                    key_menu(hwnd);
-                }
-            } else if let Some(input) = key_input(wp.0 as u16, Mods { shift, ctrl }, hwnd) {
-                send(hwnd, input);
-            }
-            LRESULT(0)
-        }
-        // F10 is a system key, so Shift+F10, the keyboard's context menu, arrives here. Every other Alt or F10 combination is
-        // Windows': it falls through to `DefWindowProc`.
-        WM_SYSKEYDOWN if is_key_menu_chord(wp.0, unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0) => {
-            if lp.0 & (1 << 30) == 0 {
-                key_menu(hwnd);
             }
             LRESULT(0)
         }
@@ -1229,6 +1051,8 @@ use tooltip::TIP_FRAME;
 use watch::{open_journal, ScanResult, Scanned, Watch};
 mod frame;
 mod input;
+mod keys;
+mod mouse;
 mod posted;
 mod timers;
 mod menu;
