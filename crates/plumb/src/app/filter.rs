@@ -1,6 +1,6 @@
 //! The name filter as application state: the text box, the debounced worker run, installing its
 //! result, and keeping it current while the tree changes. No Win32 types.
-use super::{App, Effect};
+use super::{App, Effect, Input};
 use crate::draw::FilterBar;
 use crate::filter_ui::{Edit, FilterUi, Motion};
 use crate::fmt;
@@ -164,10 +164,22 @@ impl App {
         Effect::Filter
     }
 
-    pub(super) fn filter_edit(&mut self, e: Edit) -> Effect {
-        if !self.slot.filter.ui.focus {
-            return Effect::None;
+    /// The keyboard while the filter box is focused: its keys edit the text, Enter hands focus to the tree, the rest
+    /// (Up, Down, PageUp...) still move the tree's focus row.
+    pub(super) fn typing(&mut self, input: Input) -> Effect {
+        match input {
+            Input::Key(k, mods) => match edit_for_key(k) {
+                Some(e) => return self.filter_edit(e),
+                None => self.move_focus(k, mods),
+            },
+            Input::Enter => self.filter_enter(),
+            Input::Edit(e) => return self.filter_edit(e),
+            _ => {}
         }
+        Effect::None
+    }
+
+    pub(super) fn filter_edit(&mut self, e: Edit) -> Effect {
         if self.slot.filter.ui.edit(e) { self.filter_changed() } else { Effect::None }
     }
 
@@ -179,9 +191,6 @@ impl App {
 
     /// Enter in the box: focus moves to the tree, on its first row.
     pub(super) fn filter_enter(&mut self) {
-        if !self.slot.filter.ui.focus {
-            return;
-        }
         self.slot.filter.ui.focus = false;
         if let Some(m) = &mut self.slot.model
             && let Some(id) = m.rows().first().map(|r| r.id)

@@ -1079,22 +1079,16 @@ impl App {
             }
             Input::Wheel(rows, x, y) if self.layout.procs && self.layout.held_pane().contains(x, y) => self.held_scroll(rows),
             Input::Wheel(rows, ..) => self.set_scroll((self.slot.scroll as i64 + rows as i64).max(0) as usize),
-            Input::Key(k, mods) => {
-                if self.slot.filter.ui.focus
-                    && let Some(e) = filter::edit_for_key(k)
-                {
-                    return self.filter_edit(e);
-                }
-                self.move_focus(k, mods);
-            }
-            Input::Edit(Edit::Delete) if !self.slot.filter.ui.focus => self.mark_selected(),
-            Input::Edit(Edit::SelectAll) if !self.slot.filter.ui.focus => self.select_all_rows(),
-            Input::Enter if self.slot.filter.ui.focus => self.filter_enter(),
+            // With the filter box focused it owns the keyboard: one split, then the arms below are the tree's.
+            Input::Key(..) | Input::Enter | Input::Edit(_) if self.slot.filter.ui.focus => return self.typing(input),
+            Input::Key(k, mods) => self.move_focus(k, mods),
             Input::Enter => self.toggle_focus_row(),
-            Input::Edit(Edit::Backspace) if !self.slot.filter.ui.focus => self.select_parent_row(),
+            Input::Edit(Edit::Delete) => self.mark_selected(),
+            Input::Edit(Edit::SelectAll) => self.select_all_rows(),
+            Input::Edit(Edit::Backspace) => self.select_parent_row(),
+            Input::Edit(_) => {}
             Input::Refresh => return self.refresh_key(),
             Input::ContextMenu => return self.context_menu_key(),
-            Input::Edit(e) => return self.filter_edit(e),
             Input::Find => {
                 self.slot.filter.ui.focus = true;
                 self.slot.filter.ui.edit(Edit::SelectAll);
