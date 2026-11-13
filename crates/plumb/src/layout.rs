@@ -482,6 +482,12 @@ mod tests {
         assert_eq!(l.tree_min(), MIN_NAME_W + COL_W.iter().sum::<f32>() + SCROLLBAR_W);
     }
 
+
+    #[test]
+    fn the_map_pane_appears_from_785_dip() {
+        let on = |w| Layout { map_on: true, ..Layout::new(w, 400.0) }.map_shown();
+        assert!(on(785.0) && !on(784.5), "tree_min 620 + divider 5 + MAP_MIN_W 160");
+    }
     #[test]
     fn chips_follow_their_own_widths_and_the_filter_starts_after_them() {
         let l = Layout { chips: vec![60.0, 140.0, 80.0], ..Layout::new(1400.0, 600.0) };
